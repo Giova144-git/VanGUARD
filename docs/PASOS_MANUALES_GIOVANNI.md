@@ -32,6 +32,8 @@ Supabase → proyecto **hackaton 22** (`accshmgmfrqrxubpuxcl`):
 
 Escríbeme «listo, paso 1» y el BACK prueba el login anónimo.
 
+**1b · Contraseñas filtradas (1 min, cuando puedas):** Supabase → `accshmgmfrqrxubpuxcl` → Authentication → **Passwords** (o «Sign In / Providers → Email») → activa **«Prevent use of leaked passwords»**. Limpia un aviso del advisor. Si el panel dice que es solo del plan Pro, no hagas nada: se marca como aviso aceptado con su motivo.
+
 ### Paso 2 · Crear las dos claves secretas de Supabase · 3 min · ✅ hecho
 Supabase → Project Settings → **API Keys** → pestaña **Secret keys** (la nueva, **no** la de *Legacy*):
 1. Crea una llamada **`vanguard-worker`**. Va al panel del Worker.

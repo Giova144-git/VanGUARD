@@ -47,6 +47,12 @@ const IPV4_LIBRE = new RegExp(`(?<![\\w.@])(?<![Vv]ersi[oó]n\\w{0,20}["']?\\s{0
 // opcional probaba cada posición del texto: ~20 µs por fix.text).
 const PISTA_V6 = /:[0-9a-f]{0,4}:/gi;
 const HEX_O_DOS_PUNTOS = /[0-9a-f:]/i;
+// Controles de dirección (Trojan Source, CVE-2021-42574) a la vista, igual que sinBidi del FRONT: «src/<U+202E>gnp.js» sale
+// «src/⟨U+202E⟩gnp.js» en el JSON y en el Markdown, y la IA que lo lea no ve «src/sj.png». Las letras árabes o hebreas
+// no se tocan. Va lo primero de cadena(): el tope de longitud de redactForExport cae ya sobre el texto expandido, y el
+// marcador no lleva nada que las pasadas de URL, teléfono o IP reconozcan.
+const BIDI = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const bidiVisible = (c: string) => `⟨U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}⟩`;
 
 const telefono = (t: string) => {
   const d = t.replace(/\D/g, '');
@@ -80,7 +86,8 @@ function ipv6Libres(t: string): string {
   return desde ? out + t.slice(desde) : t;
 }
 function cadena(s: string, clave: string, o: OpcionesExport): string {
-  let t = s.includes('://') ? s.replace(URL_TRAMO, sinCola) : s;
+  let t = s.replace(BIDI, bidiVisible);
+  if (t.includes('://')) t = t.replace(URL_TRAMO, sinCola);
   if (t.includes('/') && (t.includes('?') || t.includes('#'))) t = t.replace(RUTA_TRAMO, '$1$2');
   if (CLAVE_TELEFONO.test(clave) && TELEFONO_SOLO.test(t)) t = telefono(t);
   else if (t.includes('+')) t = t.replace(TELEFONO, telefono);
@@ -102,7 +109,8 @@ function previa(v: unknown, o: OpcionesExport, clave: string, prof: number): unk
   return v;
 }
 /** Todo lo que sale en un export: redactForExport (secretos, correos, teléfonos +E.164, query http, clave anclada,
- *  IPs por posición, longitud) más URLs sin query ni fragmento, teléfonos con formato e IPs sueltas en texto libre. */
+ *  IPs por posición, longitud) más controles bidi a la vista, URLs sin query ni fragmento, teléfonos con formato e IPs
+ *  sueltas en texto libre. */
 export function redactarParaExport<T>(value: T, opts: OpcionesExport): T {
   return redactForExport(previa(value, opts, '', 0) as T, opts);
 }

@@ -63,6 +63,17 @@ describe('redactarParaExport', () => {
     expect(redactarParaExport(una, M)).toEqual(una);
   });
 
+  it('controles bidi e invisibles a la vista como ⟨U+XXXX⟩ (Trojan Source); árabe, hebreo y emojis con ZWJ intactos', () => {
+    const c = (...n: number[]) => String.fromCharCode(...n);
+    const v = { resource: `src/${c(0x202e)}gnp.js`, title: `${c(0x2066)}a${c(0x2069)}${c(0x200f)}${c(0x061c)}${c(0x200e)}`,
+      evidence: { path: `x${c(0x202a, 0x202b, 0x202c, 0x202d)}y${c(0x2067, 0x2068)}` },
+      nota: `مرحبا שלום ${String.fromCodePoint(0x1f469, 0x200d, 0x1f4bb)}` };
+    const r = redactarParaExport(v, M);
+    expect(r).toEqual({ resource: 'src/⟨U+202E⟩gnp.js', title: '⟨U+2066⟩a⟨U+2069⟩⟨U+200F⟩⟨U+061C⟩⟨U+200E⟩',
+      evidence: { path: 'x⟨U+202A⟩⟨U+202B⟩⟨U+202C⟩⟨U+202D⟩y⟨U+2067⟩⟨U+2068⟩' }, nota: v.nota });
+    expect(redactarParaExport(r, M)).toEqual(r);
+  });
+
   it('lineal con texto hostil (sin cuadráticos)', () => {
     const hostil = ['://'.repeat(4000), '/a'.repeat(6000), ':1'.repeat(6000) + ':', '+5'.repeat(6000), '1.'.repeat(6000)];
     for (const h of hostil) expect(ms(() => redactarParaExport({ t: h }, M))).toBeLessThan(150);
@@ -144,6 +155,22 @@ describe('armarExport', () => {
     expect(stableStringify(a, 2)).toBe(stableStringify(b, 2));
     const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(stableStringify(a.findings))));
     expect(a.integrity.findings_sha256).toBe(Array.from(d, (x) => x.toString(16).padStart(2, '0')).join(''));
+  });
+
+  it('caso del FRONT: src/<U+202E>gnp.js sale a la vista en el JSON, en location y en el Markdown', async () => {
+    const rlo = String.fromCharCode(0x202e);
+    k = 0;
+    const x = VanguardExport.parse(await armarExport(entrada({ total_findings: 1, findings: [fila({ module: 'codebase',
+      rule_id: 'CB_SECRET_GENERIC', severity: 'high', resource: `src/${rlo}gnp.js:3`, title: `Clave en src/${rlo}gnp.js`,
+      evidence: { path: `src/${rlo}gnp.js`, line: 3 } })] })));
+    expect(x.findings[0]!.resource).toBe('src/⟨U+202E⟩gnp.js:3');
+    expect(x.findings[0]!.title).toBe('Clave en src/⟨U+202E⟩gnp.js');
+    expect(x.findings[0]!.location).toEqual({ path: 'src/⟨U+202E⟩gnp.js', line: 3 });
+    const md = renderMarkdown(x);
+    expect(md).toContain('Clave en src/⟨U+202E⟩gnp.js');
+    const todo = md + JSON.stringify(x);
+    for (const n of [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069])
+      expect(todo.includes(String.fromCharCode(n))).toBe(false);
   });
 
   it('topes: lo que no entra va a truncated', async () => {

@@ -42,11 +42,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwindcss(), cabecerasSeguridad(env.VITE_SUPABASE_URL || 'https://invalid.supabase.co')],
     resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
     server: { port: 5173, proxy: Object.fromEntries(['/api', '/ingest', '/mcp'].map((p) => [p, { target: api, changeOrigin: true }])) },
-    build: {
-      outDir: 'dist', sourcemap: true,
-      // index.ts del contrato reexporta `fixtures`: sin esto, el chunk del contrato los arrastra al bundle (F-03).
-      // Los módulos del contrato solo declaran esquemas y datos, así que tratarlos sin efectos secundarios es seguro.
-      rolldownOptions: { treeshake: { moduleSideEffects: (id: string) => !id.replace(/\\/g, '/').includes('/packages/contracts/') } },
-    },
+    // Los fixtures no entran en el bundle (F-03) gracias a "sideEffects": false de packages/contracts/package.json.
+    build: { outDir: 'dist', sourcemap: true },
   };
 });

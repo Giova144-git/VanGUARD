@@ -1,6 +1,8 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ConnectionCreated, ConnectionTest, ScanAccepted, type ConnectionCreate, type ScanCreate } from '@vanguard/contracts';
+import {
+  ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, ScanAccepted, type ConnectionCreate, type FindingPatch, type ScanCreate,
+} from '@vanguard/contracts';
 import { api } from './api';
 
 function useInvalidar(org: string) {
@@ -36,6 +38,28 @@ export function useQuitarConexion(org: string) {
       return { revocar: res.headers.get('x-vg-revoke-url') };
     },
     onSuccess: () => invalidar('connections', 'overview', 'module'),
+  });
+}
+
+export function usePatchHallazgo(org: string) {
+  const invalidar = useInvalidar(org);
+  return useMutation({
+    mutationFn: ({ id, ...body }: FindingPatch & { id: string }) =>
+      api(`/api/orgs/${org}/findings/${id}`, { method: 'PATCH', body, esquema: Finding }),
+    onSuccess: () => invalidar('findings', 'finding', 'overview', 'module'),
+  });
+}
+
+// Generar el prompt (~10 s). El resultado se guarda en ['org',org,'fix',id] y la lista pasa a has_fix_prompt.
+export function useGenerarPrompt(org: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api(`/api/orgs/${org}/findings/${id}/fix-prompt`, { method: 'POST', body: {}, esquema: FixPromptResponse }),
+    onSuccess: (r, id) => {
+      qc.setQueryData(['org', org, 'fix', id], r);
+      qc.invalidateQueries({ queryKey: ['org', org, 'findings'] });
+      qc.invalidateQueries({ queryKey: ['org', org, 'finding', id] });
+    },
   });
 }
 

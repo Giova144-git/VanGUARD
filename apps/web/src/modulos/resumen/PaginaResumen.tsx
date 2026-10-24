@@ -16,6 +16,7 @@ import { PuntajeBlindaje } from '@/componentes/vg/PuntajeBlindaje';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { chapaEstado } from '@/modulos/conexiones/TarjetaConexion';
+import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
@@ -25,7 +26,7 @@ import { entradaNav } from '@/lib/nav';
 const NOMBRE: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
 
 function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
-  const href = item.kind === 'incident' ? `/o/${org}/incidents/${item.id}` : `/o/${org}/findings/${item.id}`;
+  const href = item.kind === 'incident' ? `/o/${org}/incidents/${item.id}` : `?finding=${item.id}`;   // el detalle se abre encima
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
       <Etiqueta texto={NOMBRE[item.module]} />
@@ -140,6 +141,7 @@ export default function PaginaResumen() {
       </section>
 
       <GuiaModulo id="overview" />
+      <DetalleEnPanel />
     </div>
   );
 }

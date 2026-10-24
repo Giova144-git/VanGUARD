@@ -1,6 +1,8 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
-import { fixtures as fx, type ConnectionCreated, type ConnectionPublic, type Me, type Org, type PermCheck } from '@vanguard/contracts';
+import {
+  fixtures as fx, type ConnectionCreated, type ConnectionPublic, type Finding, type Me, type Org, type PermCheck, type ScanRun,
+} from '@vanguard/contracts';
 import { ApiError } from '../errores';
 import { tipoSesionFalsa } from '../supabase-doble';
 
@@ -125,6 +127,72 @@ function quitarFalso(org: string, id: string) {
   return new Response(null, { status: 204, headers: url ? { 'x-vg-revoke-url': url } : {} });
 }
 
+// Hallazgos por org, con estado (PATCH) y has_fix_prompt (fix-prompt).
+const hallazgos = new Map<string, Finding[]>();
+const hallazgosDe = (org: string) => {
+  if (!hallazgos.has(org)) hallazgos.set(org, vacia(org) ? [] : structuredClone(fx.findings as unknown as Finding[]));
+  return hallazgos.get(org)!;
+};
+const hallazgo = (org: string, id: string) => hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
+
+function listarHallazgos(org: string, q: URLSearchParams) {
+  return structuredClone(hallazgosDe(org).filter((f) =>
+    (!q.get('module') || f.module === q.get('module')) && (!q.get('severity') || f.severity === q.get('severity'))
+    && (!q.get('status') || f.status === q.get('status'))));
+}
+
+function patchHallazgo(org: string, id: string, body: unknown) {
+  const f = hallazgo(org, id);
+  const b = (body ?? {}) as { status?: string; reason?: string };
+  if (b.status === 'ignored' && (!b.reason || b.reason.trim().length < 3))
+    falla(422, 'invalid_body', 'Explica por qué lo ignoras', { field_errors: { reason: ['Explica por qué lo ignoras'] } });
+  if (b.status !== 'open' && b.status !== 'fixed' && b.status !== 'ignored') falla(422, 'invalid_body', 'Estado no válido');
+  f.status = b.status as Finding['status'];
+  f.status_reason = b.status === 'ignored' ? b.reason!.trim() : null;
+  return structuredClone(f);
+}
+
+async function promptFalso(org: string, id: string) {
+  const f = hallazgo(org, id);
+  const cached = f.has_fix_prompt;
+  if (!cached && tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura');
+  if (!cached) await espera(1500);                                  // simula la llamada a Claude (~10 s en la real)
+  f.has_fix_prompt = true;
+  return { ...fx.fixPrompt, cached };
+}
+
+// Auditoría simulada: 0 → 100 en 12 s por los pasos de scanDone (S14 §14.19); con ?escenario=vacio, «repo» sale skipped.
+const DURACION = 12_000;
+const scans = new Map<string, number>();
+function iniciarScan() {
+  const id = crypto.randomUUID();
+  scans.set(id, Date.now());
+  return { scan_run_id: id };
+}
+function verScan(id: string): ScanRun {
+  const inicio = scans.get(id);
+  if (inicio == null) {
+    if (id === fx.scanDone.id) return fx.scanDone as ScanRun;
+    if (id === fx.scanRunning.id) return fx.scanRunning as ScanRun;
+    return falla(404, 'not_found', 'Esa auditoría no existe');
+  }
+  const base = fx.scanDone as ScanRun;
+  const t = Math.min(1, (Date.now() - inicio) / DURACION);
+  const n = base.steps.length;
+  const steps = base.steps.map((s, i): ScanRun['steps'][number] => {
+    if (escenario() === 'vacio' && s.name === 'repo' && t >= i / n) return { name: s.name, status: 'skipped' };
+    return t >= (i + 1) / n ? s : t >= i / n ? { name: s.name, status: 'running' } : { name: s.name, status: 'pending' };
+  });
+  const hecho = t >= 1;
+  const actual = steps.find((s) => s.status === 'running')?.name ?? null;
+  return {
+    ...base, id, kind: 'full_audit', status: hecho ? 'succeeded' : 'running', progress: Math.round(t * 100), step: hecho ? null : actual, steps,
+    score: t >= (n - 1) / n ? base.score : null, coverage: t >= (n - 1) / n ? base.coverage : null, summary: hecho ? base.summary : null,
+    created_at: new Date(inicio).toISOString(), started_at: new Date(inicio).toISOString(),
+    finished_at: hecho ? new Date(inicio + DURACION).toISOString() : null,
+  };
+}
+
 const ORG = '\\/api\\/orgs\\/([^/]+)';
 const r = (s: string) => new RegExp(`^${s}$`);
 const rutas: [string, RegExp, H][] = [
@@ -137,12 +205,15 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/connections`),             (m, b) => conectarFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/connections\\/([^/]+)\\/test`), (m) => probarFalso(m[1]!, m[2]!)],
   ['DELETE', r(`${ORG}\\/connections\\/([^/]+)`), (m) => quitarFalso(m[1]!, m[2]!)],
-  ['POST', r(`${ORG}\\/scans`),                   () => ({ scan_run_id: fx.scanDone.id })],   // el progreso por pasos llega en el hito 4
-  ['GET',  r(`${ORG}\\/findings`),                (m) => vacia(m[1]!) ? [] : fx.findings],
+  ['POST', r(`${ORG}\\/scans`),                   () => iniciarScan()],
+  ['GET',  r(`${ORG}\\/findings`),                (m, _b, q) => listarHallazgos(m[1]!, q)],
+  ['GET',  r(`${ORG}\\/findings\\/([^/]+)`),      (m) => structuredClone(hallazgo(m[1]!, m[2]!))],
+  ['PATCH', r(`${ORG}\\/findings\\/([^/]+)`),     (m, b) => patchHallazgo(m[1]!, m[2]!, b)],
+  ['POST', r(`${ORG}\\/findings\\/([^/]+)\\/fix-prompt`), (m) => promptFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/incidents`),               (m) => vacia(m[1]!) ? [] : fx.incidents],
   ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     () => fx.incidentDetail],
   ['GET',  r(`${ORG}\\/traffic`),                 () => fx.traffic],
-  ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         () => fx.scanDone],
+  ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                () => fx.contacts],
   ['GET',  r(`${ORG}\\/ai\\/usage`),              () => fx.aiUsage],
   ['GET',  r(`${ORG}\\/perf\\/runs`),             () => fx.perfRuns],

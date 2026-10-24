@@ -11,13 +11,7 @@ const pagina = (cargar: () => Promise<{ default: React.ComponentType }>) =>
 
 // Páginas de módulo que llegan en hitos siguientes (asignación del ORQUESTADOR, S14 §14.20).
 const EN_CAMINO: [string, IdNav, string][] = [
-  ['supabase', 'supabase', 'el hito 4 (PantallaModulo)'],
-  ['cloudflare', 'cloudflare', 'el hito 4 (PantallaModulo)'],
-  ['codebase', 'codebase', 'el hito 4 (PantallaModulo)'],
   ['performance', 'performance', 'el hito 7 (Rendimiento)'],
-  ['audit', 'audit', 'el hito 4 (Auditoría)'],
-  ['audit/:scanId', 'audit', 'el hito 4 (Auditoría)'],
-  ['findings/:findingId', 'overview', 'el hito 4 (detalle de hallazgo)'],
   ['incidents', 'incidents', 'el hito 5 (Incidentes)'],
   ['incidents/:incidentId', 'incidents', 'el hito 5 (Incidentes)'],
   ['export', 'export', 'el hito 6 (Exportar)'],
@@ -39,6 +33,12 @@ const rutas: RouteObject[] = [
           { path: 'overview', lazy: pagina(() => import('@/modulos/resumen/PaginaResumen')), errorElement: <ErrorRuta /> },
           { path: 'connections', lazy: pagina(() => import('@/modulos/conexiones/PaginaConexiones')), errorElement: <ErrorRuta /> },
           { path: 'connections/:provider', lazy: pagina(() => import('@/modulos/conexiones/Asistente')), errorElement: <ErrorRuta /> },
+          { path: 'supabase', lazy: pagina(() => import('@/modulos/supabase/PaginaSupabase')), errorElement: <ErrorRuta /> },
+          { path: 'cloudflare', lazy: pagina(() => import('@/modulos/cloudflare/PaginaCloudflare')), errorElement: <ErrorRuta /> },
+          { path: 'codebase', lazy: pagina(() => import('@/modulos/codebase/PaginaCodebase')), errorElement: <ErrorRuta /> },
+          { path: 'audit', lazy: pagina(() => import('@/modulos/auditoria/PaginaAuditoria')), errorElement: <ErrorRuta /> },
+          { path: 'audit/:scanId', lazy: pagina(() => import('@/modulos/auditoria/PaginaAuditoria')), errorElement: <ErrorRuta /> },
+          { path: 'findings/:findingId', lazy: pagina(() => import('@/modulos/hallazgos/PaginaHallazgo')), errorElement: <ErrorRuta /> },
           ...EN_CAMINO.map(([path, id, hito]): RouteObject => ({
             path, errorElement: <ErrorRuta />,
             lazy: async () => {

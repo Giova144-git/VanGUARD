@@ -169,3 +169,15 @@ describe('fixtures de la wiki', () => {
     expect(fx.wikiEstimate.commit_sha).toBe(doc.commit_sha);
   });
 });
+
+// GrupoDato.orden (estado.ts): el servidor entrega `ahora` de mayor a menor y el FRONT no reordena; los fixtures igual.
+describe('orden de los grupos en los estados de módulo', () => {
+  const estados = Object.values(fx.moduleState as Record<string, { ahora?: { grupo: string; orden?: number }[] }>);
+  it('hay estados con grupos que revisar', () => expect(estados.some((e) => (e.ahora?.length ?? 0) > 1)).toBe(true));
+  it('orden no crece a lo largo de ahora', () => {
+    for (const e of estados) {
+      const ordenes = (e.ahora ?? []).map((g) => g.orden ?? 0);
+      for (let i = 1; i < ordenes.length; i++) expect(ordenes[i], JSON.stringify(ordenes)).toBeLessThanOrEqual(ordenes[i - 1]!);
+    }
+  });
+});

@@ -27,7 +27,7 @@ const supabase = {
     { tipo: 'sb_rpc', etiqueta: 'Funciones sin freno', n: 1, rol: 'mal', destino: { modulo: 'supabase', ancla: 'ahora' } },
   ],
   ahora: [
-    { grupo: 'SB_RLS_DISABLED', etiqueta: 'Datos abiertos', rol: 'mal', n: 1, orden: 1, filas: [
+    { grupo: 'SB_RLS_DISABLED', etiqueta: 'Datos abiertos', rol: 'mal', n: 1, orden: 5, filas: [
       { clave: F_SB_RLS, modulo: 'supabase', tipo: 'finding', rol: 'mal', etiqueta: 'RLS desactivada', objeto: 'public.pedidos',
         sub: '≈ 500 filas · legible sin sesión', chips: ['confirmado'],
         acciones: [
@@ -41,7 +41,7 @@ const supabase = {
               + 'revoke select on "public"."pedidos" from anon;' },
         ] },
     ] },
-    { grupo: 'SB_RPC_ANON_NO_LIMIT', etiqueta: 'Funciones sin freno', rol: 'mal', n: 1, orden: 2, filas: [
+    { grupo: 'SB_RPC_ANON_NO_LIMIT', etiqueta: 'Funciones sin freno', rol: 'mal', n: 1, orden: 5, filas: [
       { clave: F_SB_RPC, modulo: 'supabase', tipo: 'finding', rol: 'mal', etiqueta: 'Función pública sin freno',
         objeto: 'public.enviar_otp', sub: 'se llama sin sesión · sin límite de peticiones',
         acciones: [
@@ -51,7 +51,7 @@ const supabase = {
               + 'grant execute on function "public"."enviar_otp"(p_destino text) to authenticated;' },
         ] },
     ] },
-    { grupo: 'SB_POLICY_ALLOW_ALL', etiqueta: 'Políticas pase-todo', rol: 'mal', n: 1, orden: 3, filas: [
+    { grupo: 'SB_POLICY_ALLOW_ALL', etiqueta: 'Políticas pase-todo', rol: 'mal', n: 1, orden: 4, filas: [
       { clave: F_SB_POLICY, modulo: 'supabase', tipo: 'finding', rol: 'mal', etiqueta: 'Política pase-todo',
         objeto: 'public.perfiles', sub: 'pase_todo · SELECT para anon', chips: ['confirmado'],
         acciones: [
@@ -62,7 +62,7 @@ const supabase = {
               + '  using ((select auth.uid()) = user_id);' },
         ] },
     ] },
-    { grupo: 'SB_ADVISOR', etiqueta: 'Avisos de Supabase', rol: 'cola', n: 2, orden: 4, filas: [
+    { grupo: 'SB_ADVISOR', etiqueta: 'Avisos de Supabase', rol: 'cola', n: 2, orden: 1, filas: [
       { clave: F_SB_ADV_EVENTOS, modulo: 'supabase', tipo: 'finding', rol: 'cola', etiqueta: 'RLS activa sin políticas',
         objeto: 'public.eventos', sub: 'advisor de Supabase · INFO', acciones: [generarPrompt(F_SB_ADV_EVENTOS, false)] },
       { clave: F_SB_ADV_DUP, modulo: 'supabase', tipo: 'finding', rol: 'cola', etiqueta: 'RLS desactivada (ya contada)',
@@ -93,7 +93,7 @@ const cloudflare = {
     { tipo: 'incidentes_abiertos', etiqueta: 'Incidentes abiertos', n: 1, rol: 'mal', destino: { modulo: 'incidents' } },
   ],
   ahora: [
-    { grupo: 'incidentes', etiqueta: 'Ataques en curso', rol: 'mal', n: 1, orden: 1, filas: [
+    { grupo: 'incidentes', etiqueta: 'Ataques en curso', rol: 'mal', n: 1, orden: 4, filas: [
       { clave: INC_ATAQUE, modulo: 'cloudflare', tipo: 'incident', rol: 'mal', etiqueta: 'Escaneo y /admin abierto',
         objeto: IP_ATACANTE, chips: incidenteAtaque.rule_ids,
         sub: `${EVENTOS_ATAQUE} peticiones · /admin respondió 200 sin sesión`,
@@ -103,7 +103,7 @@ const cloudflare = {
           { verbo: 'Ver incidente', clase: 'navegar', destino: { modulo: 'incidents', filtro: INC_ATAQUE } },
         ] },
     ] },
-    { grupo: 'top_ips', etiqueta: 'IPs con más peticiones', rol: 'neutra', n: 3, orden: 2, filas: [
+    { grupo: 'top_ips', etiqueta: 'IPs con más peticiones', rol: 'neutra', n: 3, orden: 1, filas: [
       { clave: `ip:${IP_ATACANTE}`, modulo: 'cloudflare', tipo: 'top_ip', rol: 'neutra', etiqueta: 'Herramienta de ataque',
         objeto: IP_ATACANTE, chips: ['herramienta'], sub: `${EVENTOS_ATAQUE} peticiones en 5 min`,
         acciones: [
@@ -115,7 +115,7 @@ const cloudflare = {
       { clave: 'ip:192.0.2.15', modulo: 'cloudflare', tipo: 'top_ip', rol: 'neutra', etiqueta: 'IP · móvil',
         objeto: '192.0.2.15', sub: '31 peticiones en 5 min', acciones: [{ verbo: 'Copiar IP', clase: 'copiar', copiar: '192.0.2.15' }] },
     ] },
-    { grupo: 'top_uas', etiqueta: 'User agents más activos', rol: 'neutra', n: 2, orden: 3, filas: [
+    { grupo: 'top_uas', etiqueta: 'User agents más activos', rol: 'neutra', n: 2, orden: 1, filas: [
       { clave: 'ua:sqlmap', modulo: 'cloudflare', tipo: 'top_ua', rol: 'neutra', etiqueta: 'Herramienta de ataque',
         objeto: 'sqlmap/1.8', chips: ['herramienta'], sub: `${EVENTOS_ATAQUE} peticiones · 1 IP`,
         acciones: [{ verbo: 'Copiar user agent', clase: 'copiar', copiar: 'sqlmap/1.8' }] },
@@ -143,7 +143,7 @@ const codebase = {
     { tipo: 'cb_kev', etiqueta: 'Explotadas activamente', n: null, sub: 'llega en P1' },
   ],
   ahora: [
-    { grupo: 'secretos', etiqueta: 'Secretos y archivos .env', rol: 'mal', n: 3, orden: 1, filas: [
+    { grupo: 'secretos', etiqueta: 'Secretos y archivos .env', rol: 'mal', n: 3, orden: 5, filas: [
       { clave: F_CB_SERVICE_ROLE, modulo: 'codebase', tipo: 'finding', rol: 'mal', etiqueta: 'Clave service_role en el código',
         objeto: 'src/lib/supabaseAdmin.ts:4', sub: 'también en .env:2 · rótala ya', acciones: [generarPrompt(F_CB_SERVICE_ROLE)] },
       { clave: F_CB_ENV, modulo: 'codebase', tipo: 'finding', rol: 'mal', etiqueta: '.env subido al repo', objeto: '.env',
@@ -151,7 +151,7 @@ const codebase = {
       { clave: F_CB_POSTGRES, modulo: 'codebase', tipo: 'finding', rol: 'mal', etiqueta: 'Contraseña de Postgres en .env',
         objeto: '.env:3', sub: 'host de Supabase · rótala', acciones: [generarPrompt(F_CB_POSTGRES)] },
     ] },
-    { grupo: 'dependencias', etiqueta: 'Dependencias con vulnerabilidades', rol: 'mal', n: 3, orden: 2, filas: [
+    { grupo: 'dependencias', etiqueta: 'Dependencias con vulnerabilidades', rol: 'mal', n: 3, orden: 5, filas: [
       { clave: F_CB_DEP_IGNITION, modulo: 'codebase', tipo: 'finding', rol: 'mal', etiqueta: 'facade/ignition 2.5.1 → 2.5.2',
         objeto: 'Packagist:facade/ignition@2.5.1', chips: ['CVE-2021-3129'], severidad_cve: 'critical', sub: '1 aviso crítico',
         acciones: [generarPrompt(F_CB_DEP_IGNITION)] },
@@ -196,7 +196,7 @@ const performance = {
     { tipo: 'ttfb_mobile', etiqueta: 'TTFB móvil', n: 130, unidad: 'ms', rol: 'bien' },
   ],
   ahora: [
-    { grupo: 'causas', etiqueta: 'Qué la hace lenta', rol: 'mal', n: 6, orden: 1, filas: [
+    { grupo: 'causas', etiqueta: 'Qué la hace lenta', rol: 'mal', n: 6, orden: 4, filas: [
       { clave: 'imagen_pesada|/img/hero-original.jpg', modulo: 'performance', tipo: 'causa', rol: 'mal',
         etiqueta: 'Imagen pesada o en formato antiguo', objeto: 'public/img/hero-original.jpg',
         sub: 'ahorro ≈ 3,9 s de LCP · introducido en esta versión', chips: ['exacta'],

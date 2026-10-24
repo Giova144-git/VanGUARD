@@ -18,6 +18,8 @@ export const FilaDato = z.object({ clave: z.string(), modulo: z.string(), tipo: 
   objeto: z.string().optional(), chips: z.array(z.string()).optional(), sub: z.string().optional(), fraccion: z.number().min(0).max(1).optional(),
   severidad_cve: z.enum(['critical', 'high', 'medium', 'low']).optional(), acciones: z.array(AccionDato) });
 export type FilaDato = z.infer<typeof FilaDato>;
+// orden: rango de la peor severidad del grupo (5 critical, 4 high, 3 medium, 2 low, 1 info o neutro). Es informativo:
+// el servidor entrega `ahora` ya ordenado de mayor a menor y el FRONT pinta en el orden del array, sin reordenar (L1).
 export const GrupoDato = z.object({ grupo: z.string(), etiqueta: z.string(), rol: RolDato, n: z.number().int(), orden: z.number().optional(),
   chapas: z.array(z.string()).optional(), filas: z.array(FilaDato) });
 export type GrupoDato = z.infer<typeof GrupoDato>;

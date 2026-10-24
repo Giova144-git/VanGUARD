@@ -2,7 +2,6 @@ import type { ScanKind, ScanStep } from '@vanguard/contracts';
 import { db } from './lib/db.ts';
 import { ProviderError } from './lib/http.ts';
 import { log } from './lib/log.ts';
-import { pasoHumo } from './humo.ts';
 
 // Cola vg-jobs (S15 15.8): un mensaje = un paso = una invocación (max_batch_size 1). Solo ids, nunca tokens.
 export type Paso = 'supabase' | 'cloudflare' | 'repo' | 'zip' | 'psi' | 'puntaje' | 'resumen_ia';
@@ -12,8 +11,7 @@ export type DepCompacta = [string, string, string, 0 | 1];
 export type JobMsg =
   | { v: 1; kind: 'scan'; scan_run_id: string; org_id: string; paso: Paso; cursor?: string; deps?: DepCompacta[] }
   | { v: 1; kind: 'escalate'; org_id: string; incident_id: string; level: number }
-  | { v: 1; kind: 'eval'; org_id: string }
-  | { v: 1; kind: 'humo'; i: number; fetches: number }; // TEMPORAL: prueba de humo de A7.7
+  | { v: 1; kind: 'eval'; org_id: string };
 
 export type MsgScan = Extract<JobMsg, { kind: 'scan' }>;
 
@@ -132,11 +130,6 @@ export async function guarded(env: CloudflareBindings, m: Message<JobMsg>, b: Ms
 
 export async function runJob(env: CloudflareBindings, m: Message<JobMsg>) {
   const b = m.body;
-  if (b?.kind === 'humo') {
-    await pasoHumo(b);
-    m.ack();
-    return;
-  }
   if (b?.kind === 'scan') { await guarded(env, m, b); return; }
   // escalate (P1) y eval (plan B de la ingesta) aún no tienen manejador: no se reintentan.
   log('warn', 'job.sin_manejador', { kind: b?.kind ?? null });

@@ -7,7 +7,6 @@ import { modules } from './modules.ts';
 import { overview } from './overview.ts';
 import { scans } from './scans.ts';
 import { health } from './health.ts';
-import { humo } from './humo.ts';
 import { me } from './me.ts';
 import { orgs } from './orgs.ts';
 
@@ -15,7 +14,6 @@ import { orgs } from './orgs.ts';
 export const rutas = new Hono<AppEnv>();
 
 rutas.route('/', health);
-rutas.route('/', humo);
 rutas.route('/', me);
 rutas.route('/', orgs);
 rutas.route('/', demo);

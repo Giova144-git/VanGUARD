@@ -4,8 +4,8 @@ import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 
 // Bearer de Supabase validado lo primero con getClaims, nunca con getSession() en servidor (canónicas §7, S15 15.3).
-// Rutas públicas: E1, la herramienta de voz (su propio token, P1), los JSON Schema (E35) y el humo temporal de A7.7.
-const PUBLICAS = new Set(['/api/health', '/api/voz/respuesta', '/api/_humo']);
+// Rutas públicas: E1, la herramienta de voz (su propio token, P1) y los JSON Schema (E35).
+const PUBLICAS = new Set(['/api/health', '/api/voz/respuesta']);
 const esPublica = (ruta: string) => PUBLICAS.has(ruta) || ruta.startsWith('/api/schemas/');
 
 export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {

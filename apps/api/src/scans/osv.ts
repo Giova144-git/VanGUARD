@@ -5,7 +5,8 @@ import { ProviderError, codigoHttp, pedir } from '../lib/http.ts';
 const OSV = 'https://api.osv.dev/v1';
 const PLAZO = 20_000;
 const LOTE = 1000;
-export const DETALLE_POR_MENSAJE = 30;
+// 12 y no 30: el humo de A7.7 midió 21–25 ms de CPU con 40 respuestas de OSV (lo caro es el JSON.parse); con 12 queda ~7 ms.
+export const DETALLE_POR_MENSAJE = 12;
 const PARALELO = 5;
 
 export type Dep = { ecosystem: string; name: string; version: string; dev: boolean };

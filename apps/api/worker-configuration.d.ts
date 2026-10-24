@@ -33,6 +33,4 @@ interface CloudflareBindings {
   TWILIO_FROM?: string;
   PSI_API_KEY?: string;
   VG_EDGE_SECRET?: string;
-  // TEMPORAL: solo para la prueba de humo de A7.7 (POST /api/_humo); se borra con la ruta
-  VG_HUMO_TOKEN?: string;
 }

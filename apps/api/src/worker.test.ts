@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from './worker.ts';
 import { CRON_DIA, CRON_HORA, CRON_MINUTO } from './cron.ts';
-import { HUMO_FETCHES } from './humo.ts';
 import type { JobMsg } from './jobs.ts';
 import { envDoble, mensajeDoble } from './test/dobles.ts';
 
@@ -15,33 +14,21 @@ const ctx = () => ({ waitUntil: vi.fn(), passThroughOnException() {}, props: {} 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('queue()', () => {
-  it('humo: un mensaje hace 40 fetch a OSV dentro de su invocación y se confirma', async () => {
-    const f = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', f);
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { m, batch } = lote('vg-jobs', { v: 1, kind: 'humo', i: 1, fetches: HUMO_FETCHES });
-    await worker.queue(batch, envDoble().env);
-    expect(f).toHaveBeenCalledTimes(40);
-    expect(f.mock.calls.every((c) => String(c[0]) === 'https://api.osv.dev/v1/query')).toBe(true);
-    expect(m.ack).toHaveBeenCalledOnce();
-  });
-
-  it('un fallo de OSV no tumba el paso: se cuenta y se confirma igual', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('red'); }));
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { m, batch } = lote('vg-jobs', { v: 1, kind: 'humo', i: 2, fetches: HUMO_FETCHES });
-    await worker.queue(batch, envDoble().env);
-    expect(m.ack).toHaveBeenCalledOnce();
-    expect(m.retry).not.toHaveBeenCalled();
-  });
-
-  it('la DLQ se distingue por batch.queue y confirma sin ejecutar el paso', async () => {
+  it('un mensaje sin manejador (eval, plan B) se confirma sin reintentar ni llamar a la red', async () => {
     const f = vi.fn();
     vi.stubGlobal('fetch', f);
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    const { m, batch } = lote('vg-jobs-dlq', { v: 1, kind: 'humo', i: 3, fetches: HUMO_FETCHES });
+    const { m, batch } = lote('vg-jobs', { v: 1, kind: 'eval', org_id: '0f6c0000-0000-4000-8000-000000000001' });
     await worker.queue(batch, envDoble().env);
+    expect(m.ack).toHaveBeenCalledOnce();
+    expect(m.retry).not.toHaveBeenCalled();
     expect(f).not.toHaveBeenCalled();
+  });
+
+  it('la DLQ se distingue por batch.queue y confirma', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { m, batch } = lote('vg-jobs-dlq', { v: 1, kind: 'eval', org_id: '0f6c0000-0000-4000-8000-000000000001' });
+    await worker.queue(batch, envDoble().env);
     expect(m.ack).toHaveBeenCalledOnce();
   });
 });

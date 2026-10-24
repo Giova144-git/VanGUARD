@@ -13,7 +13,7 @@ import { arbolRepo, elegirArchivosRiesgo, leerContenidos } from './repo.ts';
 // Paso repo (§09.4) en mensajes de la cola: `repo:archivos` (sin cursor) y `repo:osv` (cursor osv:1..3). El token y la
 // huella completa mueren en la invocación de `archivos`; a la continuación solo viajan las deps compactas (≤ 2000).
 const MAX_DEPS = 2000;
-const RONDAS_OSV = 3;
+const RONDAS_OSV = 8;   // 8 rondas de 12 = 96 paquetes con detalle; el resto entra sin_detalle
 
 const aCompacta = (d: { ecosystem: string; name: string; version: string; dev: boolean }): DepCompacta =>
   [d.ecosystem, d.name, d.version, d.dev ? 1 : 0];

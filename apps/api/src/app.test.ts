@@ -54,26 +54,3 @@ describe('errores con la forma fija del contrato', () => {
     expect(ApiErrorBody.parse(await r.json()).error.code).toBe('invalid_body');
   });
 });
-
-describe('POST /api/_humo (temporal, A7.7)', () => {
-  it('sin VG_HUMO_TOKEN configurado no existe', async () => {
-    const r = await app.request('/api/_humo', { method: 'POST', headers: { authorization: 'Bearer x' } }, envDoble().env);
-    expect(r.status).toBe(404);
-  });
-
-  it('con un token distinto no existe y no encola nada', async () => {
-    const d = envDoble({ VG_HUMO_TOKEN: 'secreto-de-prueba' });
-    const r = await app.request('/api/_humo', { method: 'POST', headers: { authorization: 'Bearer otro' } }, d.env);
-    expect(r.status).toBe(404);
-    expect(d.enviados).toHaveLength(0);
-  });
-
-  it('con el token encola 3 mensajes de 40 fetch', async () => {
-    const d = envDoble({ VG_HUMO_TOKEN: 'secreto-de-prueba' });
-    const r = await app.request('/api/_humo', {
-      method: 'POST', headers: { authorization: 'Bearer secreto-de-prueba' },
-    }, d.env);
-    expect(r.status).toBe(202);
-    expect(d.enviados).toEqual([1, 2, 3].map((i) => ({ v: 1, kind: 'humo', i, fetches: 40 })));
-  });
-});

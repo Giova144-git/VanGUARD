@@ -24,7 +24,7 @@ import { Vacio } from './Vacio';
 
 const ERROR_ESTADO: Record<NonNullable<EstadoModulo['error']>, string> = {
   token_invalido: 'Token inválido · Reconectar', sin_permiso: 'Falta un permiso · Ver',
-  limite_api: 'Límite de la API · reintentamos en 1 min', sin_conexion: 'No llegamos al proveedor · Reintentar',
+  limite_api: 'Límite de la API · reintentamos en 1 min', sin_conexion: 'Sin conexión activa',
 };
 const NOMBRE_PROV: Record<Exclude<Provider, 'ingest'>, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', github: 'GitHub' };
 // Cifras «—» mientras carga: tantas como manda el BACK, para que la rejilla no salte al llegar el dato (L7).
@@ -49,7 +49,9 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
   const barra = (
     <BarraModulo titulo={e.nombre} descripcion={e.descripcion} contador={est?.contador ?? null} extra={<>
       {c ? <Etiqueta {...chapaEstado(c)} /> : null}
-      {est && !est.ok ? <Etiqueta texto={est.error ? ERROR_ESTADO[est.error] : 'No pudimos leer · Reintentar'} rol="mal" /> : null}
+      {/* sin_conexion = aún no hay conexión (estado/modulo.ts del BACK): no es un fallo; lo explica el «Conecta …» de abajo (L3). */}
+      {est && !est.ok && est.error === 'sin_conexion' ? (c ? <Etiqueta texto="Sin conexión activa" rol="neutra" /> : null)
+        : est && !est.ok ? <Etiqueta texto={est.error ? ERROR_ESTADO[est.error] : 'No pudimos leer · Reintentar'} rol="mal" /> : null}
       {arreglo ? (
         <Link to={`/o/${org.id}/connections/${proveedor}`}
           className="inline-flex h-11 items-center gap-1 rounded-lg border border-mal-borde bg-mal-relleno px-4 text-sm font-medium text-mal outline-none hover:bg-mal/15 focus-visible:ring-2 focus-visible:ring-ring">

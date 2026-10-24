@@ -170,6 +170,20 @@ export const PerfRun = z.object({ id: Id, url: z.string(), strategy: z.enum(['mo
     fcp_ms: z.number().nullable(), si_ms: z.number().nullable(), ttfb_ms: z.number().nullable() }), created_at: Ts });
 export type PerfRun = z.infer<typeof PerfRun>;
 
+// ── ZIP analizado en el navegador (E23 POST …/scans/:scan_run_id/zip-result) ─────────
+// El ZIP nunca llega al servidor: el navegador lo abre y manda solo dependencias y hallazgos enmascarados.
+export const ZipDep = z.object({ ecosystem: z.enum(['npm', 'Packagist']), name: z.string().min(1).max(214),
+  version: z.string().min(1).max(64), dev: z.boolean().optional() });
+export type ZipDep = z.infer<typeof ZipDep>;
+export const ZipFinding = z.object({ rule_id: z.string().regex(/^CB_(ENV_COMMITTED|GITIGNORE_NO_ENV|SECRET_[A-Z0-9_]+)$/),
+  severity: Severity, title: z.string().max(200), resource: z.string().max(300),
+  evidence: z.strictObject({ path: z.string().max(300), line: z.number().int().min(1).optional(),
+    preview: z.string().max(12).optional() }) }); // estricto: un campo de más (p. ej. el secreto entero) → 422
+export type ZipFinding = z.infer<typeof ZipFinding>;
+export const ZipResult = z.object({ files_seen: z.number().int().min(0).max(20000), deps: z.array(ZipDep).max(2000),
+  findings: z.array(ZipFinding).max(200), analyzer: z.string().max(40).optional() });
+export type ZipResult = z.infer<typeof ZipResult>;
+
 // ── Resumen ───────────────────────────────────────────────────────────────────
 export const AhoraItem = z.object({ kind: z.enum(['finding', 'incident']), id: Id, module: Module, rule_id: RuleId, severity: Severity,
   title: z.string(), resource: z.string() });

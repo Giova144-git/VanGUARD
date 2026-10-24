@@ -50,4 +50,18 @@ describe('fixtures', () => {
       expect(r.success, r.success ? '' : JSON.stringify(r.error.issues, null, 2)).toBe(true);
     });
   }
+
+  it('la evidencia de los hallazgos de codebase cumple CodebaseEvidence', () => {
+    const codebase = fx.findings.filter((f) => f.module === 'codebase');
+    expect(codebase.length).toBeGreaterThan(0);
+    for (const f of codebase) {
+      const r = c.CodebaseEvidence.safeParse(f.evidence);
+      expect(r.success, `${f.rule_id}: ${r.success ? '' : JSON.stringify(r.error.issues)}`).toBe(true);
+    }
+  });
+
+  it('las corridas de rendimiento cumplen PerfRunExt', () => {
+    const r = z.array(c.PerfRunExt).safeParse(fx.perfRuns);
+    expect(r.success, r.success ? '' : JSON.stringify(r.error.issues, null, 2)).toBe(true);
+  });
 });

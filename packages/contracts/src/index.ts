@@ -4,4 +4,7 @@ export * from './api.ts';
 export * from './estado.ts';
 export * from './ingest.ts';
 export * from './realtime.ts';
+export * from './perf.ts';
+export * from './export.ts';
+export * from './codebase.ts';
 export { fixtures } from './fixtures/index.ts';

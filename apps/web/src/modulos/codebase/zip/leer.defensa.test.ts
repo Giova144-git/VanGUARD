@@ -72,7 +72,7 @@ describe('fin de directorio central que miente', () => {
     const c = codigo(() => { leidas = claves(leerZip(b, { origen: 'zip' }).archivos); });
     if (c === 'no lanzó') expect(leidas!.length).toBeLessThanOrEqual(1);
     else expect(['ZIP_TOO_MANY_ENTRIES', 'ZIP_INVALID']).toContain(c);
-  });
+  }, 30_000);   // armar 20 001 entradas tarda ~1,5 s solo, pero pasó de 5 s con `pnpm -r test` corriendo los paquetes a la vez
 
   it('un comentario del ZIP con una firma EOCD falsa no rompe el tope ni deja pasar nada', () => {
     const b = zip({ 'a.ts': te.encode('x') });

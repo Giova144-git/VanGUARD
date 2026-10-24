@@ -1,6 +1,6 @@
-// Worker principal de VanGUARD. Base del orquestador; el BACK agrega main, bindings y crons.
-// Por ahora solo sirve la página provisional de /site. Cuando exista apps/web,
-// "assets.directory" pasa a "../web/dist".
+// Worker principal de VanGUARD. Base del orquestador (name, routes, workers_dev, assets, vars);
+// el BACK agrega main, bindings y crons. Los assets son todavía la página provisional de /site:
+// cuando exista apps/web, "assets.directory" pasa a "../web/dist".
 {
   "name": "vanguard",
   "main": "src/worker.ts",
@@ -21,6 +21,13 @@
 
   "observability": {
     "enabled": true
+  },
+
+  // Variables no secretas: aquí y no en el panel, porque cada deploy reemplaza las del panel por estas.
+  // VG_VERSION no va aquí: la pone el deploy command con --var a partir del commit.
+  "vars": {
+    "VG_ENV": "production",
+    "APP_ORIGIN": "https://officialvanguard.com"
   },
 
   // ── BACK: crons, cola y rate limits (S15 15.7, 15.8 y 15.3). Plan Workers Free: sin "limits" (no se pueden

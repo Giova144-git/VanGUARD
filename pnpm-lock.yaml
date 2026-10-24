@@ -32,6 +32,9 @@ importers:
       '@vanguard/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@vanguard/deepwiki':
+        specifier: workspace:*
+        version: link:../../packages/deepwiki
       hono:
         specifier: 4.13.13
         version: 4.13.13

@@ -14,6 +14,7 @@
     "@supabase/supabase-js": "2.118.0",
     "@vanguard/contracts": "workspace:*",
     "@vanguard/core": "workspace:*",
+    "@vanguard/deepwiki": "workspace:*",
     "hono": "4.13.13",
     "zod": "4.6.7"
   },

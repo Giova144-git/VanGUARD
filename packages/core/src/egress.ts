@@ -5,6 +5,7 @@ export const HOSTS_SALIDA: readonly string[] = [
   'api.supabase.com',                // Management API del cliente (PAT sbp_fc)
   'api.cloudflare.com',              // tokens de lectura y de acciones del cliente
   'api.github.com',                  // repo acotado: /repos, git/trees y contents (A7.3)
+  'raw.githubusercontent.com',       // DeepWiki: archivos crudos del commit exacto (paso `area`, <= 25 por paso)
   'api.osv.dev',
   'api.anthropic.com',
   'api.kapso.ai',

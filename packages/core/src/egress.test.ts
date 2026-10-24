@@ -21,6 +21,14 @@ describe('assertAllowedUrl', () => {
     expect(() => assertAllowedUrl('https://codeload.github.com/acme/web/zip/main')).toThrow('EGRESS_BLOCKED');
     expect(() => assertAllowedUrl('https://www.cisa.gov/kev.json')).toThrow('EGRESS_BLOCKED');
   });
+  it('raw.githubusercontent.com pasa (DeepWiki, paso area); sus vecinos de LFS y objetos no', () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    expect(assertAllowedUrl(`https://raw.githubusercontent.com/acme/web/${sha}/src/a.ts`).hostname).toBe('raw.githubusercontent.com');
+    expect(() => assertAllowedUrl(`http://raw.githubusercontent.com/acme/web/${sha}/src/a.ts`)).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl(`https://media.githubusercontent.com/media/acme/web/${sha}/a.bin`)).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://objects.githubusercontent.com/x')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://raw.githubusercontent.com.evil.example/acme/web')).toThrow('EGRESS_BLOCKED');
+  });
   it('el error no repite la URL (podría llevar un secreto en la query)', () => {
     expect(() => assertAllowedUrl('https://evil.example/?token=SECRETO123')).toThrow(/^EGRESS_BLOCKED:host$/);
   });

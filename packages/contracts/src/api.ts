@@ -148,7 +148,13 @@ export const ContactsPut = z.array(ContactIn).max(5)
   .refine((a) => new Set(a.map((c) => c.priority)).size === a.length, 'prioridades repetidas')
   .refine((a) => new Set(a.map((c) => c.phone_e164)).size === a.length, 'teléfonos repetidos'); // único (org_id, phone_e164) en §05
 export type ContactsPut = z.infer<typeof ContactsPut>;
-export const Contact = ContactIn.extend({ id: Id, verified_at: Ts.nullable() });
+// verificacion: solo en contactos sin verificar con whatsapp=true y si hay número real de VanGUARD. El contacto abre
+// `enlace` (wa.me/<número de VanGUARD>?text=VERIFICAR%20<codigo>) y envía el texto; E31 compara el remitente con
+// phone_e164 y el código (6 primeros hex de HMAC(FPK, 'contact|' + id)) y pone verified_at. Así nadie registra un
+// teléfono ajeno: verifica quien tiene el teléfono, y su primer mensaje abre la ventana de 24 h de WhatsApp.
+export const VerificacionContacto = z.object({ codigo: z.string().regex(/^[0-9A-F]{6}$/), enlace: z.url().refine((u) => u.startsWith('https://wa.me/'), 'solo wa.me') });
+export type VerificacionContacto = z.infer<typeof VerificacionContacto>;
+export const Contact = ContactIn.extend({ id: Id, verified_at: Ts.nullable(), verificacion: VerificacionContacto.nullable().optional() });
 export type Contact = z.infer<typeof Contact>;
 export const NotificationTest = z.object({ channel: z.enum(['whatsapp', 'voice']) });
 export type NotificationTest = z.infer<typeof NotificationTest>;

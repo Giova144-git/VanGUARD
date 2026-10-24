@@ -8,7 +8,9 @@ import { CONTACT_1, CONTACT_2 } from './ids.ts';
 // Ana verificada y Luis no: así la demo con fixtures enseña las dos chapas y el 409 unverified.
 export const contacts = [
   { id: CONTACT_1, name: 'Ana', phone_e164: '+584120000001', whatsapp: true, voice: true, priority: 1, verified_at: '2026-10-24T15:00:00.000Z' },
-  { id: CONTACT_2, name: 'Luis', phone_e164: '+584120000002', whatsapp: true, voice: false, priority: 2, verified_at: null },
+  // Luis, sin verificar, trae su enlace de verificación. +1 555 0100 es numeración reservada para ficción en EE. UU.
+  { id: CONTACT_2, name: 'Luis', phone_e164: '+584120000002', whatsapp: true, voice: false, priority: 2, verified_at: null,
+    verificacion: { codigo: '7C2A9F', enlace: 'https://wa.me/15550100?text=VERIFICAR%207C2A9F' } },
 ] satisfies Contact[];
 
 // Org de demo: tope de 10 USD/día (S05 §05.11); 0,41 USD ≈ una auditoría con IA-2 (~0,25) y los 4 prompts de IA-1 de la

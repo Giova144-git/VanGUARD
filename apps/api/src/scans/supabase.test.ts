@@ -413,7 +413,8 @@ describe('pasoSupabase', () => {
     // proporción ≈ 1); con la suite entera en paralelo, los dos ≈ el doble. La proporción no depende de la carga ni de la
     // máquina; el número absoluto sí, por eso no se compara con los 10 ms de Free.
     expect(lleno - limpio).toBeLessThan(ref * 0.5);
-  });
+  }, 60_000);   // con la suite entera en paralelo pasa de los 5 s por defecto: cortada, su bucle seguía pisando el
+  // estado compartido (resp, upserts) de las dos pruebas siguientes, que fallaban sin culpa
 
   it('cable trampa: la fila descartada deja sin mirar su fuente y error_code empieza por tripwire', async () => {
     resp.s1 = [{ esquema: 'public', tabla: `x_${PAT}`, rls_activa: false, anon_select: true }];   // redact() exige \b

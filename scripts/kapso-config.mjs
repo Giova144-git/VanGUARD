@@ -8,6 +8,11 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import tls from 'node:tls';
+
+// Norton intercepta HTTPS con su propia CA, que está en el almacén de Windows pero no en el de Node: se suma la del
+// sistema (equivale a node --use-system-ca; tls.setDefaultCACertificates existe desde Node 24.5).
+try { tls.setDefaultCACertificates([...tls.getCACertificates('default'), ...tls.getCACertificates('system')]); } catch { /* Node viejo: usar --use-system-ca */ }
 
 const RUTA = join(import.meta.dirname, '..', '.env');
 const BASE = 'https://api.kapso.ai/platform/v1';

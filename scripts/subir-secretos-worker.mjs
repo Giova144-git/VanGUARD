@@ -7,6 +7,11 @@ import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import tls from 'node:tls';
+
+// Norton intercepta HTTPS con su propia CA, que está en el almacén de Windows pero no en el de Node: se suma la del
+// sistema (equivale a node --use-system-ca; tls.setDefaultCACertificates existe desde Node 24.5).
+try { tls.setDefaultCACertificates([...tls.getCACertificates('default'), ...tls.getCACertificates('system')]); } catch { /* Node viejo: usar --use-system-ca */ }
 
 const CUENTA = 'eda2c45921f84ec5add25f379bbdbfb5';
 const WORKER = 'vanguard';

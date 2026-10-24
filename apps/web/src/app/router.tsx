@@ -12,8 +12,6 @@ const pagina = (cargar: () => Promise<{ default: React.ComponentType }>) =>
 // Páginas de módulo que llegan en hitos siguientes (asignación del ORQUESTADOR, S14 §14.20).
 const EN_CAMINO: [string, IdNav, string][] = [
   ['performance', 'performance', 'el hito 7 (Rendimiento)'],
-  ['export', 'export', 'el hito 6 (Exportar)'],
-  ['settings', 'settings', 'el hito 6 (Ajustes)'],
 ];
 
 const rutas: RouteObject[] = [
@@ -38,6 +36,8 @@ const rutas: RouteObject[] = [
           { path: 'audit/:scanId', lazy: pagina(() => import('@/modulos/auditoria/PaginaAuditoria')), errorElement: <ErrorRuta /> },
           { path: 'incidents', lazy: pagina(() => import('@/modulos/incidentes/PaginaIncidentes')), errorElement: <ErrorRuta /> },
           { path: 'incidents/:incidentId', lazy: pagina(() => import('@/modulos/incidentes/PaginaIncidente')), errorElement: <ErrorRuta /> },
+          { path: 'export', lazy: pagina(() => import('@/modulos/exportar/PaginaExportar')), errorElement: <ErrorRuta /> },
+          { path: 'settings', lazy: pagina(() => import('@/modulos/ajustes/PaginaAjustes')), errorElement: <ErrorRuta /> },
           { path: 'findings/:findingId', lazy: pagina(() => import('@/modulos/hallazgos/PaginaHallazgo')), errorElement: <ErrorRuta /> },
           ...EN_CAMINO.map(([path, id, hito]): RouteObject => ({
             path, errorElement: <ErrorRuta />,

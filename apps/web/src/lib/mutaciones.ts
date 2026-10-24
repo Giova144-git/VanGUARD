@@ -1,8 +1,9 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, ProposeResponse, RespuestaEscritura, ScanAccepted, type ConnectionCreate, type FindingPatch, type ScanCreate,
+  Contact, ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, type ConnectionCreate, type FindingPatch, type ScanCreate,
 } from '@vanguard/contracts';
+import { z } from 'zod';
 import { api } from './api';
 
 function useInvalidar(org: string) {
@@ -98,4 +99,32 @@ export function useBloqueo(org: string) {
     },
     refrescar: fin,
   };
+}
+
+export function useGuardarContactos(org: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (lista: ContactIn[]) => api(`/api/orgs/${org}/contacts`, { method: 'PUT', body: lista, esquema: z.array(Contact) }),
+    onSuccess: (r) => qc.setQueryData(['org', org, 'contacts'], r),
+  });
+}
+
+export const useProbarCanal = (org: string) => useMutation({
+  mutationFn: (channel: 'whatsapp' | 'voice') =>
+    api(`/api/orgs/${org}/notifications/test`, { method: 'POST', body: { channel }, esquema: NotificationTestResult }),
+});
+
+// Descarga autenticada (§14.17): un <a href> directo daría 401 porque la API usa Bearer, no cookie.
+export async function descargarExport(org: string, formato: 'md' | 'json') {
+  const res = await api<Response>(`/api/orgs/${org}/export?format=${formato}`, { crudo: true });
+  const cd = res.headers.get('content-disposition') ?? '';
+  const hoy = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const nombre = cd.match(/filename="?([^";]+)"?/)?.[1] ?? `vanguard-export-${hoy}.${formato}`;
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement('a'), { href: url, download: nombre });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return nombre;
 }

@@ -84,3 +84,6 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Prueba cada canal antes de una emergencia para saber que el aviso llega.',
   ] },
 };
+
+// Texto para unirse al sandbox de Kapso (S12). Lo rellena el ORQUESTADOR con los datos de la cuenta de Gabriel.
+export const SANDBOX_KAPSO: string | null = null;

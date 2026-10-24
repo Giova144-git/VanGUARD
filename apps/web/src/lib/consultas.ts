@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, ScanRun, Traffic,
+  Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, ScanRun, Traffic,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -112,4 +112,16 @@ export function useIncidente(org: string, id: string) {
 export const useTrafico = (org: string) => useQuery({
   ...base, queryKey: ['org', org, 'traffic'], queryFn: () => api(`/api/orgs/${org}/traffic?seconds=300`, { esquema: Traffic }),
   refetchInterval: 10_000,
+});
+
+// Export en Markdown precargado al abrir la pantalla: «Copiar para mi IA» copia un texto que ya está en memoria (§14.17).
+export const useExportMd = (org: string) => useQuery({
+  queryKey: ['org', org, 'export', 'md'], staleTime: 60_000, refetchIntervalInBackground: false,
+  queryFn: async () => (await api<Response>(`/api/orgs/${org}/export?format=md`, { crudo: true })).text(),
+});
+
+// Contactos: solo admin (E26). Para el viewer no se llama: el bloque dice que solo los ve un administrador.
+export const useContactos = (org: string, habilitado: boolean) => useQuery({
+  queryKey: ['org', org, 'contacts'], enabled: habilitado, refetchIntervalInBackground: false,
+  queryFn: () => api(`/api/orgs/${org}/contacts`, { esquema: z.array(Contact) }),
 });

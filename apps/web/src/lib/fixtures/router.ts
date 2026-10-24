@@ -341,6 +341,36 @@ export function simularAprobacionWhatsApp(org: string, incidentId: string) {
   i.acked_at ??= iso(Date.now()); i.acked_via ??= 'whatsapp';
 }
 
+// ── Ajustes: contactos (E26/E27) y prueba de canal (E28) ─────────────────────────────────────────────────────
+type ContactoFx = { id: string; name: string; phone_e164: string; whatsapp: boolean; voice: boolean; priority: number; verified_at: string | null };
+const contactos = new Map<string, ContactoFx[]>();
+const contactosDe = (org: string) => {
+  if (!contactos.has(org)) contactos.set(org, vacia(org) ? [] : structuredClone(fx.contacts as unknown as ContactoFx[]));
+  return contactos.get(org)!;
+};
+function exigirAdmin() { if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura'); }
+function guardarContactos(org: string, body: unknown) {
+  exigirAdmin();
+  const lista = Array.isArray(body) ? body as Omit<ContactoFx, 'id' | 'verified_at'>[] : falla(422, 'invalid_body', 'Lista de contactos no válida');
+  if (lista.length > 5) falla(422, 'invalid_body', 'Máximo 5 contactos');
+  for (const c of lista) if (!/^\+[1-9]\d{7,14}$/.test(c.phone_e164)) falla(422, 'invalid_body', `Teléfono no válido: ${c.phone_e164}`, { field_errors: { phone_e164: ['Formato E.164'] } });
+  if (new Set(lista.map((c) => c.phone_e164)).size !== lista.length) falla(422, 'invalid_body', 'Hay teléfonos repetidos');
+  // vg_replace_contacts conserva verified_at por teléfono (S05): un contacto nuevo nace sin verificar.
+  const antes = new Map(contactosDe(org).map((c) => [c.phone_e164, c]));
+  const nuevos = lista.map((c) => ({ ...c, id: antes.get(c.phone_e164)?.id ?? crypto.randomUUID(), verified_at: antes.get(c.phone_e164)?.verified_at ?? null }));
+  contactos.set(org, nuevos);
+  return structuredClone(nuevos);
+}
+function probarCanal(org: string, body: unknown) {
+  exigirAdmin();
+  const canal = (body as { channel?: string } | null)?.channel;
+  if (canal !== 'whatsapp' && canal !== 'voice') return falla(422, 'invalid_body', 'Canal no válido');
+  const primero = contactosDe(org).filter((c) => (canal === 'whatsapp' ? c.whatsapp : c.voice)).sort((a, b) => a.priority - b.priority)[0];
+  if (!primero) return falla(409, 'conflict', `No hay ningún contacto con ${canal === 'whatsapp' ? 'WhatsApp' : 'llamada'} activo`, { reason: 'no_contact' });
+  if (!primero.verified_at) return falla(409, 'conflict', 'Ese contacto aún no está verificado', { reason: 'unverified' });
+  return { ok: true, provider_id: `fx_${crypto.randomUUID().slice(0, 8)}` };
+}
+
 const ORG = '\\/api\\/orgs\\/([^/]+)';
 const r = (s: string) => new RegExp(`^${s}$`);
 const rutas: [string, RegExp, H][] = [
@@ -367,13 +397,18 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/traffic`),                 () => fx.traffic],
   ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[2]!)],
-  ['GET',  r(`${ORG}\\/contacts`),                () => fx.contacts],
+  ['GET',  r(`${ORG}\\/contacts`),                (m) => { exigirAdmin(); return structuredClone(contactosDe(m[1]!)); }],
+  ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
+  ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],
   ['GET',  r(`${ORG}\\/ai\\/usage`),              () => fx.aiUsage],
   ['GET',  r(`${ORG}\\/perf\\/runs`),             () => fx.perfRuns],
   ['GET',  r(`${ORG}\\/mcp-tokens`),              () => fx.mcpTokens],
   // Rutas que el FRONT pide con {crudo:true} devuelven un Response de verdad.
-  ['GET',  r(`${ORG}\\/export`),                  () => new Response(fx.exportMd, {
-    headers: { 'content-type': 'text/markdown; charset=utf-8', 'content-disposition': 'attachment; filename="vanguard-demo-20261024.md"' } })],
+  ['GET',  r(`${ORG}\\/export`),                  (_m, _b, q) => q.get('format') === 'json'
+    ? new Response(JSON.stringify({ schema: 'vanguard-export.v1', findings: hallazgosDe(ORG_DEMO).length }, null, 2), {
+        headers: { 'content-type': 'application/json', 'content-disposition': 'attachment; filename="vanguard-demo-20261024.json"' } })
+    : new Response(fx.exportMd, {
+        headers: { 'content-type': 'text/markdown; charset=utf-8', 'content-disposition': 'attachment; filename="vanguard-demo-20261024.md"' } })],
 ];
 
 export async function fixtureFetch<T>(ruta: string, o: { method?: string; body?: unknown }): Promise<T> {

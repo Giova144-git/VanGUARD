@@ -39,6 +39,36 @@ export function ingestKey(env: CloudflareBindings, admin: SupabaseClient, ctx: S
   return key;   // verificar con crypto.subtle.verify('HMAC', key, firma, `${ts}.${cuerpo}`): comparación constante
 }
 
+/** Revisión de código (asignaciones/revision-codigo.md, E46/E47): el vgw_ va sellado en code_review_configs.secret_sealed
+ *  con AAD (org, id de ESA config, 'github', 'read'): no se puede mover a otra fila ni a otra org. Nunca se escribe en
+ *  claro: solo sale una vez en la respuesta de E46. */
+export type ConfigSellada = { id: string; org_id: string; secret_sealed: Box };
+const ctxWebhook = (orgId: string, configId: string): SecretCtx =>
+  ({ orgId, connectionId: configId, provider: 'github', kind: 'read' });
+
+export async function sellarSecretoWebhook(env: CloudflareBindings, admin: SupabaseClient, orgId: string, configId: string,
+                                           secreto: string): Promise<{ sealed: Box; kid: string; last4: string }> {
+  const keys = await getKeys(env, admin, await activeKid(admin));
+  return { sealed: await seal(keys, secreto, ctxWebhook(orgId, configId)), kid: keys.kid, last4: last4(secreto) };
+}
+
+/** E47: clave HMAC del webhook (bytes UTF-8 del vgw_… completo), no extraíble, en caché 60 s por config + iv del sellado:
+ *  un secreto rotado (P1) vale al instante y el viejo deja de valer. La fila ya viene leída: abrirla solo cuesta las llaves
+ *  (en frío). Verificar con crypto.subtle.verify('HMAC', clave, firma, crudo): comparación en tiempo constante. */
+const webhookCache = new Map<string, { key: Promise<CryptoKey>; exp: number }>();
+export function claveWebhook(env: CloudflareBindings, admin: SupabaseClient, cfg: ConfigSellada): Promise<CryptoKey> {
+  const id = `${cfg.id}:${cfg.secret_sealed.iv}`;
+  const hit = webhookCache.get(id);
+  if (hit && hit.exp > Date.now()) return hit.key;
+  const key = (async () => {
+    const secreto = await open(await getKeys(env, admin, cfg.secret_sealed.kid), cfg.secret_sealed, ctxWebhook(cfg.org_id, cfg.id));
+    return crypto.subtle.importKey('raw', new TextEncoder().encode(secreto), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+  })();
+  webhookCache.set(id, { key, exp: Date.now() + 60_000 });
+  key.catch(() => webhookCache.delete(id));
+  return key;
+}
+
 /** CB_KEY_REUSE (P1, §09.9): huella → connection_id de las credenciales de ESTA org, para comparar en memoria con las huellas
  *  del repo (fingerprint(keys, orgId, valor), la MISMA función del alta). Así repo.ts no toca connection_secrets y las
  *  huellas no viajan en una URL de PostgREST. Una org tiene pocas conexiones. */

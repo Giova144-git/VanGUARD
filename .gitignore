@@ -1,1 +1,4 @@
 /docs
+# Caché local de las CLI de Cloudflare (cf, wrangler)
+.cloudflare/
+.wrangler/

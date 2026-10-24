@@ -338,13 +338,14 @@ describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo
     expect(await pedir<Finding>(`/api/orgs/${DEMO}/findings/${fx.hallazgoRevision.id}`)).toMatchObject({ rule_id: 'CB_SECRET_STRIPE_LIVE' });
   });
 
-  it('el alta da el secreto vgw_ UNA vez; E45 nunca lo trae; la 3.ª consulta simula el ping; rotar es P1 (400)', async () => {
+  it('el alta da el secreto vgw_ UNA vez; E45 nunca lo trae; la 3.ª consulta simula el ping; rotar da otro y espera el ping', async () => {
     const org = nueva;   // el tope de 3 orgs por dueño ya lo gastan los otros casos
     expect(await pedir(`/api/orgs/${org}/code-review`)).toMatchObject({ available: false, reason: 'sin_conexion', config: null });
     const gh = (await pedir<ConnectionCreated>(`/api/orgs/${org}/connections`, 'POST', { provider: 'github', pat: 'github_pat_prueba', repo_full_name: 'mi-equipo/web' })).connection.id;
     expect(await pedir(`/api/orgs/${org}/code-review`)).toMatchObject({ available: true, reason: null, config: null });
 
-    const alta = CodeReviewSaved.parse(await pedir(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: true }));
+    // Sin config, rotate_secret es un alta normal, como en el BACK (2460162).
+    const alta = CodeReviewSaved.parse(await pedir(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: true, rotate_secret: true }));
     expect(alta.webhook_secret).toMatch(/^vgw_[A-Za-z0-9_-]{43}$/);
     expect(alta.config).toMatchObject({ state: 'waiting_ping', secret_last4: alta.webhook_secret!.slice(-4) });
     const leer = () => pedir<CodeReviewState>(`/api/orgs/${org}/code-review`);
@@ -353,7 +354,12 @@ describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo
     expect((await leer()).config).toMatchObject({ state: 'connected', hook_events: ['pull_request', 'push'] });
 
     expect(await pedir(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: false })).toMatchObject({ webhook_secret: null, config: { state: 'off' } });
-    expect(await fallo(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: true, rotate_secret: true })).toMatchObject({ status: 400 });
+    const otro = CodeReviewSaved.parse(await pedir(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: true, rotate_secret: true }));
+    expect(otro.webhook_secret).toMatch(/^vgw_[A-Za-z0-9_-]{43}$/);
+    expect(otro.webhook_secret).not.toBe(alta.webhook_secret);
+    expect(otro.config).toMatchObject({ id: alta.config.id, state: 'waiting_ping', last_ping_at: null, last_event_at: null, hook_events: [],
+      secret_last4: otro.webhook_secret!.slice(-4), webhook_url: alta.config.webhook_url });
+    expect(JSON.stringify(await leer())).not.toContain(otro.webhook_secret);
     expect(await fallo(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: NADA, enabled: true })).toMatchObject({ status: 404 });
   });
 

@@ -1,19 +1,20 @@
 // «Revisión automática de código» (asignaciones/revision-codigo.md §6.1): el webhook de GitHub manda cada push a la rama
 // vigilada y VanGUARD revisa lo añadido. Bandera: si E45 da 404 (aún sin desplegar), la tarjeta no se pinta (§8.0).
-// El secreto `vgw_` del alta (E46) se ve UNA vez: vive en el estado de este componente, la mutación va con gcTime 0 y
-// reset() en cuanto llega (lib/mutaciones.ts), y nunca toca storage, la URL ni la caché de consultas.
+// El secreto `vgw_` del alta o de «Generar otro secreto» (E46) se ve UNA vez: vive en el estado de este componente, la
+// mutación va con gcTime 0 y reset() en cuanto llega (lib/mutaciones.ts), y nunca toca storage, la URL ni la caché de consultas.
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ChevronDown, ExternalLink, GitCommitHorizontal, GitPullRequest } from 'lucide-react';
 import type { CodeReview, CodeReviewConfig, ConnectionPublic } from '@vanguard/contracts';
 import { BotonCopiar } from '@/componentes/vg/BotonCopiar';
+import { ConfirmarEnSitio } from '@/componentes/vg/ConfirmarEnSitio';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { Interruptor } from '@/componentes/vg/Interruptor';
 import { SectorPlegable } from '@/componentes/vg/SectorPlegable';
 import { useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
 import { usePrefsAvisos, useRevisionCodigo } from '@/lib/consultas';
-import { esApiError, mensajeDe } from '@/lib/errores';
+import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
 import { tomarSecreto, useGuardarRevision } from '@/lib/mutaciones';
@@ -38,6 +39,7 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
   const prefs = usePrefsAvisos(org.id);
   const guardar = useGuardarRevision(org.id);
   const [secreto, setSecreto] = useState<string | null>(() => tomarSecreto(org.id));   // un alta de antes de desmontar
+  const [rotado, setRotado] = useState(false);   // el secreto a la vista es uno nuevo: hay que pegarlo en el webhook que ya existe
   const [error, setError] = useState<string | null>(null);
   const abierta = params.get('revision');
 
@@ -72,6 +74,24 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
       },
       onError: (e) => { setError(mensajeDe(e)); guardar.reset(); },
     });
+  };
+  // «Generar otro secreto» (E46 con rotate_secret): el de antes deja de valer al momento y la URL no cambia. Un error lo
+  // pinta ConfirmarEnSitio en su sitio; la mutación sale del MutationCache igual. 409: otro admin lo cambió a la vez (el
+  // CAS del BACK) y su frase lo dice; se vuelve a leer el estado. 429: RL_COSTLY por usuario (Retry-After: 60).
+  const rotar = async () => {
+    setError(null);
+    try {
+      await guardar.mutateAsync({ connection_id: conexion.id, enabled: true, rotate_secret: true });
+      const s = tomarSecreto(org.id);
+      if (s) { setSecreto(s); setRotado(true); }
+      setRapidoHasta(Date.now() + TRAS_ACTIVAR_MS);        // se espera el ping del secreto nuevo
+    } catch (e) {
+      if (esApiError(e) && e.status === 409) void q.refetch();
+      if (esApiError(e) && e.status === 429) throw new ApiError(429, 'rotar_rate', 'Demasiados intentos: espera un minuto y vuelve a probar');
+      throw e;
+    } finally {
+      guardar.reset();
+    }
   };
   // El hallazgo se abre encima sin perder la revisión abierta (al cerrar el panel se vuelve a ella).
   const conHallazgo = (id: string) => { const p = new URLSearchParams(params); p.set('finding', id); return `?${p}`; };
@@ -108,7 +128,14 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
       {/* Línea reservada: el error de activar aparece sin empujar nada (L7). */}
       <p role="alert" className="min-h-5 text-sm text-mal">{error ?? ''}</p>
       {c?.state === 'error' ? <p className="text-[15px] font-medium text-mal">{textoErrorHook(c.last_error)}</p> : null}
-      {org.puedeEscribir && c?.enabled ? <PasosGithub key={c.state === 'connected' ? 'plegado' : 'abierto'} c={c} secreto={secreto} /> : null}
+      {org.puedeEscribir && c?.enabled ? <PasosGithub key={c.state === 'connected' ? 'plegado' : 'abierto'} c={c} secreto={secreto} rotado={rotado} /> : null}
+      {org.puedeEscribir && c?.enabled ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-muted-foreground">¿Perdiste el secreto o se filtró?</span>
+          <ConfirmarEnSitio verbo="Generar otro secreto" aviso="El webhook dejará de funcionar hasta que pegues el secreto nuevo en GitHub"
+            deshabilitado={guardar.isPending ? 'Guardando…' : undefined} onConfirmar={rotar} />
+        </div>
+      ) : null}
       <Recientes recientes={s.recent} abierta={abierta} alternar={alternar} conHallazgo={conHallazgo} />
     </section>
   );
@@ -132,7 +159,7 @@ function Umbral({ org, prefs, puedeEscribir }: { org: string; prefs: ReturnType<
   );
 }
 
-function PasosGithub({ c, secreto }: { c: CodeReviewConfig; secreto: string | null }) {
+function PasosGithub({ c, secreto, rotado }: { c: CodeReviewConfig; secreto: string | null; rotado: boolean }) {
   const repo = REPO_VALIDO.test(c.repo_full_name) ? c.repo_full_name : null;
   const paso = 'flex flex-col gap-2 border-b px-5 py-3 last:border-b-0';
   return (
@@ -163,6 +190,12 @@ function PasosGithub({ c, secreto }: { c: CodeReviewConfig; secreto: string | nu
                 <BotonCopiar valor={secreto} />
               </span>
               <span className="text-sm font-medium">Cópialo ahora: no lo volveremos a mostrar</span>
+              {rotado ? (
+                <span className="text-sm">
+                  Es un secreto nuevo: en GitHub, Settings → Webhooks → Edit en el de VanGUARD, pégalo en «Secret» y pulsa «Update webhook».
+                  La Payload URL no cambia. Hasta entonces GitHub llega con el secreto viejo y no revisamos sus pushes.
+                </span>
+              ) : null}
             </>
           ) : <span className="text-muted-foreground">{c.secret_last4 ? <>Termina en ••<span className="font-mono">{sinBidi(c.secret_last4)}</span></> : 'Ya está guardado'}</span>}
         </li>

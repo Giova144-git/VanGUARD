@@ -4,7 +4,7 @@ import { AlertPrefs, AlertPrefsIn, CodeReview, CodeReviewConfig, CodeReviewPut, 
 import { newWebhookSecret } from '@vanguard/core/crypto';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
-import { sellarSecretoWebhook } from '../lib/credentials.ts';
+import { olvidarClaveWebhook, sellarSecretoWebhook } from '../lib/credentials.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
@@ -138,9 +138,15 @@ revision.get('/orgs/:org/code-review', async (c) => {
 
 // E46 · PUT /api/orgs/:org/code-review · admin · P0 → CodeReviewSaved. Sin config: la crea con su secreto vgw_ sellado
 // y lo devuelve UNA vez (201). Con config: cambia enabled; al pasar de false a true vuelve a copiar la rama por defecto.
+// rotate_secret («Generar otro secreto», §4.1 P1): sella un vgw_ nuevo en la MISMA config (la URL no cambia), borra
+// last_ping_at, hook_events y last_error (la tarjeta vuelve a «esperando el ping») y lo devuelve una vez (200). Sin config,
+// el alta ya da un secreto: rotate_secret no cambia nada.
 revision.put('/orgs/:org/code-review', requireAdmin, async (c) => {
   const b = await cuerpo(c, CodeReviewPut);
-  if (b.rotate_secret) throw new ApiError('invalid_body', 'Generar otro secreto llega pronto', undefined, 400);
+  if (b.rotate_secret) {
+    const { success } = await c.env.RL_COSTLY.limit({ key: `u:${c.get('userId')}` });
+    if (!success) throw new ApiError('rate_limited', 'Demasiados intentos; espera un minuto');
+  }
   const orgId = c.get('orgId');
   const admin = db(c.env);
   const conn = await conexionGithub(c, b.connection_id);
@@ -156,8 +162,8 @@ revision.put('/orgs/:org/code-review', requireAdmin, async (c) => {
     }
     return r;
   };
-  const { data: leida, error } = await admin.from('code_review_configs').select(COLUMNAS_CONFIG).eq('org_id', orgId)
-    .eq('connection_id', conn.id).maybeSingle();
+  const { data: leida, error } = await admin.from('code_review_configs').select(`${COLUMNAS_CONFIG}, updated_at`)
+    .eq('org_id', orgId).eq('connection_id', conn.id).maybeSingle();
   const previa = leida as unknown as Fila | null;
   if (error) {
     log('error', 'revision.config_error', { rid: c.get('rid'), code: error.code ?? null });
@@ -182,15 +188,27 @@ revision.put('/orgs/:org/code-review', requireAdmin, async (c) => {
   }
 
   const reactiva = b.enabled && previa.enabled !== true;
-  const { data, error: eu } = await admin.from('code_review_configs')
-    .update({ enabled: b.enabled, ...(reactiva ? { branch: rama() } : {}), updated_at: new Date().toISOString() })
-    .eq('id', previa.id).eq('org_id', orgId).select(COLUMNAS_CONFIG).single();
+  const configId = String(previa.id);
+  const secreto = b.rotate_secret ? newWebhookSecret() : null;
+  const sellado = secreto ? await sellarSecretoWebhook(c.env, admin, orgId, configId, secreto) : null;
+  // Al rotar, también last_event_at: con un push anterior la tarjeta seguiría «Conectada» (max de ping y evento) aunque
+  // GitHub ya firme con el secreto viejo. Y CAS por updated_at: de dos rotaciones a la vez solo vale la que escribe; la
+  // otra recibe 409 en vez de un secreto que nunca verificaría.
+  let cambio = admin.from('code_review_configs')
+    .update({ enabled: b.enabled, ...(reactiva ? { branch: rama() } : {}), updated_at: new Date().toISOString(),
+      ...(sellado ? { secret_sealed: sellado.sealed, secret_kid: sellado.kid, secret_last4: sellado.last4 || null,
+        last_ping_at: null, last_event_at: null, hook_events: [], last_error: null, last_error_at: null } : {}) })
+    .eq('id', configId).eq('org_id', orgId);
+  if (sellado) cambio = cambio.eq('updated_at', String(previa.updated_at));
+  const { data, error: eu } = await cambio.select(COLUMNAS_CONFIG).maybeSingle();
+  if (sellado && !eu && !data) throw new ApiError('conflict', 'Otro administrador acaba de cambiarlo: recarga la página');
   if (eu || !data) {
     log('error', 'revision.config_cambio_error', { rid: c.get('rid'), code: eu?.code ?? null });
     throw new ApiError('internal', 'No pudimos guardar la revisión de código');
   }
-  log('info', 'revision.config', { rid: c.get('rid'), enabled: b.enabled, rotado: false, alta: false });
-  return c.json(CodeReviewSaved.parse({ config: aConfig(c, data as unknown as Fila, repo), webhook_secret: null }));
+  if (sellado) olvidarClaveWebhook(configId);
+  log('info', 'revision.config', { rid: c.get('rid'), enabled: b.enabled, rotado: !!sellado, alta: false });
+  return c.json(CodeReviewSaved.parse({ config: aConfig(c, data as unknown as Fila, repo), webhook_secret: secreto }));
 });
 
 // E48/E49 · alert-prefs. Sin fila: high / critical y updated_at null. voice_available: false mientras no haya llamadas.

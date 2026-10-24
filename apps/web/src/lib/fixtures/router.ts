@@ -573,14 +573,20 @@ function guardarRevision(org: string, body: unknown): CodeReviewSaved {
   const b = CodeReviewPut.safeParse(body);
   if (!b.success) falla(422, 'invalid_body', 'Revisa los campos marcados');
   const { connection_id, enabled, rotate_secret } = b.data!;
-  if (rotate_secret) falla(400, 'invalid_body', 'Generar otro secreto llega pronto');
   const gh = githubDe(org);
   if (!gh || gh.id !== connection_id) falla(404, 'not_found', 'Esa conexión no existe');
   if (gh!.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
   const r = revisionDe(org);
   r.consultas = 0;
   let secreto: string | null = null;
-  if (!r.estado.config) {
+  if (rotate_secret && r.estado.config) {
+    // «Generar otro secreto» (E46, como rutas/revision.ts del BACK, 2460162): uno nuevo en la MISMA config (misma URL y
+    // mismo id); el ping, los eventos y el error de antes ya no valen, así que vuelve a «Esperando a GitHub» hasta que se
+    // pegue el secreto nuevo en el webhook. Sin config, rotate_secret es un alta normal (rama de abajo).
+    secreto = secretoWebhook();
+    Object.assign(r.estado.config, { enabled, secret_last4: secreto.slice(-4), last_ping_at: null, last_event_at: null, hook_events: [],
+      last_error: null, state: enabled ? 'waiting_ping' : 'off' });
+  } else if (!r.estado.config) {
     secreto = secretoWebhook();
     const id = crypto.randomUUID();
     const meta = gh!.meta as { repo_full_name?: unknown; default_branch?: unknown };

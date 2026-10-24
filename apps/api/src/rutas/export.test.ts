@@ -160,7 +160,7 @@ describe('E25 · formatos y cabeceras', () => {
     const r = await pedir('format=md');
     expect(r.status).toBe(200);
     expect(r.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
-    expect(r.headers.get('content-disposition')).toBe('attachment; filename="vanguard-export-20261024.md"');
+    expect(r.headers.get('content-disposition')).toBe('attachment; filename="vanguard-tienda-demo-ab12-20261024.md"');
     expect(r.headers.get('cache-control')).toBe('no-store');
     expect(r.headers.get('x-vg-export-sha256')).toMatch(/^[0-9a-f]{64}$/);
     const md = await r.text();
@@ -178,7 +178,7 @@ describe('E25 · formatos y cabeceras', () => {
     const r = await pedir('format=json');
     expect(r.status).toBe(200);
     expect(r.headers.get('content-type')).toBe('application/json');
-    expect(r.headers.get('content-disposition')).toBe('attachment; filename="vanguard-export-20261025.json"');
+    expect(r.headers.get('content-disposition')).toBe('attachment; filename="vanguard-tienda-demo-ab12-20261025.json"');
   });
 
   it('json válido según VanguardExport: counts de 5 claves, integridad = cabecera, orden y corrección sin IA', async () => {

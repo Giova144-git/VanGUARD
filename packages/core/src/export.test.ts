@@ -74,9 +74,11 @@ describe('utilidades', () => {
     expect(stableStringify({ b: 1, a: { d: [{ z: 1, y: 2 }], c: null } })).toBe('{"a":{"c":null,"d":[{"y":2,"z":1}]},"b":1}');
   });
 
-  it('nombreArchivoExport usa el día de Caracas (UTC−4)', () => {
-    expect(nombreArchivoExport('md', new Date('2026-10-25T03:59:59Z'))).toBe('vanguard-export-20261024.md');
-    expect(nombreArchivoExport('json', new Date('2026-10-25T04:00:00Z'))).toBe('vanguard-export-20261025.json');
+  it('nombreArchivoExport: vanguard-<slug>-<día de Caracas (UTC−4)> y el slug saneado para la cabecera', () => {
+    expect(nombreArchivoExport('tienda-demo', 'md', new Date('2026-10-25T03:59:59Z'))).toBe('vanguard-tienda-demo-20261024.md');
+    expect(nombreArchivoExport('tienda-demo', 'json', new Date('2026-10-25T04:00:00Z'))).toBe('vanguard-tienda-demo-20261025.json');
+    expect(nombreArchivoExport('Acme"; x=\r\n/..', 'md', new Date('2026-10-25T04:00:00Z'))).toBe('vanguard-acme-x-20261025.md');
+    expect(nombreArchivoExport('', 'md', new Date('2026-10-25T04:00:00Z'))).toBe('vanguard-org-20261025.md');
   });
 
   it('orden de S13 13.3: severidad, rule_id, resource (null al final) e id', () => {

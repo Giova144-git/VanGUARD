@@ -131,7 +131,7 @@ exportRuta.get('/orgs/:org/export', async (c) => {
     omitidos: v.data.truncated.findings });
   return c.body(cuerpo, 200, {
     'Content-Type': TIPO[p.format],
-    'Content-Disposition': `attachment; filename="${nombreArchivoExport(p.format, ahora)}"`,
+    'Content-Disposition': `attachment; filename="${nombreArchivoExport(o.slug, p.format, ahora)}"`,
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'X-VG-Export-Sha256': v.data.integrity.findings_sha256,

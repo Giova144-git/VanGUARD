@@ -120,10 +120,12 @@ async function sha256Hex(s: string): Promise<string> {
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** `vanguard-export-AAAAMMDD.<ext>` con el día de America/Caracas (UTC−4 fijo, sin horario de verano). */
-export function nombreArchivoExport(ext: 'md' | 'json', ahora: Date = new Date()): string {
+/** `vanguard-<slug>-AAAAMMDD.<ext>` (§13.4/§15 E25) con el día de America/Caracas (UTC−4 fijo, sin horario de verano).
+ *  El slug va saneado a [a-z0-9-] (≤ 40) porque viaja en la cabecera Content-Disposition. */
+export function nombreArchivoExport(slug: string, ext: 'md' | 'json', ahora: Date = new Date()): string {
   const dia = new Date(ahora.getTime() - 4 * 3_600_000).toISOString().slice(0, 10).replace(/-/g, '');
-  return `vanguard-export-${dia}.${ext}`;
+  const s = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'org';
+  return `vanguard-${s}-${dia}.${ext}`;
 }
 
 // ── Instantánea ──────────────────────────────────────────────────────────────────────────────────────────────────

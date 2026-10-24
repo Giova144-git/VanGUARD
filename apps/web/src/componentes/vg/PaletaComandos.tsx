@@ -1,24 +1,35 @@
 // Paleta de navegación (Ctrl+K, S14 §14.5 P1): un combobox con la lista de módulos. Flechas para moverse, Enter para ir,
-// Esc para cerrar (lo maneja el Dialog). No es una confirmación (L6): solo navega.
+// Esc para cerrar (lo maneja el Dialog). No es una confirmación (L6): navega o, al final, cambia el modo presentación
+// (F-15: la demo del jurado va en ventana privada, donde el modo arranca apagado, y así se enciende sin ir a Ajustes).
 import { useMemo, useState } from 'react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
-import { CornerDownLeft, Search } from 'lucide-react';
+import { CornerDownLeft, Presentation, Search, type LucideIcon } from 'lucide-react';
 import { SECUENCIA_G } from '@/lib/atajos';
 import { NAV, type IdNav } from '@/lib/nav';
+import { aplicarPresentacion } from '@/lib/tema';
 import { cn } from '@/lib/utils';
 
 const sinTildes = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const LETRA: Partial<Record<IdNav, string>> = Object.fromEntries(Object.entries(SECUENCIA_G).map(([k, v]) => [v, k]));
 
+type Opcion = { clave: string; nombre: string; descripcion: string; icono: LucideIcon; letra?: string; hacer: () => void };
+
 export function PaletaComandos({ abierta, onCambio, alIr }: { abierta: boolean; onCambio: (v: boolean) => void; alIr: (id: IdNav) => void }) {
   const [q, setQ] = useState('');
   const [activo, setActivo] = useState(0);
+  const presentando = abierta && document.documentElement.classList.contains('presentacion');
+  const opciones = useMemo<Opcion[]>(() => [
+    ...NAV.map((n) => ({ clave: n.id, nombre: n.nombre, descripcion: n.descripcion, icono: n.icono, letra: LETRA[n.id], hacer: () => alIr(n.id) })),
+    { clave: 'presentacion', nombre: presentando ? 'Salir del modo presentación' : 'Modo presentación',
+      descripcion: 'Letra más grande para el proyector; se recuerda en este navegador', icono: Presentation,
+      hacer: () => aplicarPresentacion(!presentando) },
+  ], [alIr, presentando]);
   const lista = useMemo(() => {
     const f = sinTildes(q.trim());
-    return NAV.filter((n) => !f || sinTildes(`${n.nombre} ${n.descripcion}`).includes(f));
-  }, [q]);
+    return opciones.filter((n) => !f || sinTildes(`${n.nombre} ${n.descripcion}`).includes(f));
+  }, [q, opciones]);
   const actual = Math.min(activo, Math.max(0, lista.length - 1));
-  const ir = (id: IdNav) => { onCambio(false); setQ(''); setActivo(0); alIr(id); };
+  const elegir = (o: Opcion) => { onCambio(false); setQ(''); setActivo(0); o.hacer(); };
 
   return (
     <DialogPrimitive.Root open={abierta} onOpenChange={(v) => { onCambio(v); if (!v) { setQ(''); setActivo(0); } }}>
@@ -31,13 +42,13 @@ export function PaletaComandos({ abierta, onCambio, alIr }: { abierta: boolean; 
             <Search className="size-5 text-texto-3" />
             <input autoFocus value={q} placeholder="Ir a… (escribe un módulo)" aria-label="Ir a una pantalla"
               role="combobox" aria-expanded="true" aria-controls="paleta-lista" aria-autocomplete="list"
-              aria-activedescendant={lista[actual] ? `paleta-${lista[actual].id}` : undefined}
+              aria-activedescendant={lista[actual] ? `paleta-${lista[actual].clave}` : undefined}
               className="h-14 flex-1 bg-transparent text-base outline-none placeholder:text-texto-3"
               onChange={(e) => { setQ(e.target.value); setActivo(0); }}
               onKeyDown={(e) => {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setActivo((actual + 1) % Math.max(1, lista.length)); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); setActivo((actual - 1 + lista.length) % Math.max(1, lista.length)); }
-                else if (e.key === 'Enter' && lista[actual]) { e.preventDefault(); ir(lista[actual].id); }
+                else if (e.key === 'Enter' && lista[actual]) { e.preventDefault(); elegir(lista[actual]); }
               }} />
           </div>
           <ul id="paleta-lista" role="listbox" aria-label="Pantallas" className="max-h-[50vh] overflow-y-auto p-1">
@@ -45,15 +56,15 @@ export function PaletaComandos({ abierta, onCambio, alIr }: { abierta: boolean; 
             {lista.map((n, i) => {
               const Icono = n.icono;
               return (
-                <li key={n.id} id={`paleta-${n.id}`} role="option" aria-selected={i === actual}
-                  onMouseEnter={() => setActivo(i)} onClick={() => ir(n.id)}
+                <li key={n.clave} id={`paleta-${n.clave}`} role="option" aria-selected={i === actual}
+                  onMouseEnter={() => setActivo(i)} onClick={() => elegir(n)}
                   className={cn('flex min-h-12 cursor-pointer items-center gap-3 rounded-lg px-3 py-2', i === actual && 'bg-sidebar-accent text-sidebar-accent-foreground')}>
                   <Icono className="size-5 shrink-0" />
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="text-[15px] font-medium">{n.nombre}</span>
                     <span className="truncate text-[12.5px] text-muted-foreground">{n.descripcion}</span>
                   </span>
-                  {LETRA[n.id] ? <kbd className="rounded border px-1.5 font-mono text-[12.5px] text-muted-foreground">g {LETRA[n.id]}</kbd> : null}
+                  {n.letra ? <kbd className="rounded border px-1.5 font-mono text-[12.5px] text-muted-foreground">g {n.letra}</kbd> : null}
                   {i === actual ? <CornerDownLeft className="size-4 text-texto-3" aria-hidden /> : null}
                 </li>
               );

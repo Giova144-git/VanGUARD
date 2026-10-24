@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { Button } from '@/componentes/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/componentes/ui/sheet';
 
-// Panel de detalle (S14 §14.7): aside fijo de 420 px desde 1100 px; por debajo, Sheet a la derecha. Esc cierra.
+// Panel de detalle (S14 §14.7): aside fijo de 26,25rem (420 px; crece con el modo presentación) desde 1100 px; por debajo, Sheet a la derecha. Esc cierra.
 export function PanelDetalle({ titulo, onCerrar, children }: { titulo: string; onCerrar: () => void; children: ReactNode }) {
   const [ancho, setAncho] = useState(() => window.matchMedia('(min-width: 1100px)').matches);
   useEffect(() => {
@@ -26,7 +26,7 @@ export function PanelDetalle({ titulo, onCerrar, children }: { titulo: string; o
 
   if (!ancho) return (
     <Sheet open onOpenChange={(v) => { if (!v) onCerrar(); }}>
-      <SheetContent side="right" onCloseAutoFocus={(e) => { e.preventDefault(); previo.current?.focus(); }} className="w-full max-w-[420px] overflow-y-auto bg-background p-5">
+      <SheetContent side="right" onCloseAutoFocus={(e) => { e.preventDefault(); previo.current?.focus(); }} className="w-full max-w-[26.25rem] overflow-y-auto bg-background p-5">
         <SheetTitle className="pr-12 text-[17px] font-semibold">{titulo}</SheetTitle>
         <SheetDescription className="sr-only">Detalle del hallazgo</SheetDescription>
         <div className="mt-4">{children}</div>
@@ -34,7 +34,7 @@ export function PanelDetalle({ titulo, onCerrar, children }: { titulo: string; o
     </Sheet>
   );
   return (
-    <aside aria-label={titulo} className="fixed top-14 right-0 bottom-0 z-20 flex w-[420px] flex-col border-l bg-background">
+    <aside aria-label={titulo} className="fixed top-14 right-0 bottom-0 z-20 flex w-[26.25rem] flex-col border-l bg-background">
       <header className="flex items-center gap-2 border-b px-5 py-3">
         <h2 ref={cabecera} tabIndex={-1} className="flex-1 truncate text-[17px] font-semibold outline-none">{titulo}</h2>
         <Button variant="fantasma" size="icono" onClick={onCerrar} aria-label="Cerrar detalle"><X className="size-5" /></Button>

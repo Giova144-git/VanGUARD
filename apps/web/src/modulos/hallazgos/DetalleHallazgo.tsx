@@ -1,7 +1,8 @@
 // Detalle de un hallazgo (S14 §14.15): en PanelDetalle (?finding=) y a ancho completo en /findings/:findingId.
 import { useState } from 'react';
-import { CheckCheck, ExternalLink, RotateCcw, ShieldAlert } from 'lucide-react';
+import { ArrowDown, CheckCheck, ExternalLink, RotateCcw, ShieldAlert } from 'lucide-react';
 import type { Finding, FindingStatus, Module } from '@vanguard/contracts';
+import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { BotonCopiar } from '@/componentes/vg/BotonCopiar';
@@ -83,6 +84,11 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
         <p className="font-mono text-[13px] text-muted-foreground">{f.rule_id}</p>
         <p className="text-[12.5px] text-texto-3">Visto por primera vez {cuando(f.first_seen_at)} · última vez {cuando(f.last_seen_at)}</p>
         {f.status_reason ? <p className="text-sm text-muted-foreground">Motivo: {f.status_reason}</p> : null}
+        {/* El prompt queda al final del detalle: en la demo se salta hasta él sin bajar a mano por la evidencia (F-15). */}
+        <Button variant="fantasma" size="fila" className="-ml-3 self-start"
+          onClick={() => document.getElementById('titulo-prompt')?.scrollIntoView({ block: 'start',
+            behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })}>
+          <ArrowDown />Ir al prompt de corrección</Button>
       </header>
 
       <section className="flex flex-col gap-2" aria-label="Dónde">

@@ -17,12 +17,16 @@ function TextoPrompt({ r, plantilla }: { r: Pick<FixPromptResponse, 'prompt' | '
         {plantilla ? <Etiqueta texto="Plantilla · IA en pausa" rol="aviso" /> : r.model === 'template' ? <Etiqueta texto="Plantilla fija" /> : null}
         {r.injection_flags.length > 0 ? <Etiqueta texto={`Quitamos ${r.injection_flags.length} ${r.injection_flags.length === 1 ? 'instrucción sospechosa' : 'instrucciones sospechosas'} de la evidencia`} rol="aviso" /> : null}
       </div>
-      <pre className="max-h-[28rem] overflow-auto rounded-lg border bg-background p-3 font-mono text-[13px] whitespace-pre-wrap">{r.prompt}</pre>
-      <BotonCopiar valor={r.prompt} texto="Copiar para mi IA" variante="principal" tam="grande" />
+      {/* El botón y su aviso van antes del texto: el prompt mide hasta 28rem y, en la demo (1280×720), «Copiar para mi
+          IA» quedaba casi dos pantallas más abajo (F-15). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <BotonCopiar valor={r.prompt} texto="Copiar para mi IA" variante="principal" tam="grande" />
+        {plantilla ? null : <p className="text-[12.5px] text-texto-3">Generado por <span className="font-mono">{r.model}</span> · {r.cached ? 'guardado' : 'nuevo'}</p>}
+      </div>
       <p className="text-[12.5px] text-muted-foreground">
         Este texto incluye evidencia de sistemas externos. Léelo antes de dárselo a una IA que pueda escribir en tu código o tu base.
       </p>
-      {plantilla ? null : <p className="text-[12.5px] text-texto-3">Generado por <span className="font-mono">{r.model}</span> · {r.cached ? 'guardado' : 'nuevo'}</p>}
+      <pre className="max-h-[28rem] overflow-auto rounded-lg border bg-background p-3 font-mono text-[13px] whitespace-pre-wrap">{r.prompt}</pre>
     </div>
   );
 }

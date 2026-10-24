@@ -232,7 +232,7 @@ describe('asignaciones con sufijo, camelCase y separadores raros (revisión de r
       expect(fuga(redactString(linea)), linea).toBe(false);                                                  // …y tapado
     }
   });
-  // Sin . ni - repetidos: esos disparan el coste cuadrático del patrón de correo, que es otro hallazgo (redact.ts:8, P2).
+  // Con . y - repetidos (el correo era cuadrático con ellos), la prueba por proporción del final.
   it('lineal con claves con sufijo adversas (768 KB)', () => {
     const t0 = performance.now();
     for (const base of ['token_', 'a_key_x_', 'secret_a_b_c', 'aKey', 'tokenA', 'Key_', 'auth_', '_key_', 'pass_', 'creds_x='])
@@ -319,7 +319,7 @@ describe('redact y CB_SECRET_GENERIC no divergen (propiedad)', () => {
     expect(detectados(l)).toEqual([largo.slice(0, 150), B]);                                // la regla corta a 150 y sigue
     expect(redactString(l)).toBe('SESSION_SECRET=[REDACTADO] [REDACTADO]');               // `_token:` es de la misma cola
   });
-  // Sin . ni - repetidos (el patrón de correo es cuadrático con ellos: hallazgo P2 de redact.ts:8, fuera de este grupo).
+  // Con . y - repetidos (el correo era cuadrático con ellos), la prueba por proporción del final.
   it('lineal con entradas adversas para la capa genérica (≥ 60 KB cada una)', () => {
     const T = 61440, t0 = performance.now();
     for (const s of ['SECRETKEY_'.repeat(T / 10), 'tokentoken'.repeat(T / 10), 'Key'.repeat(T / 3), 'KEY=KEY='.repeat(T / 8),
@@ -531,9 +531,9 @@ describe('lo que un patrón tapa entero no se parte (ronda 4)', () => {
           idem(out, l);
         }
   });
-  // Sin `postgres://u:` repetido sin @: ese patrón es cuadrático desde HEAD (tapaClaves usa una versión lineal). El de clave
-  // privada también lo es con cabeceras sin pie; la última entrada, con un tramo delante, pasa por la versión lineal de
-  // tapaClaves y por el patrón de HEAD, que es casi todo su coste (unos 200 ms con 108 KB).
+  // `postgres://u:` repetido sin @ y cabeceras de clave privada sin pie (cuadráticos como regex, también en redactString
+  // hasta tapaConexiones y tapaPrivadas), en la prueba por proporción del final. La última entrada pasa por la versión
+  // lineal de tapaClaves y por tapaPrivadas (antes, por el patrón de HEAD, que era casi todo su coste: 30 → 3 ms).
   it('lineal con entradas adversas para URLs, Bearer, cadenas de conexión, comillas y lo de HEAD (≥ 100 KB cada una)', () => {
     const t0 = performance.now();
     for (const s of ['http://'.repeat(15000), 'api_key: ' + 'https://a'.repeat(12000), 'https://a?'.repeat(11000),
@@ -649,5 +649,48 @@ describe('parámetros y cabeceras con secreto fuera de una URL (prueba de fuga, 
     const una = redactString(`Authorization: Bearer ${v} y ?token=${v}`);
     expect(redactString(una)).toBe(una);
     expect(una).not.toContain('LEAK7Q2X');
+  });
+});
+
+// Por proporción y no por tiempo absoluto (como export.test.ts): doblar el texto cuesta ≈ ×2 si es lineal y ×4 si es
+// cuadrático, y las dos medidas sufren la misma carga de la suite. Antes, con 24 KB: el correo 250 ms (`+5`, `1.`: un \b
+// en cada posición de un tramo largo de [\w.+-]; 25 veces la CPU de un Worker), `postgres://u:` sin @ 20 ms y las
+// cabeceras de clave privada sin pie 1 ms (85 ms con 192 KB). De 192 a 384 KB: con menos, el margen tapaba la privada.
+describe('lineal por proporción con texto hostil: correo, cadena de conexión y clave privada', () => {
+  /** Mejor de 3 corridas, en ms (como export.test.ts): un coste cuadrático tumba la prueba; el ruido, no. */
+  const ms = (f: () => unknown) => {
+    let mejor = Infinity;
+    for (let i = 0; i < 3; i++) { const a = performance.now(); f(); mejor = Math.min(mejor, performance.now() - a); }
+    return mejor;
+  };
+  const largo = (base: string, n: number) => base.repeat(Math.ceil(n / base.length));
+  const lineal = (familias: ReadonlyArray<string | ((n: number) => string)>) => {
+    for (const f of familias) {
+      const gen = typeof f === 'string' ? (n: number) => largo(f, n) : f;
+      const uno = ms(() => redact(gen(192_000))), dos = ms(() => redact(gen(384_000)));
+      expect(dos, gen(40)).toBeLessThan(uno * 3 + 20);
+      expect(uno, gen(40)).toBeLessThan(1500);
+    }
+  };
+  const PRIVADA = '-----BEGIN ' + 'PRIVATE KEY-----';
+  it('correos: tramos largos de [\\w.+-] con y sin @ detrás, y muchos correos seguidos', () => lineal(['+5', '1.', 'a.',
+    '-a', '_.', '1+', 'a-b.', '..a', '+5.1-a_', '1.@', 'a.b@', '.@', '@a-b.', 'x@a.bc ', 'a@b.cd.', (n) => largo('1.', n) + '@',
+    (n) => largo('+5', n) + '@a.b1']));
+  it('las mismas familias tras una clave, que pasan también por tapaClaves', () => lineal(['token.', 'a.key.', 'key-',
+    'api.key=1.', "'token': '+5", (n) => 'key=' + largo('1.', n), (n) => 'token: ' + largo('+5', n)]));
+  it('cadenas de conexión sin @ y cabeceras de clave privada sin pie', () => lineal(['postgres://u:', 'postgresql://a.b:',
+    'redis://u:', 'mongodb+srv://a:', PRIVADA, '-----BEGIN RSA ' + 'PRIVATE KEY-----END ',
+    (n) => 'key=x ' + largo('postgres://u:', n), (n) => `token=${R(20)} ` + largo(PRIVADA, n)]));
+  // Lo que hacían las regex en los casos raros, fijado (contra la versión anterior, corpus y fuzz dieron lo mismo en todo).
+  it('mismo resultado que las regex: correo que empieza donde acabó otro, dominio sin letras, pies solapados, sin @', () => {
+    expect(redactString('a@b.com.x@y.org')).toBe('a***@b.com.***@y.org');
+    expect(redactString('.a@b.com, +5@x.io y 1.2.3@4.5')).toBe('.a***@b.com, +5***@x.io y 1.2.3@4.5');
+    expect(redactString('x.x.x.x.x.@a.b1 y x.x.x.x.x.@ab.cd')).toBe('x.x.x.x.x.@a.b1 y x***@ab.cd');
+    const k = (s: string) => s + ' ' + 'PRIVATE KEY-----';
+    expect(redactString(k('-----BEGIN A') + k('END X') + k('END Y') + ' fin')).toBe('[REDACTADO:clave_privada] fin');
+    expect(redactString(k('-----BEGIN A') + 'sin pie ' + k('-----BEGIN B') + 'x-----' + k('END')))
+      .toBe('[REDACTADO:clave_privada]');
+    expect(redactString('postgres://u:p postgres://u:q@h redis://a:b:c@d mysql://x:y'))
+      .toBe('postgres://u:p postgres://u:[REDACTADO]@h redis://a:[REDACTADO]@d mysql://x:y');
   });
 });

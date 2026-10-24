@@ -4,7 +4,8 @@ import { CARACTER_VALOR, MARCADORES, REGLA_GENERICA, finColaGenerica, finComilla
 
 const CLAVE_SECRETA = /(^|[_-])(token|secret|password|passwd|pat|apikey|api[_-]key|authorization|cookie|sealed|wdek|ivk|private[_-]key)($|[_-])/i;
 const CLAVE_TELEFONO = /^(phone|phone_e164|to|from|to_number|wa_id|recipient)$/i;
-// Cuadráticos con muchas cabeceras sin pie o muchos `postgres://u:` sin @ (como en HEAD): tapaClaves usa su versión lineal.
+// Cuadráticos con muchas cabeceras sin pie o muchos `postgres://u:` sin @ (como en HEAD): tapaClaves usa su versión lineal
+// y redactString, tapaPrivadas y tapaConexiones (las mismas coincidencias que la regex, comprobado).
 const PRIVADA = /-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/g;
 const CONEXION = /\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/([^:\s/@]+):[^@\s]+@/g;
 /** [patrón con bandera g, reemplazo]. Lo que el reemplazo conserva va al principio, en grupos ($1, $2) o en el grupo 1 si
@@ -217,6 +218,58 @@ function tapaClaves(s: string): string {
   return out + s.slice(desde);
 }
 const tel = (t: string) => { const d = t.replace(/\D/g, ''); return '+' + d.slice(0, 2) + '•••' + d.slice(-4); };   // +58•••4567 (S15 15.11)
+// Correos a a***@dominio; respeta paquete@1.2.3 (el dominio acaba en letras). Hace EXACTAMENTE lo que hacía
+// `.replace(/\b([\w.+-])[\w.+-]*@((?:[\w-]+\.)+[A-Za-z]{2,})\b/g, '$1***@$2')`, pero en lineal: esa regex era cuadrática
+// con un tramo largo de [\w.+-] y un \b en cada posición (`+5`, `1.` repetidos: 250 ms con 24 KB, 25 veces los 10 ms de
+// CPU de un Worker), porque cada inicio recorría el tramo hasta su fin para buscar la @ (y repetía el dominio). Como la @
+// no es de [\w.+-], todos los inicios de un tramo llegan a la MISMA @ (la que lo cierra) y casan o fallan con el MISMO
+// dominio: por cada @, el primer inicio posible (desde donde acabó el correo anterior, como el lastIndex de la regex) con
+// \b delante, y el dominio una sola vez. Cada carácter se mira una vez por @ que lo rodea: lineal.
+const DOMINIO_CORREO = /(?:[\w-]+\.)+[A-Za-z]{2,}\b/y;
+const esPalabra = (c: number) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;   // \w
+const esLocal = (c: number) => esPalabra(c) || c === 46 || c === 43 || c === 45;                                // [\w.+-]
+function tapaCorreos(t: string): string {
+  let out = '', desde = 0;
+  for (let at = t.indexOf('@'); at !== -1; at = t.indexOf('@', at + 1)) {
+    let p = at;                                         // inicio del tramo de [\w.+-] que cierra esta @, no antes de desde
+    while (p > desde && esLocal(t.charCodeAt(p - 1))) p--;
+    while (p < at && esPalabra(t.charCodeAt(p - 1)) === esPalabra(t.charCodeAt(p))) p++;   // el primero con \b delante
+    if (p === at) continue;
+    DOMINIO_CORREO.lastIndex = at + 1;
+    const d = DOMINIO_CORREO.exec(t);
+    if (!d) continue;
+    out += t.slice(desde, p) + t[p] + '***@' + d[0];
+    desde = DOMINIO_CORREO.lastIndex;
+    at = desde - 1;                                     // la próxima @, desde el fin de este correo
+  }
+  return out + t.slice(desde);
+}
+// CONEXION con su reemplazo ($1://$2:[REDACTADO]@), en lineal: la regex es cuadrática con muchos `postgres://u:` sin @
+// (20 ms con 24 KB). Con la @ opcional (CONEXION_LINEAL), lo que casa sin @ se deja igual, y ninguna coincidencia de
+// CONEXION puede empezar dentro: no hay @ ni blancos hasta el blanco o el final en que paró, y ella no cruza ninguno.
+const tapaConexiones = (t: string) => t.replace(CONEXION_LINEAL, (m: string, clave: string, arroba?: string) =>
+  arroba === undefined ? m : m.slice(0, m.length - clave.length - 1) + '[REDACTADO]@');
+// PRIVADA con su reemplazo, en lineal: la regex es cuadrática con muchas cabeceras sin pie (20 ms con 96 KB), porque su
+// `[\s\S]*?` recorre hasta el final desde cada una. Cada cabecera, desde donde acabó el bloque anterior, con el primer pie
+// que EMPIEZA tras ella, aunque se solape con otro pie (`…KEY-----END…`: por eso los pies con un lookahead y no con
+// matchAll de PRIVADA_FIN, que se saltaría el segundo). Si una cabecera no tiene pie, las de después (acaban más tarde)
+// tampoco: se acaba.
+const CABECERA = /-----BEGIN[^-]*PRIVATE KEY-----/y, PIE = /(?=(-----END[^-]*PRIVATE KEY-----))/g;
+function tapaPrivadas(t: string): string {
+  let out = '', desde = 0, k = 0, pies: RegExpExecArray[] | undefined;
+  for (let i = t.indexOf('-----BEGIN'); i !== -1; i = t.indexOf('-----BEGIN', i + 1)) {
+    CABECERA.lastIndex = i;
+    if (!CABECERA.test(t)) continue;
+    pies ??= [...t.matchAll(PIE)];
+    while (k < pies.length && pies[k]!.index < CABECERA.lastIndex) k++;
+    const p = pies[k];
+    if (!p) break;
+    out += t.slice(desde, i) + '[REDACTADO:clave_privada]';
+    desde = p.index + p[1]!.length;
+    i = desde - 1;                                      // la próxima cabecera, desde el fin de este bloque
+  }
+  return out + t.slice(desde);
+}
 // Atajo de CPU: las capas de asignación necesitan una de sus palabras clave y un separador (: = %3D &#61;); la mayoría de
 // los strings de una evidencia no traen las dos cosas y se ahorran seis pasadas.
 const PISTA_CLAVE = /access|api|auth|cred|key|pass|secret|token/i, PISTA_SEP = /[:=%&]/;
@@ -225,11 +278,10 @@ export function redactString(entrada: string): string {
   // Las capas por clave, lo primero: la genérica tiene que ver el texto tal cual lo ve scan.ts; después, los patrones.
   const s = conClave ? tapaClaves(entrada) : entrada;
   let fin = s;
-  for (const [re, rep] of PATRONES_SECRETO) fin = fin.replace(re, rep);
-  fin = fin
-    .replace(URL_QUERY, (u: string, url: string, q?: string) => (q === undefined ? u : url))   // query strings fuera
-    .replace(/\b([\w.+-])[\w.+-]*@((?:[\w-]+\.)+[A-Za-z]{2,})\b/g, '$1***@$2')                  // a***@dominio; respeta paquete@1.2.3
-    .replace(/\+\d{8,15}\b/g, tel);                                                             // +58•••4567
+  for (const [re, rep] of PATRONES_SECRETO)
+    fin = re === PRIVADA ? tapaPrivadas(fin) : re === CONEXION ? tapaConexiones(fin) : fin.replace(re, rep);
+  fin = fin.replace(URL_QUERY, (u: string, url: string, q?: string) => (q === undefined ? u : url));   // query strings fuera
+  fin = tapaCorreos(fin).replace(/\+\d{8,15}\b/g, tel);                                      // a***@dominio y +58•••4567
   // Otra vez si algo cambió: a***@ y +58••• alargan un valor corto, un patrón puede llevarse el `example` que descartaba
   // un valor, y un tramo ligado puede comerse la comilla en la que paraba otro valor; sin esta pasada, f(f(x)) ≠ f(x).
   return conClave && fin !== entrada ? tapaClaves(fin) : fin;

@@ -83,8 +83,15 @@ describe('redactarParaExport', () => {
   });
 
   it('lineal con texto hostil (sin cuadráticos)', () => {
-    const hostil = ['://'.repeat(4000), '/a'.repeat(6000), ':1'.repeat(6000) + ':', '+5'.repeat(6000), '1.'.repeat(6000)];
-    for (const h of hostil) expect(ms(() => redactarParaExport({ t: h }, M))).toBeLessThan(150);
+    // Por proporción y no por tiempo absoluto (con la suite entera en paralelo, 150 ms fijos fallaban sin culpa): doblar
+    // el texto hostil cuesta ≈ el doble si es lineal y ×4 si es cuadrático. Las dos medidas sufren la misma carga.
+    const hostil = [(n: number) => '://'.repeat(n * 2 / 3), (n: number) => '/a'.repeat(n), (n: number) => ':1'.repeat(n) + ':',
+      (n: number) => '+5'.repeat(n), (n: number) => '1.'.repeat(n)];
+    for (const h of hostil) {
+      const uno = ms(() => redactarParaExport({ t: h(6000) }, M)), dos = ms(() => redactarParaExport({ t: h(12_000) }, M));
+      expect(dos).toBeLessThan(uno * 3 + 20);
+      expect(uno).toBeLessThan(1500);
+    }
   });
 });
 

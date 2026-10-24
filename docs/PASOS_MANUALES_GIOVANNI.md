@@ -292,6 +292,23 @@ Supabase permite hoy un token limitado a un proyecto y a solo lectura: el **scop
 
 ---
 
+### Paso 13 · Desplegar la app víctima en `demo.officialvanguard.com` · 10 min (sáb, antes de las 16:00)
+El código ya está en `main` (`apps/victima`). Se despliega como un **segundo Worker** con su propio Workers Builds, desde el mismo espejo.
+1. Cloudflare → **Workers & Pages** → **Create** → **Import a repository** → GitHub → **`Giova144-git/VanGUARD`**.
+2. **Project name:** `vanguard-victima` (exacto: tiene que coincidir con `apps/victima/wrangler.jsonc`).
+3. **Build command:** vacío. **Deploy command:** `npx wrangler@4.152.0 deploy -c apps/victima/wrangler.jsonc`. **Root directory:** `/` (la raíz del repo). Rama: `main`.
+4. Si el panel ofrece **Build watch paths**, pon `apps/victima/*`, así no se redespliega con cada push del producto.
+5. **Save and Deploy.** El dominio `demo.officialvanguard.com` lo crea el propio deploy (custom domain); no toques DNS.
+6. Comprueba: `https://demo.officialvanguard.com/` carga la tienda de prueba. Escríbeme «listo, víctima».
+7. **No** cargues secretos ni variables en su panel: `VG_INGEST_SECRET` lo subo con `node scripts/subir-secretos-worker.mjs --worker=vanguard-victima VG_INGEST_SECRET` cuando el BACK publique la ingesta y creemos la conexión.
+
+### Paso 14 · Regla de Cloudflare para la víctima (T02-04) · 2 min
+Sin ella, Cloudflare desafía al atacante del simulacro (user agent no estándar) y su tráfico nunca llega a la víctima, así que no hay incidente que mostrar. Solo afecta a `demo.officialvanguard.com`; `officialvanguard.com` sigue igual.
+1. Cloudflare → zona `officialvanguard.com` → **Rules** → **Configuration Rules** → **Create rule**.
+2. Nombre: `T02-04 victima sin BIC`. **If incoming requests match:** Field **Hostname** · Operator **equals** · Value `demo.officialvanguard.com`.
+3. **Then the settings are:** **Browser Integrity Check** → **Off**. **Deploy**.
+(Esta regla es de la zona, no del Worker: no publica ninguna versión ni revierte código.)
+
 ## Después de que WhatsApp funcione de punta a punta (P1)
 
 ### Paso 12 · Llamada de voz (ElevenLabs + Twilio de prueba) · 30 min

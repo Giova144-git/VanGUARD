@@ -14,15 +14,21 @@ import tls from 'node:tls';
 try { tls.setDefaultCACertificates([...tls.getCACertificates('default'), ...tls.getCACertificates('system')]); } catch { /* Node viejo: usar --use-system-ca */ }
 
 const CUENTA = 'eda2c45921f84ec5add25f379bbdbfb5';
-const WORKER = 'vanguard';
+// --worker=vanguard-victima para los secretos de la víctima (VG_INGEST_SECRET); por defecto, el Worker del producto.
+const WORKERS = new Set(['vanguard', 'vanguard-victima']);
+const WORKER = (process.argv.find((a) => a.startsWith('--worker=')) ?? '--worker=vanguard').slice('--worker='.length);
+if (!WORKERS.has(WORKER)) {
+  console.error(`Worker desconocido: ${WORKER}. Usa vanguard o vanguard-victima.`);
+  process.exit(1);
+}
 // En el Worker van con otro valor que en local: nunca se copian desde el .env.
 const DISTINTAS = new Set(['SUPABASE_SECRET_KEY']);
 // Solo de desarrollo: no van al Worker.
 const SOLO_LOCAL = new Set(['TEST_USER_A_PASSWORD', 'TEST_USER_B_PASSWORD', 'SUPABASE_HUMO_PAT', 'VITE_API_PROXY', 'VG_ENV', 'APP_ORIGIN', 'VG_VERSION']);
 
-const nombres = process.argv.slice(2);
+const nombres = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!nombres.length) {
-  console.error('Uso: node scripts/subir-secretos-worker.mjs NOMBRE [NOMBRE…]');
+  console.error('Uso: node scripts/subir-secretos-worker.mjs [--worker=vanguard-victima] NOMBRE [NOMBRE…]');
   process.exit(1);
 }
 

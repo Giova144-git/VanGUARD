@@ -16,7 +16,7 @@ Estado al sábado 24-oct, ~06:15 Caracas. Lo hace una persona porque pide entrar
 
 ## Ahora (el backend ya está en vivo desde `fc46a10`)
 
-### Paso 1 · Configurar Auth de Supabase · 5 min
+### Paso 1 · Configurar Auth de Supabase · 5 min · ✅ hecho (sáb ~07:40; el BACK probó login anónimo y canales privados)
 Supabase → proyecto **hackaton 22** (`accshmgmfrqrxubpuxcl`):
 1. Authentication → URL Configuration:
    - **Site URL**: `https://officialvanguard.com`
@@ -32,14 +32,14 @@ Supabase → proyecto **hackaton 22** (`accshmgmfrqrxubpuxcl`):
 
 Escríbeme «listo, paso 1» y el BACK prueba el login anónimo.
 
-### Paso 2 · Crear las dos claves secretas de Supabase · 3 min
+### Paso 2 · Crear las dos claves secretas de Supabase · 3 min · ✅ hecho
 Supabase → Project Settings → **API Keys** → pestaña **Secret keys** (la nueva, **no** la de *Legacy*):
 1. Crea una llamada **`vanguard-worker`**. Va al panel del Worker.
 2. Crea otra llamada **`vanguard-local`**. Va a tu PC.
 
 Las dos empiezan por `sb_secret_`. **Nunca uses la `service_role` de la pestaña Legacy.**
 
-### Paso 3 · Llenar el `.env` de la raíz · 5 min
+### Paso 3 · Llenar el `.env` de la raíz · 5 min · ✅ hecho (verificado por forma, sin ver valores)
 Por ahora **solo este archivo**. El Worker y las carpetas de cada app van después, en el paso 3b.
 
 **Dónde está:** el archivo se llama `.env` y está en la carpeta principal del proyecto, la misma de `package.json`. Ya tiene las 33 líneas, cada una con la forma `NOMBRE=valor`.
@@ -82,7 +82,7 @@ Solo escribe en líneas vacías, nunca pisa un valor que ya exista y nunca muest
 
 Escríbeme «listo, paso 3». Verifico desde aquí que las líneas estén llenas y con la forma correcta, sin ver los valores.
 
-### Paso 3b · Pasar los valores al Worker y a cada app · 10 min (después; lo hacemos juntos)
+### Paso 3b · Pasar los valores al Worker y a cada app · 10 min · ✅ hecho (6 secretos en el Worker; `/api/me` con sesión → 200)
 1. **A las carpetas de cada app**, con un comando: `node scripts/repartir-env.mjs`. Copia a `apps/api/.dev.vars` y a `apps/web/.env.development.local` solo las líneas que le tocan a cada una.
 2. **Al Worker** (Cloudflare → Workers & Pages → `vanguard` → Settings → Variables and Secrets → Add → tipo **Secret**). Mismo nombre que en el `.env`, con dos excepciones marcadas:
 
@@ -96,7 +96,9 @@ Escríbeme «listo, paso 3». Verifico desde aquí que las líneas estén llenas
 
 Cuando esté, verifico que `/api/me` responda 401 sin token y el BACK da por aceptado el hito 1.
 
-### Paso 4 · Token de la prueba de humo (temporal) · 2 min
+### Paso 4 · Token de la prueba de humo (temporal) · 2 min · ✅ prueba hecha (sáb 11:01Z) · falta borrar el secreto
+**Resultado:** cada paso de cola con 40 consultas a OSV gastó 21–25 ms de CPU (wall ~1,2 s), todos «ok». Es más que los 10 ms nominales del plan Free: el BACK baja la carga por paso. **Ahora: borra el Secret `VG_HUMO_TOKEN` del panel del Worker.**
+
 Sirve para medir cuánta CPU gasta cada paso del Worker: es la evidencia de que «corre en el plan gratuito».
 1. El valor ya lo creó `node scripts/generar-secretos.mjs` en el paso 3 (línea `VG_HUMO_TOKEN` del `.env`).
 2. En el paso 3b se copia al Worker como Secret con el mismo nombre.

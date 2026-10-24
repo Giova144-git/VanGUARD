@@ -6,6 +6,17 @@ o merge a main o push a main se haga un code review; en el módulo de Codebase, 
 una vulnerabilidad, llamada o mensaje; en configuración el usuario elige el canal y la severidad mínima para cada uno».
 Las llamadas llegan después: la preferencia se guarda y la UI dice «Próximamente».
 
+> **Actualización (sáb 24-oct, ~16:30), decisiones de Giovanni de §13:**
+> - **D1: «Reglas y PR hoy».** Los `pull_request` abiertos contra la rama vigilada (opened, synchronize, reopened,
+>   ready_for_review) pasan a **P0** (B7, después de B4+B5). Sin IA. Donde este documento dice «PR: P1», manda esto.
+> - **D3: el repo de la demo es `vanguard-demo-victima` de Gabriel.** Gabriel ya es admin de «Tienda Demo» para conectar
+>   su PAT (Contents: Read basta para el compare: verificación 1 de §9 hecha por el BACK) y añade a Giovanni al repo.
+> - **D2 (tramo del guion):** pendiente; se decide tras el corte de las 19:30.
+> - Cambios del BACK al aplicar la 0013 (e0ea65e), que ya lleva la 0013c dentro: `code_reviews.push_commits` (≤ 50 SHA del
+>   payload firmado) evita repetir en el merge lo avisado en el PR sin pedir nada a GitHub (un squash o un rebase vuelven a
+>   avisar); `reported_keys` = `dedupe_key:huella`; `alert_reason` nuevos con `state none`: `fork` y `ya_avisado_pr`.
+> - Plantilla de Meta `alerta_seguridad_v1` creada en la WABA del número real (UTILITY, PENDING); su envío sigue en P1.
+
 Qué cambió con la revisión: §11. Correcciones descartadas: §12. Decisiones abiertas para Giovanni: §13.
 
 Código leído antes de decidir: `apps/api/src/jobs.ts`, `scans/repo.ts`, `scans/repo-paso.ts`, `scans/osv.ts`,
@@ -30,7 +41,7 @@ X-GitHub-Delivery header will be the same as in the original delivery»).
 | Tema | Decisión | Por qué (dato) |
 |---|---|---|
 | Disparador P0 | Webhook de repositorio que el usuario pega a mano en GitHub | Llega en 1–3 s; el PAT es de solo lectura y no puede crear webhooks; el sondeo por cron tarda hasta 60 s y gasta cuota |
-| Eventos | `push` a la rama vigilada (P0). Un merge de PR (merge, squash o rebase) llega como `push` y entra en P0. `pull_request` abierto contra la rama: P1, con filtro de forks | El P0 demostrable es push → WhatsApp; el PR abierto no cabe en las ~4 h de BACK (decisión D1, §13) |
+| Eventos | `push` a la rama vigilada (P0). Un merge de PR (merge, squash o rebase) llega como `push` y entra en P0. `pull_request` abierto contra la rama: **P0 tras D1** (B7, después de B4+B5), con filtro de forks | El P0 mínimo demostrable sigue siendo push → WhatsApp; Giovanni pidió los PR hoy (D1, §13) |
 | Rama vigilada | `connections.meta.default_branch` al activar y al reactivar | `probarGithub` ya la guarda |
 | Qué se revisa | Solo las líneas AÑADIDAS del diff `base...head` (una subpetición a `api.github.com`), escaneadas en compacto y devueltas a su línea de head | El costo depende del texto añadido (≤ 512 KB), no del número de línea |
 | Reglas | P0: `CB_SECRET_*` y `CB_ENV_COMMITTED`. P1: `CB_GITIGNORE_NO_ENV` y `CB_DEP_VULN` (OSV en un paso propio). No hay `CR_*` | `findings.rule_id` y `RuleId` solo admiten `^(SB\|CF\|CB\|PF)_`. El detalle de OSV cuesta ~7 ms de los 10 de CPU y la auditoría ya lo separa en `repo:osv` |
@@ -628,7 +639,7 @@ E38 y E39 están libres pero se dejan. El bloque nuevo va tras la wiki (E40–E4
        `{ok:true, review_id}`.
      - Si falla encolar: la fila recién insertada se borra (una reabierta pasa a `failed` con `error_code 'encolar'`) y
        500; «Redeliver» vuelve a entrar. Cualquier otro error de base → 500 sin filas a medias.
-   - `pull_request` → P1; hasta entonces 202 `ignorado:'pr_p1'`. Otro → 202 `ignorado:'evento'`.
+   - `pull_request` → P0 tras D1 (B7): mientras B7 no esté desplegado, 202 `ignorado:'pr_p1'`. Otro → 202 `ignorado:'evento'`.
 - Sin `webhook_events`: GitHub conserva el `X-GitHub-Delivery` al reenviar, así que un dedupe por delivery grabado antes
   del trabajo bloquearía justo el reintento de una revisión fallida. El unique de `code_reviews` ya impide revisar dos
   veces el mismo commit, y sin `payload_redacted` una rama con forma de secreto no puede dar un 23514.
@@ -1083,7 +1094,7 @@ ejecutables (`pnpm --filter @vanguard/core test`, `pnpm --filter @vanguard/api t
 | B3 | E45, E46 (sin rotar), E48, E49 + sellado del secreto y clave en caché por `iv` | `apps/api/src/rutas/revision.ts` (montar en `rutas/index.ts`), `lib/credentials.ts` (`sellarSecretoWebhook`, `claveWebhook`) | P0 | 40 min |
 | B4+B5 | En el MISMO deploy (§2.1). E47 (§4.1). Cola: `JobMsg` suma `{ v:1; kind:'review'; org_id; review_id; paso: PasoRevision }` con `PasoRevision = 'diff' \| 'aviso'` (P1: `'osv'`); `runJob` y `cierreDlq` lo enrutan (DLQ → `failed`/`dlq`, o `alert_state 'not_sent'`/`dlq` si era `aviso`). Paso `diff` (§2.2–2.5): claim CAS, retoma con `attempts > 1`, reencola `aviso` si encuentra `done` + `pending`, `leerAcotado` con `ignorarLargo`, `ocultarRutas`, `aFila` exportada, `last_error 'token'`. Paso `aviso` (§5) con el cupo propio. `despachador.ts`: `.is('code_review_id', null)` en `used1h` | `apps/api/src/rutas/webhooks-github.ts`, `app.ts` (`app.route('/webhooks', webhooksGithub)`), `jobs.ts`, `revision/pasos.ts`, `notify/revision.ts`, `notify/despachador.ts`, `scans/comun.ts`, `scans/repo.ts` | P0 | 1 h 40 |
 | B6 | `.gitignore` en el diff y dependencias con OSV en el paso `osv` (§2.4) | `revision/pasos.ts`, `jobs.ts`, `packages/core/src/revision/diff.ts` (`depsDelDiff`) | P1 | 45 min |
-| B7 | `pull_request` (E47 + `p_write:false` + filtro de forks de §1.3 + `0013c`: no repetir en el merge lo ya avisado en un PR solo si ESE PR es el que se fusiona —su `head_sha` es ancestro del `after`— y la huella coincide) | `rutas/webhooks-github.ts`, `revision/pasos.ts`, RPC (`0013c`) | P1 | 45 min |
+| B7 | `pull_request` (E47 + `p_write:false` + filtro de forks de §1.3 + `0013c`: no repetir en el merge lo ya avisado en un PR solo si ESE PR es el que se fusiona —su `head_sha` es ancestro del `after`— y la huella coincide) | `rutas/webhooks-github.ts`, `revision/pasos.ts`, RPC (`0013c`) | P0 (D1) | 45 min |
 | B8 | E50, `base` = último `head` revisado, vigilante, `0013b` (retención), 401 del PAT → conexión `revoked`, `rotate_secret`, `last_error 'firma'` con tope, topes a la mitad en el reintento, enfriamiento entre avisos, `vg_upsert_findings` que adopta `connection_id` | varios | P1 | 1 h 30 |
 
 Pruebas mínimas por paso:
@@ -1190,7 +1201,7 @@ Resueltas por la revisión: el nombre del check de `webhook_events` (0013 ya no 
 - Llamada de voz (ElevenLabs/Twilio) y plantillas de WhatsApp para fuera de la ventana.
 - Sondeo por cron como respaldo del webhook (P2).
 - Resumen de la revisión con IA (P2, solo en la app).
-- Pull requests abiertos, `.gitignore` y dependencias con OSV en la revisión (P1: B6, B7).
+- `.gitignore` y dependencias con OSV en la revisión (P1: B6). Los pull requests abiertos (B7) pasaron a P0 con D1.
 - `pnpm-lock.yaml`, `yarn.lock`, lockfile v1 y rangos de `package.json` en el diff (P1).
 - Usar las mismas preferencias de umbral para los incidentes en vivo (P2: cambiaría `planAvisos` y la demo del ataque).
 
@@ -1276,7 +1287,7 @@ VIA = lente de viabilidad, SEG = seguridad, PRO = producto. Todas comprobadas co
 
 ## 13. Decisiones abiertas para Giovanni
 
-**D1. ¿«Code review» = reglas sin IA, con los pull requests abiertos en P1?** La revisión de P0 busca claves y tokens y
+**D1 (RESUELTA: «Reglas y PR hoy»; los PR van en P0, B7). ¿«Code review» = reglas sin IA, con los pull requests abiertos en P1?** La revisión de P0 busca claves y tokens y
 `.env` subidos en cada push y en cada merge a `main` (los merges llegan como push). No hay IA (costo 0; el prompt de
 corrección sigue a mano). La revisión de un PR abierto, antes del merge, queda en P1 y la UI lo dice como «próximamente».
 Meterla hoy cuesta ~45 min de BACK con el filtro de forks y pone en riesgo el corte de las 19:30. Por defecto, si no
@@ -1286,6 +1297,6 @@ contestas antes de O2: como está escrito.
 Propuesta: sustituir «Revisado» (1:40–2:10, el que el guion ya recorta primero) y nombrar Ajustes con una frase. Solo
 aplica si a las 19:30 un push real llega por WhatsApp en producción; si no, la revisión va como hoja de ruta.
 
-**D3. ¿El repo de la demo sigue siendo el de Gabriel?** Si sí, Gabriel conecta su PAT en «Tienda Demo» y te da Admin del
+**D3 (RESUELTA: el de Gabriel; ya es admin de «Tienda Demo»). ¿El repo de la demo sigue siendo el de Gabriel?** Si sí, Gabriel conecta su PAT en «Tienda Demo» y te da Admin del
 repo antes de las 18:00 (o crea él el webhook). Si no, creas tú un repo privado nuevo con `sembrar-repo.mjs` y lo
 conectas en «Tienda Demo». Eso cambia los hallazgos de la auditoría que ve el jurado.

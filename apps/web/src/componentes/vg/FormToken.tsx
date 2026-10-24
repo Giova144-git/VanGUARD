@@ -4,6 +4,7 @@ import { Label } from '@/componentes/ui/label';
 import type { Rechazo } from '@/lib/pre-guardas';
 
 // Campo de un token (S14 §14.10, L10): password, sin autocompletar ni corrector, nunca prellenado. El rechazo va en rojo debajo.
+// Los data-* piden a 1Password, LastPass, Bitwarden y Dashlane que no ofrezcan guardar el PAT como contraseña.
 export function CampoToken({ id, etiqueta, valor, onCambio, error, ayuda, placeholder }: {
   id: string; etiqueta: string; valor: string; onCambio: (v: string) => void;
   error?: Rechazo | string | null; ayuda?: ReactNode; placeholder?: string;
@@ -12,6 +13,7 @@ export function CampoToken({ id, etiqueta, valor, onCambio, error, ayuda, placeh
     <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{etiqueta}</Label>
       <Input id={id} type="password" autoComplete="off" spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder={placeholder}
+        data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
         value={valor} onChange={(e) => onCambio(e.target.value)} aria-invalid={!!error || undefined} aria-describedby={`${id}-msg`} />
       <ErrorCampo id={`${id}-msg`} error={error} ayuda={ayuda} />
     </div>

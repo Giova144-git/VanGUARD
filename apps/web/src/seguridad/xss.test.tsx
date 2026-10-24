@@ -2,12 +2,15 @@
 // agents, salida del modelo) se pinta como TEXTO. Cada componente que lo pinta se renderiza con renderToStaticMarkup y
 // datos envenenados (copias de los fixtures de @vanguard/contracts con los campos de texto sustituidos; los fixtures
 // compartidos no se tocan) y se comprueba el HTML resultante:
-//   1. ningún elemento peligroso (script, img, iframe, object…), ningún atributo on*=, ningún href/src con un esquema
-//      que no sea http(s) ni a un host fuera de la lista (javascript:, data:, //evil.test…), ningún style con url();
+//   1. ningún elemento peligroso (script, img, iframe, object…), ningún atributo on*= ni srcdoc, ningún href/src con un
+//      esquema que no sea http(s) ni a un host fuera de la lista (javascript:, data:, //evil.test…), tampoco el
+//      javascript: que React 19 neutraliza, ningún style con url();
 //   2. la misma estructura (etiquetas y nombres de atributo) que con un texto inocente: la carga no crea elementos;
-//   3. la carga sale ESCAPADA como texto (&lt;img …) en los campos que el componente enseña.
-// Cada campo envenenado lleva su nombre al final («carga⟦title⟧») para saber qué campo se ve y dónde.
-import { describe, expect, it, vi } from 'vitest';
+//   3. la carga sale ESCAPADA como texto (&lt;img …) en los campos que el componente enseña;
+//   4. un id envenenado solo llega a un href codificado con encodeURIComponent.
+// Cada campo envenenado lleva su nombre al final («carga⟦title⟧») o, con `ruta`, su camino completo
+// («carga⟦top_ips[1].ua_top⟧»), para saber qué campo se ve y dónde.
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -15,9 +18,9 @@ import { QueryClient, QueryClientProvider, type QueryKey } from '@tanstack/react
 import { Database } from 'lucide-react';
 import { z } from 'zod';
 import {
-  fixtures as fx, CheckDato, ConnectionPublic, Contact, EstadoModulo, Finding, FixPromptResponse, GrupoDato, Incident,
-  IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiEstimate, WikiRun, type AccionDato, type CifraDato,
-  type PermCheck, type TimelineItem,
+  fixtures as fx, CheckDato, ConnectionCreated, ConnectionPublic, Contact, EstadoModulo, Finding, FixPromptResponse, GrupoDato,
+  Incident, IncidentDetail, Me, Overview, PerfRunExt, ProposeResponse, ScanRun, Traffic, Ts, WikiDoc, WikiEstimate, WikiRun,
+  type AccionDato, type CifraDato, type PermCheck, type Severity,
 } from '@vanguard/contracts';
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
 import AppShell from '@/app/AppShell';
@@ -31,16 +34,21 @@ import { GraficaTrafico, TablaTopIps } from '@/componentes/vg/GraficaTrafico';
 import { LineaTiempo } from '@/componentes/vg/LineaTiempo';
 import { ListaChecks } from '@/componentes/vg/ListaChecks';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
+import { sinBidi } from '@/lib/bidi';
 import { ApiError } from '@/lib/errores';
 import { Markdown, bloques, enLinea } from '@/lib/markdown';
-import { parsearMermaid } from '@/lib/mermaid';
+import { parsearMermaid, partir } from '@/lib/mermaid';
 import { rutaDe } from '@/lib/destino';
+import type { Rol } from '@/lib/severidad';
 import PaginaAjustes, { Verificar } from '@/modulos/ajustes/PaginaAjustes';
 import PaginaAuditoria from '@/modulos/auditoria/PaginaAuditoria';
 import PaginaCloudflare from '@/modulos/cloudflare/PaginaCloudflare';
+import { Resultado } from '@/modulos/conexiones/Asistente';
 import { TarjetaConexion, TarjetaIngesta } from '@/modulos/conexiones/TarjetaConexion';
 import PaginaExportar from '@/modulos/exportar/PaginaExportar';
+import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { DetalleHallazgo } from '@/modulos/hallazgos/DetalleHallazgo';
+import { Propuesta } from '@/modulos/incidentes/BloquearIp';
 import { hitosDe, restoDe } from '@/modulos/incidentes/hitos';
 import PaginaIncidente from '@/modulos/incidentes/PaginaIncidente';
 import PaginaIncidentes from '@/modulos/incidentes/PaginaIncidentes';
@@ -50,16 +58,28 @@ import PaginaWiki, { Estimacion } from '@/modulos/wiki/PaginaWiki';
 
 // supabase-js pide VITE_SUPABASE_URL al importarse; aquí no hay red ni sesión (solo la usan los manejadores de clic).
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
-// Plegado no se renderiza el cuerpo (SectorPlegable y Collapsible de Radix): para revisar lo que hay dentro, abiertos.
+// Plegado no se renderiza el cuerpo (SectorPlegable y Collapsible de Radix), y en SSR los portales de DropdownMenu y Dialog
+// (el Sheet es un Dialog) salen vacíos: para revisar lo que hay dentro (menú de orgs, PanelDetalle, PaletaComandos),
+// todo abierto y en línea.
 vi.mock('@/componentes/vg/SectorPlegable', async () => {
   const { createElement } = await import('react');
   return { SectorPlegable: ({ titulo, children }: { titulo: string; children: ReactNode }) => createElement('section', null, createElement('h3', null, titulo), children) };
 });
 vi.mock('radix-ui', async (importOriginal) => {
   const real = await importOriginal<typeof import('radix-ui')>();
-  const { createElement } = await import('react');
-  const pasa = (tag: string) => ({ children, className }: { children?: ReactNode; className?: string }) => createElement(tag, { className }, children);
-  return { ...real, Collapsible: { ...real.Collapsible, Root: pasa('div'), Trigger: pasa('button'), Content: pasa('div') } };
+  const { createElement, Fragment } = await import('react');
+  type P = { children?: ReactNode; className?: string; asChild?: boolean };
+  const pasa = (tag: string) => ({ children, className }: P) => createElement(tag, { className }, children);
+  const suelto = ({ children }: P) => createElement(Fragment, null, children);
+  const disparador = ({ children, className, asChild }: P) => (asChild ? children : createElement('button', { className }, children));
+  return {
+    ...real,
+    Collapsible: { ...real.Collapsible, Root: pasa('div'), Trigger: pasa('button'), Content: pasa('div') },
+    DropdownMenu: { ...real.DropdownMenu, Root: suelto, Trigger: disparador, Portal: suelto, Content: pasa('div'), Item: pasa('div'),
+      Label: pasa('div'), Separator: pasa('div') },
+    Dialog: { ...real.Dialog, Root: suelto, Trigger: disparador, Portal: suelto, Overlay: () => null, Content: pasa('div'),
+      Title: pasa('h2'), Description: pasa('p'), Close: pasa('button') },
+  };
 });
 
 // ── Cargas ────────────────────────────────────────────────────────────────────
@@ -68,6 +88,11 @@ const CARGAS: [string, string][] = [
   ['img onerror', IMG],
   ['script', '<script>alert(1)</script>'],
   ['javascript:', 'javascript:alert(1)'],
+  // Sin blancos delante (bloques() los recorta y el caso de Markdown daría un falso positivo): U+0001, tab y mayúsculas.
+  ['javascript: ofuscado', '\u0001JaVa\tScRiPt:alert(1)'],
+  ['data:', 'data:text/html,<script>alert(1)</script>'],
+  ['https a otro host', 'https://evil.test/x'],
+  ['protocolo relativo', '//evil.test/x'],
   ['enlace Markdown', '[x](javascript:alert(1))'],
   ['imagen Markdown', '![i](https://evil.test/p.png)'],
   ['svg onload', '"><svg onload=alert(1)>'],
@@ -77,60 +102,138 @@ const CARGAS: [string, string][] = [
 // Con «:» para que también caiga fuera de la lista blanca de Mermaid: la comparación es con el mismo camino.
 const INOCENTE = 'Texto normal: 123';
 const marca = (c: string, campo: string) => `${c}⟦${campo}⟧`;
+// Claves que Object.prototype ya tiene: un `MAPA[k] ?? respaldo` o un `k in MAPA` no las ve. En el bloque de robustez
+// llegan a los enums TAL CUAL, sin ⟦campo⟧ (con la marca nunca serían la clave y el bloque daría verde en falso).
+const PROTO = ['__proto__', 'constructor', 'valueOf', 'toString'];
 // Así escapa React el texto y los atributos (escapeTextForBrowser).
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
-// Lo que pinta FichaFila: JSON.stringify y luego el escape de React.
-const enJson = (s: string) => JSON.stringify(s).slice(1, -1);
+// Lo que pinta FichaFila: JSON.stringify, los controles bidi a la vista (sinBidi) y luego el escape de React.
+const enJson = (s: string) => sinBidi(JSON.stringify(s).slice(1, -1));
 
 // ── Envenenar: cada campo de texto que permite el esquema zod ─────────────────
-// Recorre el esquema y el valor a la vez: z.string() → carga marcada con el nombre del campo; z.uuid() → «../N%2F..»
-// (si `ids`); dentro de z.unknown() (evidence, details, meta, args) todas las cadenas y una clave extra envenenada.
-// Las fechas ISO (Ts es z.string()) se respetan salvo con `fechas`, para no mezclar robustez con escape.
-type Def = { type: string; format?: string; innerType?: Esq; shape?: Record<string, Esq>; element?: Esq; valueType?: Esq };
+// Recorre el esquema y el valor a la vez: z.string() → carga marcada; z.uuid() → id envenenado (si `ids`); dentro de
+// z.unknown() (evidence, details, meta, args) todas las cadenas, una clave extra envenenada y claves con nombre de
+// atributo peligroso. Con `rellenar` (por defecto) los opcionales y nullables que vienen null o ausentes y admiten texto
+// se sintetizan desde el esquema, para que también reciban carga. Las fechas ISO (Ts es z.string()) se respetan salvo
+// con `fechas`, para no mezclar robustez con escape; con `enums`, también los enums y literales llevan la carga.
+type Def = { type: string; format?: string; innerType?: Esq; shape?: Record<string, Esq>; element?: Esq; valueType?: Esq;
+  options?: Esq[]; entries?: Record<string, string>; values?: unknown[]; in?: Esq };
 type Esq = { _zod: { def: Def } };
-type Opciones = { ids?: boolean; fechas?: boolean };
+type Opciones = { ids?: boolean; fechas?: boolean; rellenar?: boolean; enums?: boolean; ruta?: string };
+type Lugar = { campo: string; camino: string };
 const ISO = /^\d{4}-\d{2}-\d{2}T/;
-let n = 0;
-const idMalo = () => `../${++n}%2F..`;
+const FECHA = '2026-10-24T19:00:00.000Z';
+const UUID = 'f0000000-0000-4000-8000-0000000000ff';
+const hijo = (x: Lugar, k: string): Lugar => ({ campo: k, camino: x.camino ? `${x.camino}.${k}` : k });
+const elemento = (x: Lugar, i: number): Lugar => ({ campo: x.campo, camino: `${x.camino}[${i}]` });
+const nombre = (x: Lugar, o: Opciones) => (o.ruta === undefined ? x.campo : x.camino);
+const esTs = (s: Esq) => (s as unknown) === Ts;
+const ENVOLTORIOS = new Set(['optional', 'nullable', 'default', 'readonly', 'nonoptional', 'catch', 'prefault']);
 
-function libre(v: unknown, c: string, campo: string, o: Opciones): unknown {
-  if (typeof v === 'string') return ISO.test(v) && !o.fechas ? v : marca(c, campo);
-  if (Array.isArray(v)) return v.map((x) => libre(x, c, campo, o));
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, libre(x, c, k, o)]));
+// Un {...evidence} esparcido sobre el DOM convierte estas claves en atributos (y un style de texto hace lanzar a React).
+const ATRIBUTOS = { href: 'javascript:alert(1)', src: 'https://evil.test/x', srcDoc: IMG, formAction: 'javascript:alert(1)',
+  style: 'background:url(https://evil.test/p.png)' };
+
+// Ids envenenados: a otro host, con query y ancla, o con ../ y %2F. Cada uno lleva su ficha «vgN_» para encontrarlo en un href.
+const IDS = new Map<string, string>();
+let n = 0;
+const idMalo = () => {
+  const k = `vg${++n}_`;
+  const id = [`//evil.test/${k}`, `${k}?y=1#z`, `../${k}%2F..`][n % 3]!;
+  IDS.set(k, id);
+  return id;
+};
+
+const texto = new WeakMap<Esq, boolean>();
+function conTexto(s: Esq): boolean {
+  const ya = texto.get(s);
+  if (ya !== undefined) return ya;
+  const d = s._zod.def;
+  const r = d.type === 'string' ? !esTs(s) && d.format !== 'uuid'
+    : ENVOLTORIOS.has(d.type) ? conTexto(d.innerType!)
+    : d.type === 'pipe' ? conTexto(d.in!)
+    : d.type === 'object' ? Object.values(d.shape!).some(conTexto)
+    : d.type === 'array' ? conTexto(d.element!)
+    : d.type === 'record' ? ['unknown', 'any'].includes(d.valueType!._zod.def.type) || conTexto(d.valueType!)
+    : d.type === 'union' ? d.options!.some(conTexto)
+    : d.type === 'unknown' || d.type === 'any';
+  texto.set(s, r);
+  return r;
+}
+
+// Valor mínimo que cumple el esquema; las cadenas salen 'x' y poner() las marca después.
+function nuevo(s: Esq): unknown {
+  const d = s._zod.def;
+  switch (d.type) {
+    case 'string': return esTs(s) ? FECHA : d.format === 'uuid' ? UUID : 'x';
+    case 'number': return 0;
+    case 'boolean': return false;
+    case 'enum': return Object.values(d.entries!)[0];
+    case 'literal': return d.values![0];
+    case 'optional': return conTexto(d.innerType!) ? nuevo(d.innerType!) : undefined;
+    case 'nullable': return conTexto(d.innerType!) ? nuevo(d.innerType!) : null;
+    case 'pipe': return nuevo(d.in!);
+    case 'object': return Object.fromEntries(Object.entries(d.shape!).map(([k, x]) => [k, nuevo(x)]).filter(([, v]) => v !== undefined));
+    case 'array': return conTexto(d.element!) ? [nuevo(d.element!)] : [];
+    case 'union': return nuevo(d.options!.find(conTexto) ?? d.options![0]!);
+    case 'record': return {};
+    default: return ENVOLTORIOS.has(d.type) ? nuevo(d.innerType!) : 'x';
+  }
+}
+
+function libre(v: unknown, c: string, x: Lugar, o: Opciones): unknown {
+  if (typeof v === 'string') return ISO.test(v) && !o.fechas ? v : marca(c, nombre(x, o));
+  if (Array.isArray(v)) return v.map((y, i) => libre(y, c, elemento(x, i), o));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, y]) => [k, libre(y, c, hijo(x, k), o)]));
   return v;
 }
 
-function poner(s: Esq, v: unknown, c: string, campo: string, o: Opciones): unknown {
+function poner(s: Esq, v: unknown, c: string, x: Lugar, o: Opciones): unknown {
   const d = s._zod.def;
+  if (ENVOLTORIOS.has(d.type)) {
+    if (v == null && !(o.rellenar && conTexto(d.innerType!))) return v;
+    return poner(d.innerType!, v ?? nuevo(d.innerType!), c, x, o);
+  }
   switch (d.type) {
     case 'string':
       if (typeof v !== 'string') return v;
       if (d.format === 'uuid') return o.ids ? idMalo() : v;
-      return ISO.test(v) && !o.fechas ? v : marca(c, campo);
-    case 'optional': case 'nullable': case 'default': case 'readonly': case 'nonoptional':
-      return v == null ? v : poner(d.innerType!, v, c, campo, o);
-    case 'object':
-      return v && typeof v === 'object'
-        ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, d.shape![k] ? poner(d.shape![k]!, x, c, k, o) : x])) : v;
+      return ISO.test(v) && !o.fechas ? v : marca(c, nombre(x, o));
+    case 'pipe':
+      return poner(d.in!, v, c, x, o);
+    case 'object': {
+      if (!v || typeof v !== 'object') return v;
+      const r: Record<string, unknown> = { ...v };
+      for (const k of new Set([...Object.keys(v), ...(o.rellenar ? Object.keys(d.shape!) : [])])) {
+        if (!d.shape![k]) continue;
+        const y = poner(d.shape![k]!, (v as Record<string, unknown>)[k], c, hijo(x, k), o);
+        if (y !== undefined || k in v) r[k] = y;
+      }
+      return r;
+    }
     case 'array':
-      return Array.isArray(v) ? v.map((x) => poner(d.element!, x, c, campo, o)) : v;
+      return Array.isArray(v) ? v.map((y, i) => poner(d.element!, y, c, elemento(x, i), o)) : v;
     case 'record': {
       if (!v || typeof v !== 'object') return v;
       const vt = d.valueType!._zod.def.type;
-      const r = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, poner(d.valueType!, x, c, k, o)]));
-      return vt === 'unknown' || vt === 'any' ? { ...r, [marca(c, `${campo}.clave`)]: marca(c, `${campo}.valor`) } : r;
+      const r = Object.fromEntries(Object.entries(v).map(([k, y]) => [k, poner(d.valueType!, y, c, hijo(x, k), o)]));
+      return vt === 'unknown' || vt === 'any' ? { ...r, ...ATRIBUTOS, [marca(c, `${nombre(x, o)}.clave`)]: marca(c, `${nombre(x, o)}.valor`) } : r;
     }
     case 'unknown': case 'any':
-      return libre(v, c, campo, o);
+      return libre(v, c, x, o);
     case 'union':
-      return typeof v === 'string' ? marca(c, campo) : libre(v, c, campo, o);
+      return typeof v === 'string' ? marca(c, nombre(x, o)) : libre(v, c, x, o);
+    case 'enum': case 'literal':
+      return o.enums && typeof v === 'string' ? (PROTO.includes(c) ? c : marca(c, nombre(x, o))) : v;
     default:
-      return v;                                                       // enum, literal, number, boolean
+      return v;                                                       // number, boolean
   }
 }
 
+let ENUMS = false;                                                    // lo enciende el bloque de robustez
 function envenenar<S extends z.ZodType>(s: S, v: z.infer<S>, c: string, o: Opciones = {}): z.infer<S> {
-  return poner(s as unknown as Esq, v, c, 'raiz', o) as z.infer<S>;
+  const op: Opciones = { rellenar: true, enums: ENUMS, ...o };
+  return poner(s as unknown as Esq, v, c, { campo: 'raiz', camino: op.ruta ?? '' }, op) as z.infer<S>;
 }
 
 // ── Revisar el HTML ───────────────────────────────────────────────────────────
@@ -186,6 +289,7 @@ function peligros(html: string, estricto = false): string[] {
     if (PROHIBIDAS.has(t.nombre)) p.push(`<${t.nombre}>`);
     for (const [k, v] of t.attrs) {
       if (/^on/i.test(k)) p.push(`<${t.nombre} ${k}=…>`);
+      if (k === 'srcdoc') p.push(`<${t.nombre} srcdoc=…>`);
       if (k === 'style' && /url\s*\(|expression\s*\(|javascript:/i.test(v)) p.push(`<${t.nombre} style="${v.slice(0, 60)}">`);
       if (!ATTR_URL.has(k)) continue;
       if (v === BLOQUEO_REACT) { if (estricto) p.push(`<${t.nombre} ${k}> javascript: (bloqueado por React)`); continue; }
@@ -209,12 +313,27 @@ function estructura(html: string): Record<string, number> {
 }
 
 const hrefs = (html: string) => etiquetas(html).filter((t) => t.nombre === 'a').map((t) => t.attrs.find(([k]) => k === 'href')?.[1] ?? '');
+// Un id envenenado solo puede llegar a un href codificado: así no cambia el host, la ruta, la query ni el ancla.
+const idsSinCodificar = (html: string) => hrefs(html).filter((h) => [...h.matchAll(/vg\d+_/g)].some(([k]) => !h.includes(encodeURIComponent(IDS.get(k) ?? k))));
 
-function revisar(html: string, carga: string, base: string, ver: string[]) {
-  expect(peligros(html)).toEqual([]);
+// Lo que debe verse escapado. El texto técnico (rutas, IPs, UA, recurso, JSON) va además en un <bdi dir="ltr">: un
+// <bdi> sin dir vale dir=auto y una primera letra árabe o hebrea reordenaría la ruta o la IP a la vista.
+type Ver = string | { ltr: string };
+const ltr = (s: string): Ver => ({ ltr: s });
+const enBdiLtr = (html: string) => [...html.matchAll(/<bdi dir="ltr">([\s\S]*?)<\/bdi>/g)].map((m) => m[1]!);
+
+function revisar(html: string, carga: string, base: string, ver: Ver[], enlaces: string[] = []) {
+  expect(peligros(html, true)).toEqual([]);
   expect(estructura(html)).toEqual(estructura(base));
   for (const crudo of ['<img src=x', '<script>alert', '<svg onload']) expect(html).not.toContain(crudo);
-  for (const v of ver) expect(html, `debe verse escapado: ${v.slice(0, 80)}`).toContain(esc(v));
+  for (const v of ver) {
+    const s = typeof v === 'string' ? v : v.ltr;
+    expect(html, `debe verse escapado: ${s.slice(0, 80)}`).toContain(esc(s));
+    if (typeof v !== 'string') expect(enBdiLtr(html).some((b) => b.includes(esc(s))), `debe ir en <bdi dir="ltr">: ${s.slice(0, 80)}`).toBe(true);
+  }
+  expect(idsSinCodificar(html)).toEqual([]);
+  // Enlaces que el caso exige: no basta con que ningún href lleve el id sin codificar, el enlace tiene que estar.
+  for (const h of enlaces) expect(hrefs(html), `falta el enlace ${h}`).toContain(h);
   if (carga.length >= 10 * 1024) expect(html).toContain('A'.repeat(60));        // la de 10 KB se pinta (o se recorta en su sitio)
 }
 
@@ -222,7 +341,8 @@ function revisar(html: string, carga: string, base: string, ver: string[]) {
 const ORG = fx.me.orgs[0]!.id;
 // Copias tipadas (parse valida y da el tipo del contrato; el tipo inferido del array literal del fixture no casa con el record).
 const CONEXIONES = z.array(ConnectionPublic).parse(fx.connections);
-const LUIS = Contact.parse(fx.contacts[1]);                       // sin verificar: trae su enlace de wa.me
+const CONTACTOS = z.array(Contact).parse(fx.contacts);
+const LUIS = CONTACTOS[1]!;                                       // sin verificar: trae su enlace de wa.me
 const ENLACE_WA = LUIS.verificacion!.enlace;
 const orgDe = (extra: Partial<OrgActual> = {}): OrgActual => ({ ...fx.me.orgs[0]!, me: fx.me, puedeEscribir: true, ...extra });
 
@@ -240,6 +360,13 @@ function pintar(nodo: ReactNode, o: { ruta?: string; patron?: string; datos?: [Q
   );
 }
 
+// PanelDetalle lee window.matchMedia y document.activeElement al montar; en el SSR del arnés no existen.
+function conVentana<T>(ancho: boolean, f: () => T): T {
+  vi.stubGlobal('window', { matchMedia: () => ({ matches: ancho, addEventListener() {}, removeEventListener() {} }) });
+  vi.stubGlobal('document', { activeElement: null });
+  try { return f(); } finally { vi.unstubAllGlobals(); }
+}
+
 // Documento Markdown con la carga en cada bloque y cada forma en línea que el subconjunto propio reconoce.
 const mdCon = (c: string) => [
   `# ${c}`, '', `${c} con **${c}** y \`${c}\``, `[x](javascript:alert(1)) ![i](https://evil.test/p.png) <a href="javascript:alert(1)">a</a>`, '',
@@ -254,13 +381,13 @@ function hallazgo(c: string) {
   return { ...f, evidence: { ...f.evidence, cve: 'CVE-2024-12345', ghsa: 'GHSA-abcd-efgh-ijkl', falso: `CVE-2024-1${IMG}`, url: 'javascript:alert(1)' } };
 }
 
-function detalleIncidente(c: string, ip: boolean) {
+function detalleIncidente(c: string, ip: boolean, o: Opciones = {}) {
   const i = envenenar(IncidentDetail, {
     ...fx.incidentDetail, suspected_injection: true,
     timeline: [...fx.incidentDetail.timeline, { t: fx.incidentDetail.started_at, ms: 30_000, kind: 'call_failed', label: 'fallo' }],
     actions: [{ id: fx.incidentDetail.id, kind: 'block_ip', target: '203.0.113.7', status: 'executed', created_at: fx.incidentDetail.started_at,
       undone_at: null, expires_at: null, approval_id: null }],
-  }, c);
+  }, c, o);
   return ip ? { ...i, resource: `ip:${marca(c, 'resource')}` } : i;
 }
 
@@ -277,10 +404,22 @@ function acciones(c: string): AccionDato[] {
   ];
 }
 
-const gruposDe = (c: string) => envenenar(z.array(GrupoDato), [...fx.moduleState.cloudflare.ahora, ...fx.moduleState.supabase.ahora], c);
+const gruposDe = (c: string) => envenenar(z.array(GrupoDato), [...fx.moduleState.cloudflare.ahora, ...fx.moduleState.supabase.ahora], c, { ruta: 'grupos' });
+// Lo que la Bandeja enseña de cada grupo y fila (los verbos de copiar y navegar siempre se pintan).
+const verBandeja = (c: string) => gruposDe(c).flatMap((g): Ver[] => [g.etiqueta, ...(g.chapas ?? []), ...g.filas.flatMap((f): Ver[] => [
+  f.etiqueta, ltr(sinBidi(f.objeto!)), f.sub!, ...(f.chips ?? []), ...f.acciones.filter((a) => a.clase === 'copiar' || a.clase === 'navegar').map((a) => a.verbo)])]);
+const rango = (k: number) => Array.from({ length: k }, (_, i) => i);
+// Lo que TablaTopIps enseña de cada IP: la IP y el UA recortado a 60 en <bdi dir="ltr">, y el title con el UA entero
+// (con los controles bidi a la vista).
+const verTopIps = (c: string, raiz: string) => rango(fx.traffic.top_ips.length).flatMap((k): Ver[] => {
+  const ua = marca(c, `${raiz}top_ips[${k}].ua_top`);
+  return [ltr(sinBidi(marca(c, `${raiz}top_ips[${k}].ip`))), ltr(sinBidi(ua.slice(0, 60))), sinBidi(ua)];
+});
+// «Ver ahora» del banner de AppShell: el href que se espera con cada carga (el id envenenado sale de idMalo() al pintar).
+const VER_AHORA = new Map<string, string>();
 
 // ── Casos: un render por componente; cada uno se corre con todas las cargas ──
-type Caso = { nombre: string; pintar: (c: string) => string; ver: (c: string) => string[] };
+type Caso = { nombre: string; pintar: (c: string) => string; ver: (c: string) => Ver[]; enlaces?: (c: string) => string[] };
 
 const CASOS: Caso[] = [
   {
@@ -295,13 +434,14 @@ const CASOS: Caso[] = [
   },
   {
     nombre: 'FichaFila con evidencia (claves y valores)',
-    pintar: (c) => renderToStaticMarkup(<FichaFila rotulo={marca(c, 'rotulo')} valor={libre({ ...fx.findings[0]!.evidence, lista: ['a', 1, null], [c]: { anidado: 'b' } }, c, 'evidencia', {})} />),
-    ver: (c) => [marca(c, 'rotulo'), enJson(c), enJson(marca(c, 'anidado'))],
+    pintar: (c) => renderToStaticMarkup(<FichaFila rotulo={marca(c, 'rotulo')}
+      valor={libre({ ...fx.findings[0]!.evidence, lista: ['a', 1, null], [c]: { anidado: 'b' } }, c, { campo: 'evidencia', camino: 'evidencia' }, {})} />),
+    ver: (c) => [marca(c, 'rotulo'), ltr(enJson(c)), ltr(enJson(marca(c, 'anidado')))],
   },
   {
     nombre: 'FichaFila con un valor de texto suelto',
     pintar: (c) => renderToStaticMarkup(<FichaFila valor={c} />),
-    ver: (c) => [enJson(c)],
+    ver: (c) => [ltr(enJson(c))],
   },
   {
     nombre: 'LineaTiempo (hitos y el resto de timeline[] desplegado)',
@@ -311,17 +451,18 @@ const CASOS: Caso[] = [
   {
     nombre: 'GraficaTrafico (leyenda) y TablaTopIps (IP, UA recortado a 60 y title completo)',
     pintar: (c) => {
-      const t = envenenar(Traffic, fx.traffic, c);
+      const t = envenenar(Traffic, fx.traffic, c, { ruta: '' });
       return renderToStaticMarkup(<><GraficaTrafico buckets={t.buckets} />
         <TablaTopIps ips={t.top_ips} resaltar={t.top_ips[0]!.ip} accion={(ip) => <span>{ip}</span>} /></>);
     },
-    ver: (c) => [marca(c, 'ip'), marca(c, 'ua_top'), marca(c, 'ua_top').slice(0, 60)],
+    ver: (c) => verTopIps(c, ''),
   },
   {
-    nombre: 'Etiqueta y ChapaSeveridad',
+    nombre: 'Etiqueta y ChapaSeveridad (también con severidad y rol fuera de contrato)',
     pintar: (c) => renderToStaticMarkup(<>
-      <Etiqueta texto={c} /><Etiqueta texto={c} mono grande rol="aviso" />
+      <Etiqueta texto={c} /><Etiqueta texto={c} mono grande rol="aviso" /><Etiqueta texto={c} rol={c as Rol} />
       {(['critical', 'high', 'medium', 'low', 'info'] as const).map((s) => <ChapaSeveridad key={s} severity={s} grande />)}
+      <ChapaSeveridad severity={c as Severity} />
     </>),
     ver: (c) => [c],
   },
@@ -344,9 +485,9 @@ const CASOS: Caso[] = [
       marca(c, 'message'), marca(c, 'request_id')],
   },
   {
-    nombre: 'Bandeja (grupos, filas, chips, objeto, sub y acciones del servidor)',
+    nombre: 'Bandeja (grupos, chapas, filas, chips, objeto, sub y acciones del servidor)',
     pintar: (c) => pintar(<Bandeja grupos={gruposDe(c)} puedeEscribir hora={fx.moduleState.cloudflare.hora} />, { ruta: `/o/${ORG}/cloudflare` }),
-    ver: (c) => [marca(c, 'etiqueta'), marca(c, 'objeto'), marca(c, 'sub'), marca(c, 'chips'), marca(c, 'verbo')],
+    ver: verBandeja,
   },
   {
     nombre: 'FilaProblema y AccionFila con cada clase de acción (ids y rutas con ../ y %2F)',
@@ -358,7 +499,7 @@ const CASOS: Caso[] = [
         {acciones(c).map((a, i) => <AccionFila key={i} accion={a} puedeEscribir />)}
       </ul>, { ruta: `/o/${ORG}/cloudflare` });
     },
-    ver: (c) => [marca(c, 'verbo'), marca(c, 'etiqueta')],
+    ver: (c) => [marca(c, 'verbo'), marca(c, 'grupos[0].filas[0].etiqueta'), ltr(sinBidi(marca(c, 'grupos[0].filas[0].objeto')))],
   },
   {
     nombre: 'DetalleHallazgo con PromptCorreccion (texto del prompt en <pre>)',
@@ -367,8 +508,8 @@ const CASOS: Caso[] = [
       const fix = envenenar(FixPromptResponse, { ...fx.fixPrompt, cached: false, injection_flags: ['a', 'b'] }, c);
       return pintar(<DetalleHallazgo org={ORG} id={f.id} puedeEscribir />, { datos: [[['org', ORG, 'finding', f.id], f], [['org', ORG, 'fix', f.id], fix]] });
     },
-    ver: (c) => [marca(c, 'title'), marca(c, 'resource'), marca(c, 'rule_id'), marca(c, 'status_reason'), marca(c, 'prompt'), marca(c, 'model'),
-      enJson(marca(c, 'evidence.valor')), `CVE-2024-1${IMG}`],
+    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'rule_id'), marca(c, 'status_reason'), marca(c, 'prompt'), marca(c, 'model'),
+      ltr(enJson(marca(c, 'evidence.valor'))), `CVE-2024-1${IMG}`],
   },
   {
     nombre: 'DetalleHallazgo de solo lectura sin prompt',
@@ -376,7 +517,16 @@ const CASOS: Caso[] = [
       const f = { ...hallazgo(c), has_fix_prompt: false, status: 'open' as const };
       return pintar(<DetalleHallazgo org={ORG} id={f.id} puedeEscribir={false} />, { datos: [[['org', ORG, 'finding', f.id], f]] });
     },
-    ver: (c) => [marca(c, 'title'), marca(c, 'resource')],
+    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource')))],
+  },
+  {
+    nombre: 'PanelDetalle en Sheet (estrecho) y en aside (ancho) con el hallazgo de ?finding=',
+    pintar: (c) => {
+      const f = hallazgo(c);
+      const o = { ruta: `/o/${ORG}/supabase?finding=${f.id}`, datos: [[['org', ORG, 'finding', f.id], f]] as [QueryKey, unknown][] };
+      return conVentana(false, () => pintar(<DetalleEnPanel />, o)) + conVentana(true, () => pintar(<DetalleEnPanel />, o));
+    },
+    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'status_reason'), ltr(enJson(marca(c, 'evidence.valor')))],
   },
   {
     nombre: 'TarjetaConexion (meta, alcances, last4 y last_error) y TarjetaIngesta (label)',
@@ -404,8 +554,8 @@ const CASOS: Caso[] = [
         [['org', ORG, 'wiki', 'run', run.id], run], [['org', ORG, 'wiki', 'doc', run.id], d], [['org', ORG, 'connections'], cx],
         [['org', ORG, 'wiki', 'runs', null], envenenar(z.array(WikiRun), fx.wikiRuns, c)]] });
     },
-    ver: (c) => [c, marca(c, 'titulo'), marca(c, 'area'), marca(c, 'archivos'), marca(c, 'avisos'), marca(c, 'repo_full_name'), marca(c, 'branch'),
-      marca(c, 'fast'), marca(c, 'smart'), marca(c, 'mermaid'), marca(c, 'commit_sha').slice(0, 7)],
+    ver: (c) => [c, marca(c, 'titulo'), ltr(sinBidi(marca(c, 'area'))), ltr(sinBidi(marca(c, 'archivos'))), marca(c, 'avisos'), marca(c, 'repo_full_name'),
+      marca(c, 'branch'), marca(c, 'fast'), marca(c, 'smart'), marca(c, 'mermaid'), marca(c, 'commit_sha').slice(0, 7)],
   },
   {
     nombre: 'PaginaWiki: corrida fallida (error del BACK y detalle de cada paso)',
@@ -424,33 +574,37 @@ const CASOS: Caso[] = [
   ...[false, true].map((ip): Caso => ({
     nombre: `PaginaIncidente (title, ${ip ? 'IP' : 'resource'}, details, user agent, avisos, acciones, reglas)`,
     pintar: (c) => {
-      const i = detalleIncidente(c, ip);
+      const i = detalleIncidente(c, ip, { ruta: '' });
       return pintar(<PaginaIncidente />, { ruta: `/o/${ORG}/incidents/${i.id}`, patron: '/o/:orgId/incidents/:incidentId', datos: [
-        [['org', ORG, 'incident', i.id], i], [['org', ORG, 'traffic'], envenenar(Traffic, fx.traffic, c)],
+        [['org', ORG, 'incident', i.id], i], [['org', ORG, 'traffic'], envenenar(Traffic, fx.traffic, c, { ruta: 'trafico' })],
         [['org', ORG, 'connections'], envenenar(z.array(ConnectionPublic), CONEXIONES, c)]] });
     },
-    ver: (c) => [marca(c, 'title'), marca(c, 'resource'), marca(c, 'recipient_masked'), marca(c, 'target'), marca(c, 'label'), marca(c, 'rule_ids'),
-      marca(c, 'code'), marca(c, 'ua_top').slice(0, 60), enJson(marca(c, 'ua_top')), enJson(marca(c, 'details.valor'))],
+    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'code'), ...fx.incidentDetail.rule_ids.map((_, k) => marca(c, `rule_ids[${k}]`)),
+      ...fx.incidentDetail.notifications.map((_, k) => marca(c, `notifications[${k}].recipient_masked`)), ltr(sinBidi(marca(c, 'actions[0].target'))),
+      marca(c, 'timeline[7].label'), ltr(enJson(marca(c, 'details.ua_top'))), ltr(enJson(marca(c, 'details.valor'))), ...verTopIps(c, 'trafico.')],
   })),
   {
     nombre: 'PaginaIncidentes (lista: title, code y origen)',
     pintar: (c) => pintar(<PaginaIncidentes />, { ruta: `/o/${ORG}/incidents`, patron: '/o/:orgId/incidents',
-      datos: [[['org', ORG, 'incidents', 'open'], envenenar(z.array(Incident), fx.incidents, c, { ids: true })]] }),
-    ver: (c) => [marca(c, 'title'), marca(c, 'code'), marca(c, 'resource')],
+      datos: [[['org', ORG, 'incidents', 'open'], envenenar(z.array(Incident), fx.incidents, c, { ids: true, ruta: 'incidentes' })]] }),
+    ver: (c) => fx.incidents.flatMap((_, k) => [marca(c, `incidentes[${k}].title`), marca(c, `incidentes[${k}].code`), marca(c, `incidentes[${k}].resource`)]),
   },
   {
     nombre: 'PaginaAuditoria: resumen de IA-2 (resumen, por_que, explicacion, model) y hallazgos abiertos',
     pintar: (c) => {
-      const hs = envenenar(z.array(Finding), fx.findings, c, { ids: true });
-      const r = envenenar(ScanRun, { ...fx.scanDone, summary: { ...fx.scanDone.summary, suspected_injection: true } }, c, { ids: true });
+      const hs = envenenar(z.array(Finding), fx.findings, c, { ids: true, ruta: 'findings' });
+      const r = envenenar(ScanRun, { ...fx.scanDone, summary: { ...fx.scanDone.summary!, suspected_injection: true } }, c, { ids: true, ruta: 'scan' });
       // Los ids envenenados del resumen apuntan a los hallazgos envenenados: así se pintan sus títulos y rule_id.
       const s = r.summary!;
       const run = { ...r, id: fx.scanDone.id, summary: { ...s, top: s.top.map((t, i) => ({ ...t, finding_id: hs[i]?.id ?? t.finding_id })),
         relaciones: s.relaciones.map((x) => ({ ...x, finding_ids: x.finding_ids.map((id, i) => hs[i]?.id ?? id) })) } };
       return pintar(<PaginaAuditoria />, { ruta: `/o/${ORG}/audit/${run.id}`, patron: '/o/:orgId/audit/:scanId', datos: [
-        [['org', ORG, 'scan', run.id], run], [['org', ORG, 'findings', { status: 'open' }], hs], [['org', ORG, 'overview'], envenenar(Overview, fx.overview, c)]] });
+        [['org', ORG, 'scan', run.id], run], [['org', ORG, 'findings', { status: 'open' }], hs],
+        [['org', ORG, 'overview'], envenenar(Overview, fx.overview, c, { ruta: 'overview' })]] });
     },
-    ver: (c) => [marca(c, 'resumen'), marca(c, 'por_que'), marca(c, 'explicacion'), marca(c, 'model'), marca(c, 'title'), marca(c, 'resource'), marca(c, 'rule_id')],
+    ver: (c) => [marca(c, 'scan.summary.resumen'), ...fx.scanDone.summary!.top.map((_, k) => marca(c, `scan.summary.top[${k}].por_que`)),
+      ...fx.scanDone.summary!.relaciones.map((_, k) => marca(c, `scan.summary.relaciones[${k}].explicacion`)), marca(c, 'scan.summary.model'),
+      ...rango(5).flatMap((k) => [marca(c, `findings[${k}].title`), marca(c, `findings[${k}].resource`)]), marca(c, 'findings[0].rule_id')],
   },
   {
     nombre: 'PaginaAuditoria: corrida fallida (error y paso actual del servidor)',
@@ -463,19 +617,20 @@ const CASOS: Caso[] = [
   {
     nombre: 'PaginaResumen («Ahora»: title y resource)',
     pintar: (c) => pintar(<PaginaResumen />, { ruta: `/o/${ORG}/overview`, patron: '/o/:orgId/overview', datos: [
-      [['org', ORG, 'overview'], envenenar(Overview, fx.overview, c, { ids: true })], [['org', ORG, 'connections'], envenenar(z.array(ConnectionPublic), CONEXIONES, c)]] }),
-    ver: (c) => [marca(c, 'title'), marca(c, 'resource')],
+      [['org', ORG, 'overview'], envenenar(Overview, fx.overview, c, { ids: true, ruta: 'overview' })],
+      [['org', ORG, 'connections'], envenenar(z.array(ConnectionPublic), CONEXIONES, c)]] }),
+    ver: (c) => fx.overview.ahora.flatMap((_, k) => [marca(c, `overview.ahora[${k}].title`), marca(c, `overview.ahora[${k}].resource`)]),
   },
   {
     nombre: 'PantallaModulo vía PaginaCloudflare (?filtro= de la URL, cifras, «Ahora», checks, zona y plan)',
     pintar: (c) => {
-      const t = envenenar(Traffic, fx.traffic, c);
-      const inc = envenenar(z.array(Incident), fx.incidents, c).map((i, k) => (k === 0 ? { ...i, resource: `ip:${t.top_ips[0]!.ip}` } : i));
+      const t = envenenar(Traffic, fx.traffic, c, { ruta: '' });
+      const inc = envenenar(z.array(Incident), fx.incidents, c, { ids: true }).map((i, k) => (k === 0 ? { ...i, resource: `ip:${t.top_ips[0]!.ip}` } : i));
       return pintar(<PaginaCloudflare />, { ruta: `/o/${ORG}/cloudflare?filtro=${encodeURIComponent(c)}`, patron: '/o/:orgId/cloudflare', datos: [
         [['org', ORG, 'module', 'cloudflare'], envenenar(EstadoModulo, fx.moduleState.cloudflare, c)], [['org', ORG, 'traffic'], t],
         [['org', ORG, 'connections'], envenenar(z.array(ConnectionPublic), CONEXIONES, c)], [['org', ORG, 'incidents', 'open'], inc]] });
     },
-    ver: (c) => [c, marca(c, 'zone_name'), marca(c, 'plan'), marca(c, 'etiqueta'), marca(c, 'nombre'), marca(c, 'ip')],
+    ver: (c) => [c, marca(c, 'zone_name'), marca(c, 'plan'), marca(c, 'etiqueta'), marca(c, 'nombre'), ...verTopIps(c, '')],
   },
   {
     nombre: 'PaginaExportar (vista previa del Markdown del export)',
@@ -490,27 +645,97 @@ const CASOS: Caso[] = [
     ver: (c) => [marca(c, 'url'), marca(c, 'version_label'), marca(c, 'lighthouse_version')],
   },
   {
-    nombre: 'AppShell (nombre de la org y correo del usuario)',
-    pintar: (c) => pintar(<AppShell />, { ruta: `/o/${ORG}/overview`, patron: '/o/:orgId/*',
-      org: orgDe({ name: marca(c, 'name'), me: envenenar(Me, fx.me, c) }), datos: [[['org', ORG, 'overview'], envenenar(Overview, fx.overview, c)]] }),
-    ver: (c) => [marca(c, 'name'), marca(c, 'email')],
+    nombre: 'AppShell (botón y menú de orgs, riel del Sheet, correo, PaletaComandos y banner «Ver ahora» con id envenenado)',
+    pintar: (c) => {
+      const me = envenenar(Me, { ...fx.me, orgs: [...fx.me.orgs, { ...fx.me.orgs[0]!, id: UUID, is_demo: false }] }, c, { ruta: 'me' });
+      // overview.ahora[0] del fixture es un incidente crítico: con `ids`, el banner «Ver ahora» enlaza a un id envenenado.
+      const o = envenenar(Overview, fx.overview, c, { ids: true, ruta: 'overview' });
+      const critico = o.ahora.find((a) => a.kind === 'incident' && a.severity === 'critical');
+      if (critico) VER_AHORA.set(c, `/o/${ORG}/incidents/${encodeURIComponent(critico.id)}`); else VER_AHORA.delete(c);
+      return pintar(<AppShell />, { ruta: `/o/${ORG}/overview`, patron: '/o/:orgId/*', org: orgDe({ name: marca(c, 'org.name'), me }),
+        datos: [[['org', ORG, 'overview'], o]] });
+    },
+    ver: (c) => [marca(c, 'org.name'), marca(c, 'me.orgs[0].name'), marca(c, 'me.orgs[1].name'), marca(c, 'me.user.email'),
+      marca(c, 'overview.ahora[0].title')],
+    // Absoluto, en la org de la URL y con el id codificado (antes era `incidents/${id}` relativo y sin codificar).
+    enlaces: (c) => [VER_AHORA.get(c) ?? 'sin incidente crítico en overview.ahora'],
   },
   {
-    nombre: 'PaginaAjustes (org y correo) y Verificar (código de WhatsApp)',
+    nombre: 'PaginaAjustes (org, correo y contactos) y Verificar (código de WhatsApp; solo enlaza a https://wa.me)',
     pintar: (c) => {
-      const contacto = { ...envenenar(Contact, LUIS, c), verificacion: { codigo: marca(c, 'codigo'), enlace: ENLACE_WA } };
-      return pintar(<><PaginaAjustes /><Verificar c={contacto} esperando alAbrir={() => {}} /></>, { ruta: `/o/${ORG}/settings`, patron: '/o/:orgId/settings',
-        org: orgDe({ name: marca(c, 'name'), me: envenenar(Me, fx.me, c) }), datos: [[['org', ORG, 'overview'], fx.overview]] });
+      const lista = envenenar(z.array(Contact), CONTACTOS, c, { ruta: 'contacts' });
+      // Además del enlace envenenado de cada contacto, uno que parece de wa.me y no lo es.
+      const contactos = [...lista, { ...lista[1]!, id: UUID, verificacion: { codigo: marca(c, 'contacts[2].verificacion.codigo'), enlace: 'https://wa.me@evil.test/x' } }];
+      const sano = { ...lista[1]!, verificacion: { codigo: marca(c, 'codigo'), enlace: ENLACE_WA } };
+      return pintar(<>
+        <PaginaAjustes />
+        {contactos.map((x) => <Verificar key={x.id} c={x} esperando alAbrir={() => {}} />)}
+        <Verificar c={sano} esperando alAbrir={() => {}} />
+      </>, { ruta: `/o/${ORG}/settings`, patron: '/o/:orgId/settings', org: orgDe({ name: marca(c, 'org.name'), me: envenenar(Me, fx.me, c, { ruta: 'me' }) }),
+        datos: [[['org', ORG, 'overview'], envenenar(Overview, fx.overview, c)], [['org', ORG, 'contacts'], contactos]] });
     },
-    ver: (c) => [marca(c, 'name'), marca(c, 'email'), marca(c, 'codigo')],
+    ver: (c) => [marca(c, 'org.name'), marca(c, 'me.user.email'), marca(c, 'codigo'), ...rango(3).map((k) => marca(c, `contacts[${k}].verificacion.codigo`))],
+  },
+  {
+    nombre: 'Propuesta de BloquearIp (efecto, avisos, code y error del servidor)',
+    pintar: (c) => {
+      const p = envenenar(ProposeResponse, { ...fx.actionProposal, delivery: 'in_app', code: '482913' }, c, { ruta: 'propuesta' });
+      const resto = { codigo: '12', alCambiarCodigo: () => {}, alConfirmar: () => {}, alCancelar: () => {}, alVencer: () => {} };
+      return renderToStaticMarkup(<>
+        <Propuesta p={p} {...resto} escribiendo={false} error={marca(c, 'error')} />
+        <Propuesta p={{ ...p, delivery: 'whatsapp' }} {...resto} escribiendo />
+      </>);
+    },
+    ver: (c) => [marca(c, 'propuesta.efecto'), ...fx.actionProposal.avisos.map((_, k) => marca(c, `propuesta.avisos[${k}]`)), marca(c, 'propuesta.code'), marca(c, 'error')],
+  },
+  {
+    nombre: 'Resultado de Asistente (last4, permisos comprobados, secreto de ingesta e id de la conexión)',
+    pintar: (c) => {
+      const r = envenenar(ConnectionCreated, { connection: CONEXIONES[4]!, action_connection: CONEXIONES[2]!, checks: fx.permChecks, ingest_secret: 'vgi_secreto' },
+        c, { ids: true, ruta: 'creada' });
+      return renderToStaticMarkup(<>
+        <Resultado r={r} alTerminar={() => {}} />
+        <Resultado r={{ ...r, ingest_secret: null, action_connection: null }} alTerminar={() => {}} />
+      </>);
+    },
+    ver: (c) => [marca(c, 'creada.connection.last4'), marca(c, 'creada.ingest_secret'), ...fx.permChecks.map((_, k) => marca(c, `creada.checks[${k}].permission`))],
   },
 ];
 
 describe.each(CARGAS)('XSS · carga «%s»', (_nombre, carga) => {
   it.each(CASOS)('$nombre', (caso) => {
     const html = caso.pintar(carga);
-    revisar(html, carga, caso.pintar(INOCENTE), caso.ver(carga));
+    revisar(html, carga, caso.pintar(INOCENTE), caso.ver(carga), caso.enlaces?.(carga));
   });
+});
+
+// ── Robustez: enums y literales fuera de contrato (api() en producción deja pasar el cuerpo) ──
+describe('XSS · enums fuera de contrato', () => {
+  beforeAll(() => { ENUMS = true; });
+  afterAll(() => { ENUMS = false; });
+  // Con IMG cada enum lleva la carga marcada; con las claves de PROTO, la clave a secas (poner()). Un mapa leído con
+  // `MAPA[k] ?? x` devolvería Object.prototype o una función: React lanza, o la pinta como texto.
+  const CARGAS_ENUM = [IMG, ...PROTO];
+  const robusto = (caso: Caso) => { for (const c of CARGAS_ENUM) expect(peligros(caso.pintar(c), true), c).toEqual([]); };
+  // Antes PaginaAuditoria era un HALLAZGO (ESTADO_SCAN[run.status] y TEXTO_PASO[s.name] sin respaldo lanzaban TypeError);
+  // ahora lee con deMapa (pasos.ts textoPaso y estadoScan) y entra en la lista normal.
+  it.each(CASOS)('$nombre: no lanza y no pinta nada peligroso', robusto);
+
+  // Un `${MAPA[k]}` sin respaldo no lanza: pinta «undefined», «[object Object]» o «function Object() { [native code] }».
+  const BASURA = [/\bundefined\b/, /\[object Object\]/, /\[native code\]/, /\bNaN\b/];
+  const sinBasura = (caso: Caso) => {
+    for (const c of CARGAS_ENUM) {
+      const html = caso.pintar(c);
+      for (const b of BASURA) expect(html, `${c} → ${b}`).not.toMatch(b);
+    }
+  };
+  // HALLAZGO (robustez, sin XSS): ListaChecks.tsx:19 pinta `${FRASE_ERROR[c.error_code]} ` sin respaldo. Un error_code
+  // fuera de contrato en los checks de ConnectionCreated sale «undefined Vuelve a crear el token…» (y con '__proto__',
+  // «[object Object] …»). Arreglo: deMapa(FRASE_ERROR, c.error_code, '') de lib/severidad. Cuando se arregle, it.fails se
+  // pone rojo: pasar el caso a la lista normal.
+  const conBasura = (caso: Caso) => caso.nombre.startsWith('Resultado de Asistente');
+  it.each(CASOS.filter((x) => !conBasura(x)))('$nombre: no pinta «undefined» ni un objeto como texto', sinBasura);
+  it.fails.each(CASOS.filter(conBasura))('HALLAZGO $nombre: no pinta «undefined» ni un objeto como texto', sinBasura);
 });
 
 // ── El detector detecta: sin esto, un arnés que no ve nada pasaría siempre ────
@@ -520,6 +745,7 @@ describe('XSS · el detector del arnés', () => {
     ['<script>', '<p><script>alert(1)</script></p>', ['<script>']],
     ['<svg onload>', '<span>"><svg onload=alert(1)></span>', ['<svg onload=…>']],
     ['<iframe>', '<iframe src="https://officialvanguard.com/x"></iframe>', ['<iframe>']],
+    ['srcdoc', '<iframe srcdoc="&lt;b&gt;"></iframe>', ['<iframe>', '<iframe srcdoc=…>']],
     ['href javascript: con espacios y mayúsculas', '<a href=" JaVaScRiPt:alert(1)">x</a>', ['<a href=" JaVaScRiPt:alert(1)"> esquema javascript:']],
     ['href javascript: con entidades', '<a href="java&#x73;cript:alert(1)">x</a>', ['<a href="javascript:alert(1)"> esquema javascript:']],
     ['href data:', '<a href="data:text/html,x">x</a>', ['<a href="data:text/html,x"> esquema data:']],
@@ -547,6 +773,41 @@ describe('XSS · el detector del arnés', () => {
     expect(etiquetas(html).map((t) => t.nombre)).toEqual(['span']);
     expect(html).toContain(esc(IMG));
   });
+
+  it('un id envenenado en un href sin codificar se detecta; codificado, no', () => {
+    const ids = [idMalo(), idMalo(), idMalo()];
+    const html = (id: string) => renderToStaticMarkup(<a href={`/o/${ORG}/incidents/${id}`}>x</a>);
+    for (const id of ids) {
+      expect(idsSinCodificar(html(id))).toHaveLength(1);
+      expect(idsSinCodificar(html(encodeURIComponent(id)))).toEqual([]);
+    }
+  });
+
+  it('con enums, una clave del prototipo llega a secas a los enums y marcada al texto; IMG llega marcada a los dos', () => {
+    for (const c of PROTO) {
+      const i = envenenar(Incident, { ...fx.incidents[0]!, acked_via: 'in_app' }, c, { enums: true });   // un null se queda null
+      expect([i.status, i.severity, i.module, i.acked_via]).toEqual([c, c, c, c]);
+      expect(i.title).toBe(marca(c, 'title'));
+      expect(Object.hasOwn(i, 'status')).toBe(true);                    // propiedad propia, no el prototipo
+    }
+    const img = envenenar(Incident, fx.incidents[0]!, IMG, { enums: true });
+    expect(img.status).toBe(marca(IMG, 'status'));
+    expect(envenenar(Incident, fx.incidents[0]!, '__proto__').status).toBe(fx.incidents[0]!.status);   // sin enums, intacto
+  });
+
+  it('rellenar sintetiza los opcionales y nullables con texto (y deja null los que no lo admiten)', () => {
+    const t = envenenar(Traffic, fx.traffic, IMG, { ruta: '' });
+    expect(fx.traffic.top_ips[3]!.ua_top).toBeNull();
+    expect(t.top_ips[3]!.ua_top).toBe(marca(IMG, 'top_ips[3].ua_top'));
+    const g = envenenar(GrupoDato, fx.moduleState.cloudflare.ahora[2]!, IMG);
+    expect(g.chapas).toEqual([marca(IMG, 'chapas')]);
+    const s = envenenar(ScanRun, fx.scanRunning, IMG);
+    expect(s.error).toBe(marca(IMG, 'error'));
+    expect(s.steps.map((x) => x.error_code)).toEqual(s.steps.map(() => marca(IMG, 'error_code')));
+    expect(s.coverage).toEqual(fx.scanRunning.coverage);                // sin texto: se queda como venía
+    expect(s.finished_at).toBeNull();                                   // Ts: no se inventa una fecha
+    expect(envenenar(ScanRun, fx.scanRunning, IMG, { rellenar: false }).error).toBeNull();
+  });
 });
 
 // ── Mermaid: etiquetas con <b>, click, style y javascript: ─────────────────────
@@ -561,6 +822,7 @@ describe('XSS · Mermaid de la wiki', () => {
     return html;
   };
 
+  // Si alguien relaja ETQ/TEXTO de lib/mermaid.ts para dejar pasar < o &, este caso tiene que romperse.
   it.each([
     ['<b> en la etiqueta', 'flowchart LR\nA[<b>negrita</b>] --> B[Fin]'],
     ['click con javascript:', 'flowchart LR\nA[Inicio] --> B[Fin]\nclick A "javascript:alert(1)"'],
@@ -587,6 +849,29 @@ describe('XSS · Mermaid de la wiki', () => {
     for (const p of ['click', 'style', 'onload', 'javascript']) expect(html).toMatch(new RegExp(`<text[^>]*>${p}</text>`));
     // Ningún atributo con nombre o valor sacado de la etiqueta (salvo el aria-label, que es texto escapado).
     for (const t of etiquetas(html)) for (const [k, v] of t.attrs) if (k !== 'aria-label') expect(v).not.toMatch(/click|onload|javascript/);
+  });
+
+  it('PaginaWiki con un Mermaid válido en el borde de la lista blanca (16 nodos, 60 caracteres, tildes y «.,_-»): <text> y aria-label', () => {
+    const PALABRAS = ['javascript.alert-1 onerror_x onload, click style href src', 'ÁÉÍÓÚÜÑ áéíóúüñ img src.x onerror.alert-1 script iframe',
+      'data.text_html, evil.test, x.y-z svg onload_alert-1', 'formaction srcdoc xlink_href use foreignObject animate set'];
+    const etq = (i: number) => `${PALABRAS[i % PALABRAS.length]} ${i}`.padEnd(60, '_').slice(0, 60);
+    const txt = (i: number) => `${PALABRAS[(i + 1) % PALABRAS.length]} ${i}`.slice(0, 60);
+    const fuente = ['flowchart LR', ...rango(15).map((i) => `N${i}[${etq(i)}] -->|${txt(i)}| N${i + 1}[${etq(i + 1)}]`)].join('\n');
+    expect(parsearMermaid(fuente)?.nodos).toHaveLength(16);
+    const run = { ...fx.wikiRunDone };
+    const html = pintar(<PaginaWiki />, { ruta: `/o/${ORG}/wiki?run=${run.id}`, patron: '/o/:orgId/wiki', datos: [
+      [['org', ORG, 'wiki', 'run', run.id], run], [['org', ORG, 'wiki', 'doc', run.id], { ...fx.wikiDoc, mermaid: fuente }]] });
+    const i0 = html.lastIndexOf('<svg', html.indexOf('aria-label="Mapa del repositorio: '));
+    const svg = html.slice(i0, html.indexOf('</svg>', i0) + 6);
+    expect(i0).toBeGreaterThan(-1);
+    expect(peligros(html, true)).toEqual([]);
+    expect([...new Set(etiquetas(svg).map((t) => t.nombre))].sort()).toEqual(['defs', 'g', 'marker', 'path', 'rect', 'svg', 'text']);
+    for (const i of rango(16)) for (const l of partir(etq(i))) expect(svg).toContain(`>${esc(l)}</text>`);
+    for (const i of rango(15)) {
+      expect(svg).toContain(`>${esc(txt(i))}</text>`);
+      expect(svg).toContain(esc(`${etq(i)} → ${etq(i + 1)} (${txt(i)})`));     // aria-label del <svg>
+    }
+    for (const t of etiquetas(svg)) for (const [k, v] of t.attrs) if (k !== 'aria-label') expect(v).not.toMatch(/javascript|onerror|onload|click|srcdoc|evil/i);
   });
 
   it('10 KB de Mermaid (demasiados nodos) no rompe el render y cae a código', () => {
@@ -656,45 +941,70 @@ describe('XSS · enlaces', () => {
     expect(peligros(html, true)).toEqual([]);
   });
 
-  // HALLAZGO (media): PaginaAjustes.tsx (Verificar) pinta `verificacion.enlace` del servidor como href sin validarlo. El contrato
-  // exige https://wa.me/, pero api() en producción devuelve el cuerpo aunque no cumpla el esquema (contract_mismatch). React
-  // 19 neutraliza javascript:, no data: ni un https a otro host. Arreglo: validar como urlRevocar (new URL, https: y host
-  // wa.me) y, si no, no pintar el botón.
-  it.skip.each([
+  // Antes era un HALLAZGO (Verificar pintaba `verificacion.enlace` sin validar; api() en producción no corta un cuerpo
+  // fuera de contrato). Ahora solo enlaza a https://wa.me sin credenciales ni puerto, y si no, deja el código para copiar.
+  it.each([
     ['javascript:', 'javascript:alert(1)'], ['data:', 'data:text/html,<script>alert(1)</script>'], ['otro host', 'https://evil.test/wa'],
-    ['protocolo relativo', '//evil.test/wa'],
-  ])('HALLAZGO Verificar: un enlace %s del servidor no llega al href', (_n, enlace) => {
+    ['protocolo relativo', '//evil.test/wa'], ['con credenciales', 'https://wa.me@evil.test/wa'], ['con puerto', 'https://wa.me:8443/x'],
+    ['http', 'http://wa.me/x'], ['subdominio parecido', 'https://wa.me.evil.test/x'],
+  ])('Verificar: un enlace %s del servidor no llega al href y el código sigue a la vista', (_n, enlace) => {
     const c: Contact = { ...LUIS, verificacion: { codigo: '7C2A9F', enlace } };
     const html = pintar(<Verificar c={c} esperando={false} alAbrir={() => {}} />);
     expect(peligros(html, true)).toEqual([]);
+    expect(hrefs(html)).toEqual([]);
+    expect(html).toContain('VERIFICAR 7C2A9F');
   });
 
-  // HALLAZGO (baja): ids del servidor en enlaces sin encodeURIComponent: PaginaIncidentes.tsx (`<Link to={i.id}>`, relativo),
-  // PaginaResumen.tsx (FilaAhora: `/incidents/${item.id}` y `?finding=${item.id}`), PaginaAuditoria.tsx (`?finding=${t.finding_id}`,
-  // `?finding=${id}`, `?finding=${f.id}`, `/audit/${ultima.id}`) y PaginaCloudflare.tsx (verIncidente). No ejecuta código (React 19
-  // bloquea javascript:), pero un id con «../», «?» o «#» cambia el destino dentro del origen, y uno con «//host» en
-  // `to={i.id}` sale como enlace EXTERNO (React Router lo trata como URL absoluta). Los ids son uuid en la base y api() los
-  // valida en DEV; arreglo: encodeURIComponent como en rutaDe (o esId antes de pintar el enlace).
-  it.skip('HALLAZGO ids sin codificar: el enlace de cada incidente de la lista apunta a su propio id', () => {
-    const lista = fx.incidents.map((i, k) => ({ ...i, id: k ? '//evil.test/x' : '../../x%2Fy' }));
+  // Antes era un HALLAZGO (`<Link to={i.id}>` relativo: un id «//evil.test/x» salía como enlace externo). Ahora el enlace es
+  // absoluto y el id va con encodeURIComponent. La matriz de arriba lo comprueba también en Resumen, Auditoría y Cloudflare.
+  it('el enlace de cada incidente de la lista apunta a su propio id, codificado', () => {
+    const ids = ['//evil.test/x', '../../x%2Fy', 'x?y=1#z'];
+    const lista = ids.map((id, k) => ({ ...fx.incidents[k % fx.incidents.length]!, id }));
     const html = pintar(<PaginaIncidentes />, { ruta: `/o/${ORG}/incidents`, patron: '/o/:orgId/incidents', datos: [[['org', ORG, 'incidents', 'open'], lista]] });
     expect(peligros(html, true)).toEqual([]);
-    for (const h of hrefs(html).filter((x) => x !== `/o/${ORG}/incidents`)) expect(h.startsWith(`/o/${ORG}/incidents/`)).toBe(true);
+    const propios = hrefs(html).filter((x) => x.startsWith(`/o/${ORG}/incidents/`));
+    expect(propios).toEqual(ids.map((id) => `/o/${ORG}/incidents/${encodeURIComponent(id)}`));
+    for (const h of hrefs(html)) expect(h.startsWith(`/o/${ORG}/`)).toBe(true);
   });
+
+  // Antes era un HALLAZGO: el banner usaba `incidents/${id}` relativo y sin codificar, y con el mismo item de
+  // overview.ahora llevaba a otro sitio que FilaAhora del Resumen ('../../../login' daba /login).
+  it.each(['x?finding=y#z', '../../../login', '../../otra-org/settings', '//evil.test/x'])(
+    'el banner «Ver ahora» de AppShell enlaza al incidente %s codificado, igual que FilaAhora del Resumen', (id) => {
+      const o = { ...fx.overview, ahora: fx.overview.ahora.map((a, k) => (k === 0 ? { ...a, id } : a)) };
+      const esperado = `/o/${ORG}/incidents/${encodeURIComponent(id)}`;
+      const shell = pintar(<AppShell />, { ruta: `/o/${ORG}/overview`, patron: '/o/:orgId/*', datos: [[['org', ORG, 'overview'], o]] });
+      expect(shell).toContain('Ver ahora');
+      expect(hrefs(shell)).toContain(esperado);
+      const resumen = pintar(<PaginaResumen />, { ruta: `/o/${ORG}/overview`, patron: '/o/:orgId/overview', datos: [[['org', ORG, 'overview'], o]] });
+      expect(hrefs(resumen)).toContain(esperado);
+      for (const h of [...hrefs(shell), ...hrefs(resumen)]) expect(h).not.toContain(id);          // nunca el id crudo
+    });
 });
 
-// ── Bidi: el texto RTL se pinta como texto (arriba), pero los controles bidi no se aíslan ──
+// ── Bidi: el texto RTL se pinta como texto y los controles de dirección se ven ──
 describe('XSS · controles bidi', () => {
-  // HALLAZGO (baja, suplantación visual tipo «Trojan Source»): resource, rutas de archivos, UA, IPs y nombres llegan con
-  // U+202A–U+202E / U+2066–U+2069 tal cual y sin aislar (ni <bdi> ni unicode-bidi: isolate), así que «src/lib/U+202E
-  // sj.nimda» se lee «src/lib/admin.js» y puede reordenar el texto que va detrás en la misma línea. No ejecuta nada.
-  // Arreglo: en los campos mono (DetalleHallazgo «Dónde», FichaFila, TablaTopIps, archivos de la wiki) envolver en <bdi>
-  // o aplicar unicode-bidi: isolate y hacer visibles los controles (p. ej. «⟨U+202E⟩»). Si se arregla sustituyéndolos,
-  // ajustar también los `ver` de la carga «bidi y RTL» de arriba.
-  it.skip('HALLAZGO bidi: un U+202E del servidor no llega crudo a «Dónde» del hallazgo', () => {
+  // Antes era un HALLAZGO (suplantación visual tipo «Trojan Source»): «src/lib/U+202E sj.nimda» se leía «src/lib/admin.js».
+  // Ahora los campos mono (Dónde, FichaFila, TablaTopIps, archivos de la wiki, IP y recurso del incidente) pasan por
+  // sinBidi dentro de <bdi dir="ltr">: sin dir, el <bdi> vale dir=auto y la primera letra fuerte decide la dirección.
+  // La matriz de arriba lo exige con ltr() en cada campo técnico.
+  it('un U+202E del servidor no llega crudo a «Dónde» del hallazgo: se ve ⟨U+202E⟩ y va aislado en <bdi dir="ltr">', () => {
     const f = { ...hallazgo(INOCENTE), resource: 'src/lib/‮sj.nimda' };
     const html = pintar(<DetalleHallazgo org={ORG} id={f.id} puedeEscribir />, { datos: [[['org', ORG, 'finding', f.id], f]] });
     expect(html).not.toContain('‮');
+    expect(html).toContain('<bdi dir="ltr">src/lib/⟨U+202E⟩sj.nimda</bdi>');
+  });
+
+  it('una ruta que empieza por una letra árabe va en <bdi dir="ltr"> (no en dir=auto) en «Dónde» y en el recurso del incidente', () => {
+    const ruta = 'مجلد/admin.js';
+    const f = { ...hallazgo(INOCENTE), resource: ruta };
+    const html = pintar(<DetalleHallazgo org={ORG} id={f.id} puedeEscribir />, { datos: [[['org', ORG, 'finding', f.id], f]] });
+    const i = { ...detalleIncidente(INOCENTE, false), resource: ruta };
+    const inc = pintar(<PaginaIncidente />, { ruta: `/o/${ORG}/incidents/${i.id}`, patron: '/o/:orgId/incidents/:incidentId', datos: [[['org', ORG, 'incident', i.id], i]] });
+    for (const h of [html, inc]) {
+      expect(h).toContain(`<bdi dir="ltr">${ruta}</bdi>`);
+      expect(h).not.toContain(`<bdi>${ruta}</bdi>`);
+    }
   });
 });
 
@@ -707,16 +1017,16 @@ describe('XSS · fechas con la carga (Ts es z.string())', () => {
       <DetalleHallazgo org={ORG} id={f.id} puedeEscribir />
       <LineaTiempo hitos={hitosDe(i)} resto={restoDe(i)} />
     </>, { datos: [[['org', ORG, 'finding', f.id], f]] });
-    expect(peligros(html)).toEqual([]);
-    const inc = pintar(<PaginaIncidente />, { ruta: `/o/${ORG}/incidents/${i.id}`, patron: '/o/:orgId/incidents/:incidentId', datos: [[['org', ORG, 'incident', i.id], i]] });
-    expect(peligros(inc)).toEqual([]);
+    expect(peligros(html, true)).toEqual([]);
+    const inc = pintar(<PaginaIncidente />, { ruta: `/o/${ORG}/incidents/${i.id}`, patron: '/o/:orgId/incidents/:incidentId', datos: [
+      [['org', ORG, 'incident', i.id], i], [['org', ORG, 'traffic'], envenenar(Traffic, fx.traffic, c, { fechas: true })]] });
+    expect(peligros(inc, true)).toEqual([]);
     for (const crudo of ['<img src=x', '<script>alert', '<svg onload']) { expect(html).not.toContain(crudo); expect(inc).not.toContain(crudo); }
   });
 
-  // HALLAZGO (baja, robustez): GraficaTrafico.tsx formatea `b.t` con Intl.DateTimeFormat.format(new Date(b.t)), que
-  // lanza RangeError con una fecha inválida y tumba la página del incidente y la de Cloudflare. Arreglo: usar cuando()/un
-  // guardia Number.isNaN(d.getTime()) → '—' como en lib/formato.ts.
-  it.skip('HALLAZGO GraficaTrafico: una cubeta con fecha inválida no rompe el render', () => {
+  // Antes era un HALLAZGO: Intl.DateTimeFormat.format lanzaba RangeError con una cubeta de fecha inválida y tumbaba el
+  // incidente y Cloudflare. Ahora esa cubeta sale «—».
+  it('GraficaTrafico: una cubeta con fecha inválida no rompe el render', () => {
     const t = envenenar(Traffic, fx.traffic, IMG, { fechas: true });
     expect(() => renderToStaticMarkup(<GraficaTrafico buckets={t.buckets} />)).not.toThrow();
   });

@@ -10,13 +10,14 @@ import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { FichaFila } from '@/componentes/vg/FichaFila';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { useHallazgo } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { esId } from '@/lib/ids';
 import { cuando } from '@/lib/formato';
 import { usePatchHallazgo } from '@/lib/mutaciones';
 import { porQueImporta, referencias } from '@/lib/reglas-texto';
-import type { Rol } from '@/lib/severidad';
+import { deMapa, type Rol } from '@/lib/severidad';
 import { PromptCorreccion } from './PromptCorreccion';
 
 const MODULO: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
@@ -67,14 +68,14 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
   if (!f) return <p className="text-texto-3" aria-busy="true">—</p>;
   const texto = porQueImporta(f.rule_id);
   const refs = referencias(f.evidence);
-  const estado = ESTADO[f.status];
+  const estado = deMapa(ESTADO, f.status, { texto: '—', rol: 'neutra' });
 
   return (
     <article className="flex flex-col gap-5">
       <header className="flex flex-col gap-2">
         <div className="flex flex-wrap gap-2">
           <ChapaSeveridad severity={f.severity} />
-          <Etiqueta texto={MODULO[f.module]} />
+          <Etiqueta texto={deMapa(MODULO, f.module, '—')} />
           <Etiqueta texto={f.confirmed ? 'Confirmado por regla' : 'Posible'} rol={f.confirmed ? 'neutra' : 'aviso'} />
           <Etiqueta texto={estado.texto} rol={estado.rol} />
         </div>
@@ -87,7 +88,7 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
       <section className="flex flex-col gap-2" aria-label="Dónde">
         <h3 className="text-[15px] font-semibold">Dónde</h3>
         <div className="flex flex-wrap items-center gap-2">
-          <code className="min-w-0 flex-1 rounded-lg border bg-card px-3 py-2 font-mono text-[13px] break-all">{f.resource}</code>
+          <code className="min-w-0 flex-1 rounded-lg border bg-card px-3 py-2 font-mono text-[13px] break-all"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></code>
           <BotonCopiar valor={f.resource} />
         </div>
       </section>

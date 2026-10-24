@@ -43,4 +43,10 @@ const rutas: RouteObject[] = [
   { path: '*', element: <NoEncontrada />, errorElement: <ErrorRuta /> },
 ];
 
-export const router = createBrowserRouter(rutas);
+// Mientras llega el chunk de la primera ruta no se pinta nada (como hasta ahora), pero declarado: sin HydrateFallback
+// react-router avisa en consola en cada carga, y es lo primero que ve quien abre DevTools.
+const Nada = () => null;
+const conEspera = (r: RouteObject): RouteObject =>
+  ({ ...(r.lazy ? { HydrateFallback: Nada } : {}), ...r, ...(r.children ? { children: r.children.map(conEspera) } : {}) }) as RouteObject;
+
+export const router = createBrowserRouter(rutas.map(conEspera));

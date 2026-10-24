@@ -8,12 +8,15 @@ import {
 import { z } from 'zod';
 import { api } from './api';
 import { USA_FIXTURES } from './env';
+import { esApiError } from './errores';
 import { esId } from './ids';
 import { useVivo } from './vivo';
 
 const base = { refetchIntervalInBackground: false, placeholderData: keepPreviousData } as const;
 // [respaldo, con Realtime] en ms
 const intervalo = (vivo: boolean, respaldo: number, conCanal: number) => (vivo ? conCanal : respaldo);
+// Un id que dio 404 no va a aparecer sondeando: se deja de pedir (cualquier otro error sigue con su intervalo).
+const es404 = (q: { state: { error: unknown } }) => esApiError(q.state.error) && q.state.error.status === 404;
 
 export const useMe = (habilitado = true) => useQuery({
   queryKey: ['me'], queryFn: () => api('/api/me', { esquema: Me }), staleTime: 60_000, enabled: habilitado,
@@ -88,7 +91,7 @@ export const useFixPrompt = (org: string, id: string, habilitado: boolean) => us
 export const useScan = (org: string, id: string | undefined) => useQuery({
   queryKey: ['org', org, 'scan', id], enabled: esId(id), refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/scans/${id}`, { esquema: ScanRun }),
-  refetchInterval: (q) => ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? (USA_FIXTURES ? 1_000 : 10_000) : false,
+  refetchInterval: (q) => !es404(q) && ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? (USA_FIXTURES ? 1_000 : 10_000) : false,
 });
 
 // Incidentes (E16–E17). `estado = 'all'` no manda status: el BACK devuelve las últimas 24 h.
@@ -105,7 +108,7 @@ export function useIncidente(org: string, id: string) {
   const vivo = useVivo();
   return useQuery({
     ...base, queryKey: ['org', org, 'incident', id], enabled: esId(id), queryFn: () => api(`/api/orgs/${org}/incidents/${id}`, { esquema: IncidentDetail }),
-    refetchInterval: USA_FIXTURES ? 2_000 : intervalo(vivo, 10_000, 60_000),   // fixtures: sin cupo, para ver llenarse los hitos
+    refetchInterval: (q) => es404(q) ? false : USA_FIXTURES ? 2_000 : intervalo(vivo, 10_000, 60_000),   // fixtures: sin cupo, para ver llenarse los hitos
   });
 }
 
@@ -123,8 +126,9 @@ export const useExportMd = (org: string) => useQuery({
 
 // Contactos: solo admin (E26). Para el viewer no se llama: el bloque dice que solo los ve un administrador.
 // `cadaMs`: espera activa mientras alguien verifica su teléfono por WhatsApp (5 s, solo con la pestaña visible).
+// gcTime de 1 min: el código de verificación no se queda 5 min en memoria tras salir de Ajustes.
 export const useContactos = (org: string, habilitado: boolean, cadaMs: number | false = false) => useQuery({
-  queryKey: ['org', org, 'contacts'], enabled: habilitado, refetchIntervalInBackground: false, refetchInterval: cadaMs,
+  queryKey: ['org', org, 'contacts'], enabled: habilitado, gcTime: 60_000, refetchIntervalInBackground: false, refetchInterval: cadaMs,
   queryFn: () => api(`/api/orgs/${org}/contacts`, { esquema: z.array(Contact) }),
 });
 
@@ -143,7 +147,7 @@ export const useWikiRuns = (org: string, repo: string | null) => useQuery({
 export const useWikiRun = (org: string, id: string | null) => useQuery({
   queryKey: ['org', org, 'wiki', 'run', id], enabled: esId(id), refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/wiki/runs/${id}`, { esquema: WikiRun }),
-  refetchInterval: (q) => ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? 3_000 : false,
+  refetchInterval: (q) => !es404(q) && ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? 3_000 : false,
 });
 
 export const useWikiDoc = (org: string, id: string | null, listo: boolean) => useQuery({

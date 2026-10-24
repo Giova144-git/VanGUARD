@@ -1,7 +1,8 @@
 // /o/:orgId/incidents/:incidentId (S14 §14.16), el corazón de la demo: ataque → WhatsApp (< 30 s) → aprobación (botón
 // del WhatsApp o código en el sitio) → bloqueo → «Deshacer». Dos columnas 60/40 desde 1280 px; apiladas por debajo.
+import type { ReactNode } from 'react';
 import { useParams, Link } from 'react-router';
-import { ArrowLeft, Bell, BellOff, Eye, MessageCircle, Phone } from 'lucide-react';
+import { ArrowLeft, Bell, BellOff, Eye, MessageCircle, Phone, Send } from 'lucide-react';
 import type { ActionKind, ActionStatus, Channel, IncidentDetail, NotificationPublic } from '@vanguard/contracts';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { Cronometro } from '@/componentes/vg/Cronometro';
@@ -12,18 +13,22 @@ import { LineaTiempo } from '@/componentes/vg/LineaTiempo';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useIncidente, useTrafico } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
 import { useAccionIncidente } from '@/lib/mutaciones';
 import { porQueImporta } from '@/lib/reglas-texto';
+import { deMapa } from '@/lib/severidad';
 import { ActivarBlindaje } from '@/modulos/conexiones/ActivarBlindaje';
 import { BloquearIp } from './BloquearIp';
 import { finDe, hitosDe, restoDe, t0De } from './hitos';
-import { ESTADO_INC } from './PaginaIncidentes';
+import { estadoInc } from './PaginaIncidentes';
 import { BotonSimularWhatsApp } from './Simulacion';
 
+// Un canal, tipo o estado fuera de contrato (api() en producción no corta el cuerpo), «__proto__» incluido, sale con icono
+// genérico o su texto crudo y neutro (L3), no como TypeError: siempre deMapa, nunca `MAPA[k] ?? respaldo`.
 const ICONO: Record<Channel, typeof MessageCircle> = { in_app: Bell, whatsapp: MessageCircle, voice: Phone };
 const NOMBRE_CANAL: Record<Channel, string> = { in_app: 'En la app', whatsapp: 'WhatsApp', voice: 'Llamada' };
 const TIPO_ACCION: Record<ActionKind, string> = {
@@ -31,6 +36,7 @@ const TIPO_ACCION: Record<ActionKind, string> = {
   under_attack_off: 'Under Attack desactivado', rate_limit: 'Límite de peticiones',
 };
 const ESTADO_ACCION: Record<ActionStatus, string> = { executed: 'Activo', undone: 'Deshecho', proposed: 'En curso', failed: 'Falló' };
+const crudo = (v: unknown) => (typeof v === 'string' && v ? v : '—');
 
 // Sin acción al lado (no hay reenvío), así que todo va en neutro (L3): el texto ya dice qué pasó.
 function estadoAviso(n: NotificationPublic): string {
@@ -72,23 +78,85 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
   );
 }
 
-export default function PaginaIncidente() {
+// Solo se monta con el incidente cargado: un id inexistente no sondea el tráfico detrás de NoEncontrada.
+function Trafico({ org, ip }: { org: string; ip: string | null }) {
+  const trafico = useTrafico(org);
+  return (
+    <section className="flex flex-col gap-3" aria-label="Tráfico">
+      <h3 className="text-[17px] font-semibold">Tráfico (5 min)</h3>
+      {trafico.data ? <>
+        <GraficaTrafico buckets={trafico.data.buckets} />
+        <TablaTopIps ips={trafico.data.top_ips} resaltar={ip} />
+      </> : trafico.isError ? <ErrorBloque error={trafico.error} onReintentar={() => trafico.refetch()} /> : <div className="h-52 rounded-xl border bg-card" />}
+    </section>
+  );
+}
+
+function Volver({ org }: { org: string }) {
+  return (
+    <Link to={`/o/${org}/incidents`} className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
+      <ArrowLeft className="size-4" />Incidentes
+    </Link>
+  );
+}
+
+const Bloque = ({ c }: { c: string }) => <span className={`rounded-lg bg-muted ${c}`} />;
+const Caja = ({ titulo, children }: { titulo: string; children: ReactNode }) => (
+  <div className="flex flex-col gap-2 rounded-xl border bg-card p-5"><h3 className="text-[15px] font-semibold">{titulo}</h3>{children}</div>
+);
+
+// Carga de un incidente que no está en caché (de A a B con «Ver ahora», por el key): la misma rejilla y alto aproximado
+// con bloques, no una línea «—» que colapsa la página y la vuelve a estirar (L7). Sin consultas: solo useIncidente pide.
+function Esqueleto({ org }: { org: string }) {
+  return (
+    <div className="flex flex-col gap-6" aria-busy="true">
+      <Volver org={org} />
+      <p className="sr-only">Cargando el incidente…</p>
+      <div className="grid gap-6 xl:grid-cols-[3fr_2fr]" aria-hidden="true">
+        <div className="flex min-w-0 flex-col gap-6">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2"><Bloque c="h-8 w-24" /><Bloque c="h-5 w-16" /><Bloque c="h-6 w-20" /></div>
+            <Bloque c="h-8 w-3/4" />
+            <Bloque c="h-5 w-44" />
+          </div>
+          <div className="flex flex-col gap-1 rounded-xl border bg-card p-5"><Bloque c="h-5 w-40" /><Bloque c="h-15 w-56" /></div>
+          <div className="flex flex-col gap-3">
+            <h3 className="text-[17px] font-semibold">Línea de tiempo</h3>
+            <div className="flex flex-col">{[0, 1, 2, 3].map((k) => <Bloque key={k} c="mb-3 h-11" />)}</div>
+          </div>
+          <div className="flex flex-col gap-3 rounded-xl border bg-card p-5">
+            <div className="flex flex-wrap gap-3"><Bloque c="h-14 w-48" /><Bloque c="h-14 w-40" /></div>
+            <Bloque c="h-14 w-56" />
+          </div>
+          <div className="flex flex-col gap-3">
+            <h3 className="text-[17px] font-semibold">Tráfico (5 min)</h3>
+            <span className="h-52 rounded-xl border bg-muted" />
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-col gap-6">
+          <Caja titulo="Reglas que dispararon"><Bloque c="h-6 w-32" /><Bloque c="h-5 w-full" /></Caja>
+          <Caja titulo="Avisos enviados"><Bloque c="h-5 w-full" /><Bloque c="h-5 w-full" /></Caja>
+          <Caja titulo="Acciones"><Bloque c="h-5 w-full" /></Caja>
+          <Caja titulo="Detalles"><Bloque c="h-24 w-full" /></Caja>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Detalle({ incidentId }: { incidentId: string }) {
   const org = useOrg();
-  const { incidentId = '' } = useParams();
   const q = useIncidente(org.id, incidentId);
-  const trafico = useTrafico(org.id);
   if (!esId(incidentId) || (q.isError && esApiError(q.error) && q.error.status === 404)) return <NoEncontrada texto="Este incidente no existe o no es de esta organización" />;
   if (q.isError && !q.data) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   const i = q.data;
-  if (!i) return <p className="text-texto-3" aria-busy="true">—</p>;
-  const est = ESTADO_INC[i.status];
+  if (!i) return <Esqueleto org={org.id} />;
+  const est = estadoInc(i.status);
   const ip = i.resource.startsWith('ip:') ? i.resource.slice(3) : null;
 
   return (
     <div className="flex flex-col gap-6">
-      <Link to={`/o/${org.id}/incidents`} className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="size-4" />Incidentes
-      </Link>
+      <Volver org={org.id} />
       <div className="grid gap-6 xl:grid-cols-[3fr_2fr]">
         <div className="flex min-w-0 flex-col gap-6">
           <header className="flex flex-col gap-2">
@@ -98,7 +166,9 @@ export default function PaginaIncidente() {
               <Etiqueta texto={est.texto} rol={est.rol} />
             </div>
             <h2 className="text-[22px] font-semibold">{i.title}</h2>
-            {ip ? <p className="font-mono text-[15px]">{ip}</p> : <p className="font-mono text-[13px] text-muted-foreground">{i.resource}</p>}
+            {/* dir="ltr": un <bdi> sin dir vale dir=auto y una primera letra árabe o hebrea reordenaría la ruta o la IP. */}
+            {ip ? <p className="font-mono text-[15px]"><bdi dir="ltr">{sinBidi(ip)}</bdi></p>
+              : <p className="font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(i.resource)}</bdi></p>}
           </header>
           <section className="flex flex-col gap-1 rounded-xl border bg-card p-5" aria-label="Cronómetro">
             <span className="text-[12.5px] font-medium text-muted-foreground">{finDe(i) ? 'Del ataque al bloqueo' : 'Desde el primer ataque'}</span>
@@ -109,13 +179,7 @@ export default function PaginaIncidente() {
             <LineaTiempo hitos={hitosDe(i)} resto={restoDe(i)} />
           </section>
           <Acciones i={i} org={org.id} puedeEscribir={org.puedeEscribir} />
-          <section className="flex flex-col gap-3" aria-label="Tráfico">
-            <h3 className="text-[17px] font-semibold">Tráfico (5 min)</h3>
-            {trafico.data ? <>
-              <GraficaTrafico buckets={trafico.data.buckets} />
-              <TablaTopIps ips={trafico.data.top_ips} resaltar={ip} />
-            </> : trafico.isError ? <ErrorBloque error={trafico.error} onReintentar={() => trafico.refetch()} /> : <div className="h-52 rounded-xl border bg-card" />}
-          </section>
+          <Trafico org={org.id} ip={ip} />
         </div>
         <aside className="flex min-w-0 flex-col gap-6">
           <section className="flex flex-col gap-2 rounded-xl border bg-card p-5" aria-label="Reglas que dispararon">
@@ -132,10 +196,10 @@ export default function PaginaIncidente() {
             {i.notifications.length === 0 ? <p className="text-sm text-muted-foreground">Aún no enviamos avisos.</p> : (
               <ul className="flex flex-col gap-2">
                 {i.notifications.map((n) => {
-                  const Icono = ICONO[n.channel];
+                  const Icono = deMapa(ICONO, n.channel, Send);
                   return (
                     <li key={n.id} className="flex flex-wrap items-center gap-2 text-sm">
-                      <Icono className="size-4 text-muted-foreground" aria-label={NOMBRE_CANAL[n.channel]} />
+                      <Icono className="size-4 text-muted-foreground" aria-label={deMapa(NOMBRE_CANAL, n.channel, 'Otro canal')} />
                       <span className="font-mono text-[13px]">{n.recipient_masked}</span>
                       <Etiqueta texto={estadoAviso(n)} />
                       <span className="ml-auto text-[12.5px] text-texto-3 tabular-nums">{cuando(n.created_at)}</span>
@@ -151,9 +215,9 @@ export default function PaginaIncidente() {
               <ul className="flex flex-col gap-2">
                 {i.actions.map((a) => (
                   <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="font-medium">{TIPO_ACCION[a.kind] ?? a.kind}</span>
-                    <span className="font-mono text-[13px]">{a.target}</span>
-                    <Etiqueta texto={ESTADO_ACCION[a.status] ?? a.status} rol={a.status === 'executed' ? 'bien' : 'neutra'} />
+                    <span className="font-medium">{deMapa(TIPO_ACCION, a.kind, crudo(a.kind))}</span>
+                    <span className="font-mono text-[13px]"><bdi dir="ltr">{sinBidi(a.target)}</bdi></span>
+                    <Etiqueta texto={deMapa(ESTADO_ACCION, a.status, crudo(a.status))} rol={a.status === 'executed' ? 'bien' : 'neutra'} />
                     {a.approval_id ? <span className="text-[12.5px] text-texto-3">aprobado</span> : null}
                     <span className="ml-auto text-[12.5px] text-texto-3 tabular-nums">{cuando(a.created_at)}{a.expires_at ? ` · caduca ${cuando(a.expires_at)}` : ''}</span>
                   </li>
@@ -171,4 +235,11 @@ export default function PaginaIncidente() {
       </div>
     </div>
   );
+}
+
+// key por id, como Corrida en PaginaAuditoria: al pasar de un incidente a otro no se pinta el anterior (keepPreviousData)
+// bajo la URL del siguiente, con sus botones apuntando al id viejo.
+export default function PaginaIncidente() {
+  const { incidentId = '' } = useParams();
+  return <Detalle key={incidentId} incidentId={incidentId} />;
 }

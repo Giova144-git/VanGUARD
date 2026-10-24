@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ChevronRight, KeyRound, ShieldCheck } from 'lucide-react';
-import type { Finding, Module, ScanRun } from '@vanguard/contracts';
+import type { Finding, Module, ScanRun, Severity } from '@vanguard/contracts';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
@@ -21,9 +21,12 @@ import { cronometro, cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
-import { ESTADO_SCAN, PINTA_PASO, TEXTO_PASO, estadoPaso } from './pasos';
+import { deMapa } from '@/lib/severidad';
+import { PINTA_PASO, estadoPaso, estadoScan, textoPaso } from './pasos';
 
-const ORDEN_SEV = { critical: 0, high: 1, medium: 2, low: 3, info: 4 } as const;
+// Una severidad fuera de contrato va al final, no da NaN al ordenar.
+const ORDEN_SEV: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+const orden = (s: unknown) => deMapa(ORDEN_SEV, s, 5);
 const PROVEEDOR: Partial<Record<Module, string>> = { supabase: 'supabase', cloudflare: 'cloudflare', codebase: 'github' };
 
 function useLanzarYNavegar() {
@@ -34,10 +37,10 @@ function useLanzarYNavegar() {
   const auditar = () => {
     setError(null);
     lanzar.mutate({ kind: 'full_audit' }, {
-      onSuccess: (r) => navegar(`/o/${org.id}/audit/${r.scan_run_id}`),
+      onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),
       onError: (e) => {
         const enCurso = esApiError(e) && e.code === 'conflict' && typeof e.details?.scan_run_id === 'string' ? e.details.scan_run_id : null;
-        if (enCurso) navegar(`/o/${org.id}/audit/${enCurso}`); else setError(mensajeDe(e));
+        if (enCurso) navegar(`/o/${org.id}/audit/${encodeURIComponent(enCurso)}`); else setError(mensajeDe(e));
       },
     });
   };
@@ -49,6 +52,7 @@ function Lanzar() {
   const overview = useOverview(org.id);
   const { auditar, ocupado, error } = useLanzarYNavegar();
   const ultima = overview.data?.last_scan;
+  const aUltima = ultima ? `/o/${org.id}/audit/${encodeURIComponent(ultima.id)}` : '';
   return (
     <div className="flex flex-col gap-6">
       <BarraModulo titulo="Auditoría" descripcion="Revisa todo el ecosistema con un botón." />
@@ -56,8 +60,8 @@ function Lanzar() {
         <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={ocupado}
           disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
         <p className="text-[15px] text-muted-foreground">Revisamos Supabase, Cloudflare y tu repo, y Claude resume lo más urgente. Tarda unos minutos.</p>
-        {error ? <p role="alert" className="text-sm text-mal">{error}{ultima ? <> · <Link className="underline" to={`/o/${org.id}/audit/${ultima.id}`}>Mira la última</Link></> : null}</p> : null}
-        {ultima ? <Link to={`/o/${org.id}/audit/${ultima.id}`} className="text-sm font-medium text-info underline underline-offset-4">Ver la última auditoría ({cuando(ultima.finished_at)})</Link> : null}
+        {error ? <p role="alert" className="text-sm text-mal">{error}{ultima ? <> · <Link className="underline" to={aUltima}>Mira la última</Link></> : null}</p> : null}
+        {ultima ? <Link to={aUltima} className="text-sm font-medium text-info underline underline-offset-4">Ver la última auditoría ({cuando(ultima.finished_at)})</Link> : null}
       </section>
       <GuiaModulo id="audit" />
     </div>
@@ -78,7 +82,7 @@ function Pasos({ run }: { run: ScanRun }) {
   return (
     <ol className="overflow-hidden rounded-xl border bg-card" aria-label="Pasos de la auditoría">
       {run.steps.map((s) => {
-        const t = TEXTO_PASO[s.name];
+        const t = textoPaso(s.name);
         const e = estadoPaso(run, s);
         const p = PINTA_PASO[e];
         const prov = t.modulo ? PROVEEDOR[t.modulo] : undefined;
@@ -117,7 +121,7 @@ function Resumen({ run, porId }: { run: ScanRun; porId: Map<string, Finding> }) 
         <ol className="flex flex-col gap-2">
           {s.top.map((t) => (
             <li key={t.finding_id} className="flex flex-col gap-0.5">
-              <Link to={`?finding=${t.finding_id}`} className="inline-flex w-fit items-center gap-1 text-[15px] font-medium text-info underline underline-offset-4">
+              <Link to={`?finding=${encodeURIComponent(t.finding_id)}`} className="inline-flex w-fit items-center gap-1 text-[15px] font-medium text-info underline underline-offset-4">
                 {porId.get(t.finding_id)?.title ?? 'Ver hallazgo'}<ChevronRight className="size-4" /></Link>
               <span className="text-sm text-muted-foreground">{t.por_que}</span>
             </li>
@@ -130,7 +134,7 @@ function Resumen({ run, porId }: { run: ScanRun; porId: Map<string, Finding> }) 
           {s.relaciones.map((r, i) => (
             <li key={i} className="flex flex-col gap-1.5">
               <div className="flex flex-wrap gap-1.5">{r.finding_ids.map((id) => (
-                <Link key={id} to={`?finding=${id}`} className="inline-flex h-6 items-center rounded-lg border px-2 text-[12.5px] font-medium hover:bg-muted">{porId.get(id)?.rule_id ?? 'hallazgo'}</Link>
+                <Link key={id} to={`?finding=${encodeURIComponent(id)}`} className="inline-flex h-6 items-center rounded-lg border px-2 text-[12.5px] font-medium hover:bg-muted">{porId.get(id)?.rule_id ?? 'hallazgo'}</Link>
               ))}</div>
               <span className="text-sm text-muted-foreground">{r.explicacion}</span>
             </li>
@@ -154,10 +158,11 @@ function Corrida({ id }: { id: string }) {
     return <NoEncontrada texto="Esta auditoría no existe o no es de esta organización" />;
   if (q.isError && !run) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   if (!run) return <p className="text-texto-3" aria-busy="true">—</p>;
-  const est = ESTADO_SCAN[run.status];
-  const actual = run.step && run.step in TEXTO_PASO ? TEXTO_PASO[run.step as keyof typeof TEXTO_PASO].nombre : run.step;
+  const est = estadoScan(run.status);
+  // `in` también da true con «__proto__» o «constructor»: textoPaso usa Object.hasOwn y, si no, el texto crudo.
+  const actual = typeof run.step === 'string' && run.step ? textoPaso(run.step).nombre : null;
   const terminada = run.status === 'succeeded';
-  const ordenados = [...(hallazgos.data ?? [])].sort((a, b) => ORDEN_SEV[a.severity] - ORDEN_SEV[b.severity]);
+  const ordenados = [...(hallazgos.data ?? [])].sort((a, b) => orden(a.severity) - orden(b.severity));
 
   return (
     <div className="flex flex-col gap-6">
@@ -200,7 +205,7 @@ function Corrida({ id }: { id: string }) {
                   <span className="text-[15px] font-medium">{f.title}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground">{f.resource}</span>
                 </div>
-                <Link to={`?finding=${f.id}`} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info hover:bg-info/15">Ver y corregir<ChevronRight className="size-4" /></Link>
+                <Link to={`?finding=${encodeURIComponent(f.id)}`} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info hover:bg-info/15">Ver y corregir<ChevronRight className="size-4" /></Link>
               </li>
             ))}
           </ul>

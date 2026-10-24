@@ -101,9 +101,11 @@ export function useBloqueo(org: string) {
   };
 }
 
+// gcTime de 1 min, como useContactos: la respuesta trae verificacion.codigo y no se queda 5 min en el caché de mutaciones.
 export function useGuardarContactos(org: string) {
   const qc = useQueryClient();
   return useMutation({
+    gcTime: 60_000,
     mutationFn: (lista: ContactIn[]) => api(`/api/orgs/${org}/contacts`, { method: 'PUT', body: lista, esquema: z.array(Contact) }),
     onSuccess: (r) => qc.setQueryData(['org', org, 'contacts'], r),
   });

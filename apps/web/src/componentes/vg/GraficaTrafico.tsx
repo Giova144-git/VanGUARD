@@ -1,12 +1,15 @@
 // Tráfico de los últimos 5 min en cubetas de 10 s (S14 §14.16): áreas apiladas OK / 4xx / 5xx, sin animación.
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { Traffic } from '@vanguard/contracts';
-import { miles } from '@/lib/formato';
+import { sinBidi } from '@/lib/bidi';
+import { SIN_DATO, miles } from '@/lib/formato';
 
 const hhmmss = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+// Intl lanza RangeError con una fecha inválida (Ts es z.string()): esa cubeta sale «—» y la página sigue en pie.
+const hora = (t: string) => { const d = new Date(t); return Number.isNaN(d.getTime()) ? SIN_DATO : hhmmss.format(d); };
 
 export function GraficaTrafico({ buckets }: { buckets: Traffic['buckets'] }) {
-  const datos = buckets.map((b) => ({ t: hhmmss.format(new Date(b.t)), ok: Math.max(0, b.n - b.n4xx - b.n5xx), n4xx: b.n4xx, n5xx: b.n5xx }));
+  const datos = buckets.map((b) => ({ t: hora(b.t), ok: Math.max(0, b.n - b.n4xx - b.n5xx), n4xx: b.n4xx, n5xx: b.n5xx }));
   const total = buckets.reduce((s, b) => s + b.n, 0);
   return (
     <figure className="flex flex-col gap-2">
@@ -36,16 +39,17 @@ export function GraficaTrafico({ buckets }: { buckets: Traffic['buckets'] }) {
 }
 
 // Top de IPs (IP en mono, peticiones, UA recortado a 60). La IP del incidente va resaltada en tinte info con borde
-// (el relleno solo no se distingue en proyector); el offset negativo evita que el overflow-hidden lo recorte.
+// (el relleno solo no se distingue en proyector); el offset negativo evita que el overflow-hidden lo recorte. IP y UA
+// llevan los controles bidi a la vista; la acción recibe la IP tal cual.
 export function TablaTopIps({ ips, resaltar, accion }: { ips: Traffic['top_ips']; resaltar?: string | null; accion?: (ip: string) => React.ReactNode }) {
   if (ips.length === 0) return <p className="text-sm text-muted-foreground">Sin tráfico en los últimos 5 minutos.</p>;
   return (
     <ul className="overflow-hidden rounded-xl border bg-card" aria-label="IPs con más peticiones">
       {ips.map((x) => (
         <li key={x.ip} className={`flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2.5 last:border-b-0 ${x.ip === resaltar ? 'bg-info-relleno outline-2 -outline-offset-2 outline-info' : ''}`}>
-          <span className={`font-mono text-[13px] font-medium ${x.ip === resaltar ? 'text-info' : ''}`}>{x.ip}</span>
+          <span className={`font-mono text-[13px] font-medium ${x.ip === resaltar ? 'text-info' : ''}`}><bdi dir="ltr">{sinBidi(x.ip)}</bdi></span>
           <span className="text-sm tabular-nums">{miles(x.n)}</span>
-          <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-texto-3" title={x.ua_top ?? undefined}>{x.ua_top ? x.ua_top.slice(0, 60) : '—'}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-texto-3" title={x.ua_top ? sinBidi(x.ua_top) : undefined}>{x.ua_top ? <bdi dir="ltr">{sinBidi(x.ua_top.slice(0, 60))}</bdi> : '—'}</span>
           {accion?.(x.ip)}
         </li>
       ))}

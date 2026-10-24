@@ -22,14 +22,17 @@ import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
+import { deMapa } from '@/lib/severidad';
 
+// Un módulo de overview.ahora fuera de contrato (o «__proto__») sale «—» neutro: deMapa, no NOMBRE[k].
 const NOMBRE: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
 
 function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
-  const href = item.kind === 'incident' ? `/o/${org}/incidents/${item.id}` : `?finding=${item.id}`;   // el detalle se abre encima
+  const id = encodeURIComponent(item.id);
+  const href = item.kind === 'incident' ? `/o/${org}/incidents/${id}` : `?finding=${id}`;   // el detalle se abre encima
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
-      <Etiqueta texto={NOMBRE[item.module]} />
+      <Etiqueta texto={deMapa(NOMBRE, item.module, '—')} />
       <ChapaSeveridad severity={item.severity} />
       <div className="flex min-w-0 flex-1 flex-col" title={item.rule_id}>
         <span className="text-[15px] font-medium">{item.title}</span>
@@ -82,10 +85,10 @@ export default function PaginaResumen() {
   const auditar = () => {
     setErrorAuditar(null);
     lanzar.mutate({ kind: 'full_audit' }, {
-      onSuccess: (r) => navegar(`/o/${org.id}/audit/${r.scan_run_id}`),
+      onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),
       onError: (err) => {
         const enCurso = esApiError(err) && err.code === 'conflict' && typeof err.details?.scan_run_id === 'string' ? err.details.scan_run_id : null;
-        if (enCurso) navegar(`/o/${org.id}/audit/${enCurso}`);              // ya hay una del mismo tipo corriendo
+        if (enCurso) navegar(`/o/${org.id}/audit/${encodeURIComponent(enCurso)}`);   // ya hay una del mismo tipo corriendo
         else setErrorAuditar(mensajeDe(err));                               // 429 budget_exceeded: el mensaje del servidor
       },
     });
@@ -106,7 +109,7 @@ export default function PaginaResumen() {
           {errorAuditar ? <span role="alert" className="max-w-xs text-sm text-mal">{errorAuditar}</span> : null}
           {o?.last_scan ? (
             <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}
-              <Link to={`/o/${org.id}/audit/${o.last_scan.id}`} className="font-medium text-info underline underline-offset-4">Ver</Link></span>
+              <Link to={`/o/${org.id}/audit/${encodeURIComponent(o.last_scan.id)}`} className="font-medium text-info underline underline-offset-4">Ver</Link></span>
           ) : null}
         </div>
       </section>

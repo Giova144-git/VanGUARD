@@ -52,7 +52,9 @@ function Formulario({ modo }: { modo: Modo }) {
       if (r.error) { setError(traducir(r.error, modo)); return; }
       if (!r.data.session) { setError('Tu cuenta quedó creada, pero falta confirmarla. Escríbenos si no te llega nada.'); return; }
       const me = await qc.fetchQuery({ queryKey: ['me'], queryFn: () => api('/api/me', { esquema: Me }), staleTime: 0 });
-      navegar(destinoTrasEntrar(me, params.get('next')), { replace: true });
+      // Si react-router rechaza next (navegación externa, por ejemplo), el rechazo no se pierde: al destino por defecto.
+      try { await navegar(destinoTrasEntrar(me, params.get('next')), { replace: true }); }
+      catch { await navegar(destinoTrasEntrar(me, null), { replace: true }); }
     } catch (e) {
       setError(mensajeDe(e));
     } finally {

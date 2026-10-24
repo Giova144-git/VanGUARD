@@ -17,6 +17,7 @@ import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useWikiDoc, useWikiRun, useWikiRuns } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { esId } from '@/lib/ids';
@@ -25,6 +26,7 @@ import { Markdown } from '@/lib/markdown';
 import { comoMarkdown, topeUsd } from './texto';
 import { useEstimarWiki, useGenerarWiki } from '@/lib/mutaciones';
 import { extraerRepo } from '@/lib/pre-guardas';
+import { deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 
 const PASO: Record<WikiRun['steps'][number]['name'], string> = {
@@ -57,7 +59,7 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado }: {   //
           <span className="text-muted-foreground"> · {miles(e.est.input_tokens)} tokens de entrada y {miles(e.est.output_tokens)} de salida</span></p>
         <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
           {e.est.desglose.map((d) => (
-            <li key={d.paso} className="flex flex-wrap gap-x-2"><span className="font-medium text-foreground">{PASO[d.paso]}</span>
+            <li key={d.paso} className="flex flex-wrap gap-x-2"><span className="font-medium text-foreground">{deMapa(PASO, d.paso, '—')}</span>
               <span className="font-mono text-[12.5px]">{d.modelo}</span><span>· {d.llamadas} {d.llamadas === 1 ? 'llamada' : 'llamadas'} · {usd(d.usd)}</span></li>
           ))}
         </ul>
@@ -98,8 +100,8 @@ function Progreso({ run, alReintentar, puedeEscribir }: { run: WikiRun; alReinte
           <li key={s.name} className="flex flex-wrap items-center gap-3 text-sm">
             <PuntoEstado rol={s.status === 'done' ? 'bien' : s.status === 'running' ? 'info' : s.status === 'failed' ? 'aviso' : 'neutra'}
               hueco={s.status === 'pending' || s.status === 'skipped'} girando={s.status === 'running'} />
-            <span className="font-medium">{PASO[s.name]}</span>
-            <span className="text-sm text-muted-foreground">{ESTADO_PASO[s.status]}</span>
+            <span className="font-medium">{deMapa(PASO, s.name, '—')}</span>
+            <span className="text-sm text-muted-foreground">{deMapa(ESTADO_PASO, s.status, '—')}</span>
             {s.detalle ? <span className="text-muted-foreground">{s.detalle}</span> : null}
           </li>
         ))}
@@ -141,14 +143,14 @@ function Documento({ d }: { d: WikiDoc }) {
           <CollapsiblePrimitive.Root key={p.id} className="rounded-xl border">
             <CollapsiblePrimitive.Trigger className="group flex min-h-14 w-full items-center gap-3 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <FileText className="size-4 text-info" />
-              <span className="flex flex-1 flex-col"><span className="text-[15px] font-semibold">{p.titulo}</span><span className="text-[12.5px] text-texto-3">{p.area}</span></span>
+              <span className="flex flex-1 flex-col"><span className="text-[15px] font-semibold">{p.titulo}</span><span className="text-[12.5px] text-texto-3"><bdi dir="ltr">{sinBidi(p.area)}</bdi></span></span>
               <ChevronDown className="size-5 text-texto-3 transition-transform group-data-[state=open]:rotate-180" />
             </CollapsiblePrimitive.Trigger>
             <CollapsiblePrimitive.Content className="flex flex-col gap-3 px-4 pb-4">
               <Markdown md={p.resumen_md} />
               <details className="text-sm">
                 <summary className="cursor-pointer font-medium text-muted-foreground">Archivos ({p.archivos.length})</summary>
-                <ul className="mt-2 flex flex-col gap-0.5">{p.archivos.map((a) => <li key={a} className="font-mono text-[12.5px] break-all">{a}</li>)}</ul>
+                <ul className="mt-2 flex flex-col gap-0.5">{p.archivos.map((a) => <li key={a} className="font-mono text-[12.5px] break-all"><bdi dir="ltr">{sinBidi(a)}</bdi></li>)}</ul>
               </details>
             </CollapsiblePrimitive.Content>
           </CollapsiblePrimitive.Root>
@@ -164,7 +166,7 @@ function Documento({ d }: { d: WikiDoc }) {
 
 function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string | null; alElegir: (id: string) => void }) {
   if (runs.length === 0) return <p className="text-sm text-muted-foreground">Aún no hay wikis de este repo.</p>;
-  const ESTADO = { queued: 'En cola', running: 'Generando', succeeded: 'Lista', failed: 'Falló' } as const;
+  const ESTADO: Record<WikiRun['status'], string> = { queued: 'En cola', running: 'Generando', succeeded: 'Lista', failed: 'Falló' };
   return (
     <ul className="overflow-hidden rounded-xl border bg-card" aria-label="Historial de wikis">
       {runs.map((r) => (
@@ -173,7 +175,7 @@ function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string
             className={cn('flex min-h-12 w-full flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2 text-left last:border-b-0 hover:bg-muted', r.id === actual && 'bg-info-relleno')}>
             <span className="font-mono text-[13px]">{corto(r.commit_sha)}</span>
             <span className="text-sm text-muted-foreground">{r.branch ?? '—'}</span>
-            <Etiqueta texto={ESTADO[r.status]} rol={r.status === 'failed' ? 'aviso' : 'neutra'} />
+            <Etiqueta texto={deMapa(ESTADO, r.status, '—')} rol={r.status === 'failed' ? 'aviso' : 'neutra'} />
             {r.cached || r.cost_usd === 0 ? <Etiqueta texto="caché" rol="info" /> : null}
             <span className="ml-auto text-sm tabular-nums">{r.cost_usd == null ? '—' : usd(r.cost_usd)}</span>
             <span className="text-[12.5px] text-texto-3 tabular-nums">{cuando(r.created_at)}</span>

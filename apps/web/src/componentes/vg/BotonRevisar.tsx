@@ -18,10 +18,11 @@ export function BotonRevisar({ kind, titulo, descripcion }: { kind: Extract<Scan
       <BotonGrande icono={ShieldCheck} titulo={titulo} descripcion={descripcion} ocupado={lanzar.isPending}
         deshabilitado={org.puedeEscribir ? undefined : SOLO_LECTURA}
         onClick={() => { setError(null); lanzar.mutate({ kind }, {
-          onSuccess: (r) => navegar(`/o/${org.id}/audit/${r.scan_run_id}`),
+          // Ids codificados, como useLanzarYNavegar: un id con «../», «?» o «#» no saca la navegación de /audit/.
+          onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),
           onError: (e) => {
             const enCurso = esApiError(e) && e.code === 'conflict' && typeof e.details?.scan_run_id === 'string' ? e.details.scan_run_id : null;
-            if (enCurso) navegar(`/o/${org.id}/audit/${enCurso}`); else setError(mensajeDe(e));
+            if (enCurso) navegar(`/o/${org.id}/audit/${encodeURIComponent(enCurso)}`); else setError(mensajeDe(e));
           },
         }); }} />
       {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}

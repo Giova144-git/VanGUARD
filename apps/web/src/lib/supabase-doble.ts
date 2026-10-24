@@ -7,12 +7,14 @@ const CLAVE = 'vg-fx-sesion';
 const leer = (): Tipo | null => {
   try { const v = sessionStorage.getItem(CLAVE); return v === 'correo' || v === 'anonima' ? v : null; } catch { return null; }
 };
-let tipo: Tipo | null = leer();
+// Se lee en el primer uso y no al cargar el módulo: así el tree-shaking lo quita del bundle de producción.
+let tipo: Tipo | null | undefined;
+const actual = () => (tipo === undefined ? (tipo = leer()) : tipo);
 const oyentes = new Set<Oyente>();
 
-const sesion = () => tipo && {
+const sesion = () => actual() && {
   access_token: 'fixture', token_type: 'bearer', expires_in: 3600, refresh_token: 'fixture',
-  user: tipo === 'correo'
+  user: actual() === 'correo'
     ? { id: 'fx-admin', email: 'demo@vanguard.test', is_anonymous: false }
     : { id: 'fx-anon', email: undefined, is_anonymous: true },
 };
@@ -24,7 +26,7 @@ const poner = (t: Tipo | null) => {
 };
 const fallo = (message: string, code: string) => ({ data: { session: null, user: null }, error: { message, code, status: 400 } });
 
-export const tipoSesionFalsa = () => tipo;
+export const tipoSesionFalsa = actual;
 
 export function dobleSupabase() {
   // Canal mudo: nunca llama al callback, así suscribirOrg no reintenta y a los 10 s avisa que va por el respaldo.

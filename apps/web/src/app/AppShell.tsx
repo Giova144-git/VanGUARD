@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { Check, ChevronsUpDown, Clock, LogOut, PanelLeft, Search, Siren, TriangleAlert, WifiOff } from 'lucide-react';
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { Module, Overview } from '@vanguard/contracts';
+import type { Module, Overview, Role } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/componentes/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/componentes/ui/sheet';
@@ -15,12 +15,14 @@ import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { cuando } from '@/lib/formato';
 import { MARCA } from '@/lib/marca';
 import { NAV, entradaNav, type EntradaNav, type IdNav } from '@/lib/nav';
+import { deMapa } from '@/lib/severidad';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { useOrg } from './guardas';
 import { Marca } from './Marca';
 
-const ROL_TEXTO = { owner: 'Dueño', admin: 'Admin', viewer: 'Solo lectura' } as const;
+// Un rol fuera de contrato (o «__proto__») en /api/me sale «—»: deMapa, no ROL_TEXTO[k].
+const ROL_TEXTO: Record<Role, string> = { owner: 'Dueño', admin: 'Admin', viewer: 'Solo lectura' };
 const CLAVE_RIEL = 'vg-riel';
 
 // Cuenta fallos seguidos de una consulta: se reinicia con cada respuesta buena.
@@ -122,7 +124,7 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
         </span>
         {compacto ? null : <div className="flex items-center gap-2 px-1">
           <span className="flex-1 truncate text-sm">{org.me.user.email ?? 'Invitado · demo'}</span>
-          <Etiqueta texto={ROL_TEXTO[org.role]} rol={org.role === 'viewer' ? 'neutra' : 'info'} />
+          <Etiqueta texto={deMapa(ROL_TEXTO, org.role, '—')} rol={org.role === 'owner' || org.role === 'admin' ? 'info' : 'neutra'} />
         </div>}
         <Button variant="fantasma" size="fila" onClick={salir} className={cn('justify-start text-muted-foreground', compacto && 'size-11 justify-center px-0')} aria-label="Cerrar sesión">
           <LogOut />{compacto ? null : 'Cerrar sesión'}
@@ -133,13 +135,15 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
 }
 
 function FilaEstado({ overview, fallos, sinConexiones }: { overview: UseQueryResult<Overview>; fallos: number; sinConexiones: boolean }) {
+  const org = useOrg();
   const critico = overview.data?.ahora.find((a) => a.kind === 'incident' && a.severity === 'critical');
   let contenido: ReactNode = null;
   if (critico) contenido = (
     <div className="flex flex-wrap items-center gap-3 border-b border-mal-borde bg-mal-relleno px-4 py-2.5 text-mal md:px-6">
       <Siren className="size-5 shrink-0" />
       <span className="flex-1 text-sm font-semibold">Incidente crítico en curso: {critico.title}</span>
-      <Link to={`incidents/${critico.id}`} className="text-sm font-semibold underline underline-offset-4">Ver ahora</Link>
+      {/* Absoluta y codificada, como FilaAhora: un id con «../», «?» o «#» no cambia de org, de ruta ni de query. */}
+      <Link to={`/o/${org.id}/incidents/${encodeURIComponent(critico.id)}`} className="text-sm font-semibold underline underline-offset-4">Ver ahora</Link>
     </div>
   );
   else if (fallos >= 2) contenido = (

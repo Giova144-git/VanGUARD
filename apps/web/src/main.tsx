@@ -1,9 +1,11 @@
+import './lib/zod-sin-jit';                                  // primero: zod lee jitless al crear los schemas de contracts
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router/dom';
 import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SesionProvider } from './app/sesion';
 import { router } from './app/router';
+import { nextDe } from './lib/aterrizaje';
 import { esApiError, type ApiError } from './lib/errores';
 import { supabase } from './lib/supabase';
 import './styles/globals.css';
@@ -14,8 +16,7 @@ async function alFallar(e: unknown) {
   const { data } = await supabase.auth.getSession();
   if (data.session) return;
   await supabase.auth.signOut();
-  const aqui = location.pathname + location.search;
-  router.navigate(`/login?next=${encodeURIComponent(aqui)}`, { replace: true });
+  router.navigate(`/login?next=${encodeURIComponent(nextDe(location.pathname, location.search))}`, { replace: true });
 }
 
 const queryClient = new QueryClient({

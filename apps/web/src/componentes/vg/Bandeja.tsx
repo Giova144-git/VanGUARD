@@ -4,17 +4,19 @@ import { ChevronRight } from 'lucide-react';
 import type { AccionDato, FilaDato, GrupoDato } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { rutaDe } from '@/lib/destino';
 import { SEP, cuando } from '@/lib/formato';
-import { TEXTO_ROL, type Rol } from '@/lib/severidad';
+import { TEXTO_ROL, esRol, type Rol } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { BotonAccion } from './BotonAccion';
 import { BotonCopiar } from './BotonCopiar';
 import { ChapaSeveridad, Etiqueta } from './Etiqueta';
 import { PuntoEstado } from './PuntoEstado';
 
-// L3: rojo o ámbar solo con una acción al lado; sin acción se pinta neutro.
-export const rolVisible = (rol: Rol, acciones: unknown[]): Rol => (rol === 'mal' || rol === 'aviso') && acciones.length === 0 ? 'neutra' : rol;
+// L3: rojo o ámbar solo con una acción al lado; sin acción, o con un rol fuera de contrato, se pinta neutro.
+export const rolVisible = (rol: Rol, acciones: unknown[]): Rol =>
+  !esRol(rol) || ((rol === 'mal' || rol === 'aviso') && acciones.length === 0) ? 'neutra' : rol;
 // El color nunca es la única señal (S14 §14.6): el punto lleva nombre para el lector.
 const nombreRol = (rol: Rol) => (rol === 'mal' ? 'Urgente' : rol === 'aviso' ? 'Aviso' : undefined);
 
@@ -58,7 +60,7 @@ export function FilaProblema({ fila, puedeEscribir }: { fila: FilaDato; puedeEsc
           {fila.severidad_cve ? <ChapaSeveridad severity={fila.severidad_cve} /> : null}
           {fila.chips?.map((c) => <Etiqueta key={c} texto={c} />)}
         </div>
-        {fila.objeto ? <span className="truncate font-mono text-[13px] text-muted-foreground">{fila.objeto}</span> : null}
+        {fila.objeto ? <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(fila.objeto)}</bdi></span> : null}
         {fila.sub ? <span className="text-[12.5px] text-texto-3">{fila.sub}</span> : null}
         {fila.fraccion != null ? (
           <span className="h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted" role="img" aria-label={`${Math.round(fila.fraccion * 100)} %`}>

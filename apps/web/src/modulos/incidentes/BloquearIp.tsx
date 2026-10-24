@@ -1,7 +1,7 @@
 // «Bloquear esta IP» (S14 §14.16): reposo → simulando → vista → escribiendo → hecho, sin modal (L6). La aprobación
 // también llega por el botón «Sí, bloquear» de WhatsApp (A8): si el incidente refrescado trae un block_ip executed
 // creado después de abrir la vista, se pasa a «hecho» solo.
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react';
 import { Ban, Undo2 } from 'lucide-react';
 import type { ActionPublic, ProposeResponse } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
@@ -168,29 +168,40 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
     </div>
   );
 
-  const { p } = fase;
   return marco(
-    <form onSubmit={confirmar} className="flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4">
+    <Propuesta p={fase.p} codigo={codigo} alCambiarCodigo={setCodigo} error={fase.error} escribiendo={fase.f === 'escribiendo'}
+      campo={campo} alConfirmar={confirmar} alCancelar={cancelar} alVencer={vencer} />
+  );
+}
+
+// Vista de la propuesta (efecto, avisos y code del servidor) con el campo del código. Presentación pura: el estado vive
+// en BloquearIp. Exportada para el arnés de XSS.
+export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, campo, alConfirmar, alCancelar, alVencer }: {
+  p: ProposeResponse; codigo: string; alCambiarCodigo: (v: string) => void; error?: string; escribiendo: boolean;
+  campo?: Ref<HTMLInputElement>; alConfirmar: (ev: FormEvent) => void; alCancelar: () => void; alVencer: () => void;
+}) {
+  return (
+    <form onSubmit={alConfirmar} className="flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4">
       <p className="text-[15px] font-semibold text-mal">{p.efecto}</p>
       {p.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{a}</p>)}
       <p className="text-sm text-muted-foreground">
         {p.delivery === 'whatsapp'
           ? 'Te lo enviamos por WhatsApp. También puedes aprobar con el botón del mensaje.'
           : <>No pudimos enviarte el WhatsApp: tu código es <span className="font-mono font-semibold text-foreground">{p.code}</span>.</>}
-        {' '}Vence en <CuentaAtras hasta={p.expires_at} alVencer={vencer} />.
+        {' '}Vence en <CuentaAtras hasta={p.expires_at} alVencer={alVencer} />.
       </p>
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1.5">
           <span className="text-sm font-medium">Código de 6 dígitos</span>
-          <Input ref={campo} value={codigo} onChange={(e) => setCodigo(e.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric"
-            autoComplete="one-time-code" pattern="\d{6}" maxLength={6} className="w-40 font-mono text-lg tracking-widest" aria-invalid={!!fase.error || undefined} />
+          <Input ref={campo} value={codigo} onChange={(e) => alCambiarCodigo(e.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric"
+            autoComplete="one-time-code" pattern="\d{6}" maxLength={6} className="w-40 font-mono text-lg tracking-widest" aria-invalid={!!error || undefined} />
         </label>
-        <Button type="button" variant="secundaria" size="grande" onClick={cancelar}>Cancelar</Button>
-        <Button type="submit" variant="peligro" size="grande" disabled={codigo.length !== 6 || fase.f === 'escribiendo'} aria-busy={fase.f === 'escribiendo' || undefined}>
-          {fase.f === 'escribiendo' ? <Spinner /> : <Ban />}Confirmar bloqueo
+        <Button type="button" variant="secundaria" size="grande" onClick={alCancelar}>Cancelar</Button>
+        <Button type="submit" variant="peligro" size="grande" disabled={codigo.length !== 6 || escribiendo} aria-busy={escribiendo || undefined}>
+          {escribiendo ? <Spinner /> : <Ban />}Confirmar bloqueo
         </Button>
       </div>
-      {fase.error ? <p role="alert" className="text-sm font-medium text-mal">{fase.error}</p> : null}
+      {error ? <p role="alert" className="text-sm font-medium text-mal">{error}</p> : null}
     </form>
   );
 }

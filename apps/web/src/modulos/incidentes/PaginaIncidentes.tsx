@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ChevronRight } from 'lucide-react';
-import type { Incident, IncidentStatus } from '@vanguard/contracts';
+import type { Incident, IncidentStatus, Severity } from '@vanguard/contracts';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { Cronometro } from '@/componentes/vg/Cronometro';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
@@ -12,13 +12,21 @@ import { useOrg } from '@/app/guardas';
 import { useIncidentes } from '@/lib/consultas';
 import { cuando, miles } from '@/lib/formato';
 import { entradaNav } from '@/lib/nav';
-import { SEVERIDAD, type Rol } from '@/lib/severidad';
+import { SEVERIDAD, deMapa, type Rol } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { BotonSimularAtaque } from './Simulacion';
 
 export const ESTADO_INC: Record<IncidentStatus, { texto: string; rol: Rol }> = {
   open: { texto: 'Abierto', rol: 'mal' }, ack: { texto: 'Lo están viendo', rol: 'aviso' },
   mitigated: { texto: 'Mitigado', rol: 'bien' }, resolved: { texto: 'Resuelto', rol: 'neutra' },
+};
+// En producción api() deja pasar un cuerpo fuera de contrato: un estado desconocido (o «__proto__», que `??` no para)
+// sale «—» y neutro (L3), no como TypeError.
+export const estadoInc = (s: unknown) => deMapa(ESTADO_INC, s, { texto: '—', rol: 'neutra' });
+// Texto del aviso aria-live: una severidad fuera de contrato va sin etiqueta.
+export const avisoNuevo = (n: Pick<Incident, 'severity' | 'title'>) => {
+  const sev = deMapa<Severity, { etiqueta: string } | null>(SEVERIDAD, n.severity, null)?.etiqueta.toLowerCase();
+  return `Nuevo incidente${sev ? ` ${sev}` : ''}: ${n.title}`;
 };
 const abierto = (i: Incident) => i.status === 'open' || i.status === 'ack';
 const origen = (r: string) => r.replace(/^ip:/, '');
@@ -41,7 +49,7 @@ export default function PaginaIncidentes() {
     const n = q.data.find((i) => !vistos.current!.has(i.id));
     q.data.forEach((i) => vistos.current!.add(i.id));
     if (!n) return;
-    setNuevo({ id: n.id, texto: `Nuevo incidente ${SEVERIDAD[n.severity].etiqueta.toLowerCase()}: ${n.title}` });
+    setNuevo({ id: n.id, texto: avisoNuevo(n) });
     const t = setTimeout(() => setNuevo(null), 5000);
     return () => clearTimeout(t);
   }, [q.data]);
@@ -72,10 +80,11 @@ export default function PaginaIncidentes() {
               <span>Severidad</span><span>Código</span><span>Qué pasa</span><span>Origen</span><span>Eventos</span><span>Empezó</span><span>Estado</span><span>Cronómetro</span><span />
             </li>
             {lista.map((i) => {
-              const est = ESTADO_INC[i.status];
+              const est = estadoInc(i.status);
               return (
                 <li key={i.id} className={cn('border-b last:border-b-0 transition-colors', nuevo?.id === i.id && 'bg-info-relleno outline-2 -outline-offset-2 outline-info')}>
-                  <Link to={i.id} className={cn('grid grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring', PISTAS)}>
+                  {/* Absoluta y codificada: un id «//host/x» relativo saldría como enlace externo. */}
+                  <Link to={`/o/${org.id}/incidents/${encodeURIComponent(i.id)}`} className={cn('grid grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring', PISTAS)}>
                     <ChapaSeveridad severity={i.severity} />
                     <span className="font-mono text-[13px]">{i.code}</span>
                     <span className="text-[15px] font-medium">{i.title}</span>

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, LogOut, MessageCircle, Phone, Plus, Save, Trash2 } from 'lucide-react';
-import type { Contact } from '@vanguard/contracts';
+import type { AiUsage, Contact } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
 import { Spinner } from '@/componentes/ui/spinner';
@@ -21,13 +21,14 @@ import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { SANDBOX_KAPSO } from '@/lib/guias';
 import { useGuardarContactos, useProbarCanal } from '@/lib/mutaciones';
+import { deMapa } from '@/lib/severidad';
 import { supabase } from '@/lib/supabase';
 import { aplicarPresentacion, aplicarTema, leerPresentacion, leerTema, type Tema } from '@/lib/tema';
 import { cn } from '@/lib/utils';
 
 // La llamada llega después de WhatsApp (A8, P1): mientras no exista, «Probar llamada» va deshabilitado con su motivo.
 const LLAMADA_LISTA = false;
-const NIVEL_IA = { normal: 'normal', reduced: 'síntesis con Sonnet', minimal: 'solo Haiku', off: 'apagada' } as const;
+const NIVEL_IA: Record<AiUsage['level'], string> = { normal: 'normal', reduced: 'síntesis con Sonnet', minimal: 'solo Haiku', off: 'apagada' };
 
 function Interruptor({ activo, onCambio, etiqueta }: { activo: boolean; onCambio: (v: boolean) => void; etiqueta: string }) {
   return (
@@ -71,19 +72,31 @@ function ProbarCanal({ org, canal, deshabilitado }: { org: string; canal: 'whats
 const ESPERA_VERIFICAR_MS = 120_000;
 type Espera = { id: string; nombre: string; hasta: number };
 
+// api() en producción no corta un cuerpo fuera de contrato: el enlace solo se pinta si es https://wa.me sin credenciales
+// ni puerto (como urlRevocar en TarjetaConexion).
+function enlaceWa(u: string): string | null {
+  try { const x = new URL(u); return x.protocol === 'https:' && x.host === 'wa.me' && !x.username && !x.password ? x.href : null; } catch { return null; }
+}
+
 export function Verificar({ c, esperando, alAbrir }: { c: Contact; esperando: boolean; alAbrir: () => void }) {   // exportada para el arnés de XSS
   if (!c.verificacion) return null;
+  const enlace = enlaceWa(c.verificacion.enlace);
+  const orden = <code className="rounded bg-muted px-1.5 font-mono text-[13px]">VERIFICAR {c.verificacion.codigo}</code>;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
       <p className="text-sm text-muted-foreground">Solo enviamos alertas a teléfonos que confirman ser suyos.</p>
       <div className="flex flex-wrap items-center gap-3">
-        <Button asChild variant="principal">
-          <a href={c.verificacion.enlace} target="_blank" rel="noopener noreferrer" onClick={alAbrir}>
-            <MessageCircle />Verificar por WhatsApp
-          </a>
-        </Button>
+        {enlace ? (
+          <Button asChild variant="principal">
+            <a href={enlace} target="_blank" rel="noopener noreferrer" onClick={alAbrir}>
+              <MessageCircle />Verificar por WhatsApp
+            </a>
+          </Button>
+        ) : null}
         <span className="text-sm">
-          O escribe <code className="rounded bg-muted px-1.5 font-mono text-[13px]">VERIFICAR {c.verificacion.codigo}</code> a VanGUARD desde ese teléfono
+          {/* El número de VanGUARD solo viene dentro del enlace y el código es fijo por contacto (HMAC): guardar de nuevo
+              no da otro, así que con el enlace descartado solo queda reintentar luego, con el código a la vista. */}
+          {enlace ? <>O escribe {orden} a VanGUARD desde ese teléfono</> : <>No pudimos armar el enlace de WhatsApp; vuelve a intentarlo más tarde. Tu código: {orden}</>}
         </span>
         <BotonCopiar valor={`VERIFICAR ${c.verificacion.codigo}`} texto="Copiar" />
       </div>
@@ -243,7 +256,7 @@ export default function PaginaAjustes() {
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-ia">
         <div className="flex flex-wrap items-center gap-2">
           <h3 id="t-ia" className="flex-1 text-[17px] font-semibold">IA</h3>
-          {ia ? <Etiqueta texto={ia.enabled ? `IA encendida · ${NIVEL_IA[ia.level]}` : 'IA en pausa'} rol={ia.enabled ? 'info' : 'neutra'} /> : <span className="text-texto-3">—</span>}
+          {ia ? <Etiqueta texto={ia.enabled ? `IA encendida · ${deMapa(NIVEL_IA, ia.level, '—')}` : 'IA en pausa'} rol={ia.enabled ? 'info' : 'neutra'} /> : <span className="text-texto-3">—</span>}
         </div>
         <p className="text-sm text-muted-foreground">El tope diario lo cambia solo el administrador de VanGUARD. Si la IA se pausa, las alertas siguen saliendo con plantillas.</p>
       </section>

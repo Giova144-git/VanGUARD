@@ -42,7 +42,7 @@ function Pasos({ proveedor }: { proveedor: Provider }) {
 }
 
 // Lo que el servidor devolvió al crear: permisos comprobados, ••••last4 y, en la ingesta, el secreto UNA vez.
-function Resultado({ r, alTerminar }: { r: ConnectionCreated; alTerminar: () => void }) {
+export function Resultado({ r, alTerminar }: { r: ConnectionCreated; alTerminar: () => void }) {   // exportada para el arnés de XSS
   const [guardado, setGuardado] = useState(false);
   const titulo = useRef<HTMLSpanElement>(null);
   useEffect(() => titulo.current?.focus(), []);   // el botón enviado desaparece: el foco pasa al resultado

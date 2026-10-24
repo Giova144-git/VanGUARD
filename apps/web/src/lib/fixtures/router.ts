@@ -1,8 +1,8 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, type ActionPublic, type ConnectionCreated, type ConnectionPublic, type Finding, type Incident, type IncidentDetail, type Me,
-  type Org, type PermCheck, type ScanRun, type TimelineItem,
+  fixtures as fx, type ActionPublic, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type Finding, type Incident,
+  type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem, type WikiRun,
 } from '@vanguard/contracts';
 import { ApiError } from '../errores';
 import { tipoSesionFalsa } from '../supabase-doble';
@@ -28,8 +28,11 @@ const esDemo = (org: string) => org === ORG_DEMO;
 const vacia = (org: string) => escenario() === 'vacio' || !esDemo(org);
 
 function me(): Me {
-  const base = tipoSesionFalsa() === 'anonima' ? fx.meViewer : fx.me;
-  return { ...base, orgs: [...base.orgs, ...orgsNuevas.map((o) => ({ id: o.id, name: o.name, role: 'owner' as const, is_demo: false }))] };
+  const anonima = tipoSesionFalsa() === 'anonima';
+  const base = anonima ? fx.meViewer : fx.me;
+  // Las orgs de /start son de la sesión con correo que las creó: el anónimo de «Ver demo» no es miembro de ellas.
+  const propias = anonima ? [] : orgsNuevas.map((o) => ({ id: o.id, name: o.name, role: 'owner' as const, is_demo: false }));
+  return { ...base, orgs: [...base.orgs, ...propias] };
 }
 
 function crearOrg(body: unknown): Org {
@@ -51,6 +54,30 @@ const listaDe = (org: string) => {
   if (!conexiones.has(org)) conexiones.set(org, vacia(org) ? [] : structuredClone(fx.connections as unknown as ConnectionPublic[]));  // el literal con satisfies no casa con Record<string, boolean>
   return conexiones.get(org)!;
 };
+const conectado = (org: string, p: ConnectionPublic['provider']) =>
+  listaDe(org).some((c) => c.provider === p && c.kind === 'read' && c.status === 'active');
+
+// E6 de una org sin los datos de la demo: la forma de la demo con todo «sin mirar» (n:null, comprobado:false), como antes
+// de la primera auditoría. Igual que estado/modulo.ts del BACK: sin conexión read activa del proveedor, ok:false con
+// 'sin_conexion' (la pantalla pide «Conectar» sin chapa roja); con ella, ok:true. Rendimiento no tiene conexión propia:
+// sin mediciones el BACK responde ok:true con todo n:null («Aún no medimos tu web»).
+const PROVEEDOR_MODULO: Record<Exclude<Module, 'performance'>, ConnectionPublic['provider']> = {
+  supabase: 'supabase', cloudflare: 'cloudflare', codebase: 'github',
+};
+function estadoVacio(org: string, m: Module): EstadoModulo {
+  const e = fx.moduleState[m] as EstadoModulo;
+  const sinConexion = m !== 'performance' && !conectado(org, PROVEEDOR_MODULO[m]);
+  return {
+    ok: !sinConexion, ...(sinConexion ? { error: 'sin_conexion' as const } : {}),
+    hora: new Date().toISOString(), contador: { rojo: 0, aviso: 0, cola: 0 },
+    cifras: e.cifras.map(({ rol: _r, sub: _s, destino: _d, ...c }) => ({ ...c, n: null })), ahora: [],
+    checks: e.checks.map(({ nombre, codigo }) => ({ nombre, codigo, n: null, comprobado: false })),
+  };
+}
+function estadoModulo(org: string, m: string) {
+  if (!Object.hasOwn(fx.moduleState, m)) return falla(404, 'not_found', 'Módulo desconocido');   // hasOwn: «constructor» no es un módulo
+  return vacia(org) ? estadoVacio(org, m as Module) : fx.moduleState[m as Module];
+}
 
 const CHECKS: Record<'supabase' | 'cloudflare' | 'github', PermCheck[]> = {
   supabase: [
@@ -163,32 +190,42 @@ async function promptFalso(org: string, id: string) {
 }
 
 // Auditoría simulada: 0 → 100 en 12 s por los pasos de scanDone (S14 §14.19); con ?escenario=vacio, «repo» sale skipped.
+// Cada corrida es de la org que la lanzó (anti-IDOR de §15.3). En una org sin los datos de la demo, el paso de un
+// proveedor sin conexión sale skipped y no hay hallazgos, puntaje ni resumen de la demo.
 const DURACION = 12_000;
-const scans = new Map<string, number>();
-function iniciarScan() {
+const scans = new Map<string, { org: string; inicio: number }>();
+const PROVEEDOR_PASO: Partial<Record<ScanRun['steps'][number]['name'], ConnectionPublic['provider']>> = {
+  supabase: 'supabase', cloudflare: 'cloudflare', repo: 'github',
+};
+function iniciarScan(org: string) {
   const id = crypto.randomUUID();
-  scans.set(id, Date.now());
+  scans.set(id, { org, inicio: Date.now() });
   return { scan_run_id: id };
 }
-function verScan(id: string): ScanRun {
-  const inicio = scans.get(id);
-  if (inicio == null) {
-    if (id === fx.scanDone.id) return fx.scanDone as ScanRun;
-    if (id === fx.scanRunning.id) return fx.scanRunning as ScanRun;
+function verScan(org: string, id: string): ScanRun {
+  const corrida = scans.get(id);
+  if (corrida?.org !== org) {
+    if (!corrida && !vacia(org) && id === fx.scanDone.id) return fx.scanDone as ScanRun;   // scanRunning lleva el mismo id
     return falla(404, 'not_found', 'Esa auditoría no existe');
   }
+  const { inicio } = corrida;
+  const sinDemo = vacia(org);
   const base = fx.scanDone as ScanRun;
   const t = Math.min(1, (Date.now() - inicio) / DURACION);
   const n = base.steps.length;
   const steps = base.steps.map((s, i): ScanRun['steps'][number] => {
-    if (escenario() === 'vacio' && s.name === 'repo' && t >= i / n) return { name: s.name, status: 'skipped' };
-    return t >= (i + 1) / n ? s : t >= i / n ? { name: s.name, status: 'running' } : { name: s.name, status: 'pending' };
+    const p = PROVEEDOR_PASO[s.name];
+    const salta = (escenario() === 'vacio' && s.name === 'repo') || (sinDemo && p !== undefined && !conectado(org, p));
+    if (salta && t >= i / n) return { name: s.name, status: 'skipped' };
+    const fin = sinDemo && s.findings != null ? { ...s, findings: 0 } : s;
+    return t >= (i + 1) / n ? fin : t >= i / n ? { name: s.name, status: 'running' } : { name: s.name, status: 'pending' };
   });
   const hecho = t >= 1;
   const actual = steps.find((s) => s.status === 'running')?.name ?? null;
+  const puntaje = !sinDemo && t >= (n - 1) / n;
   return {
     ...base, id, kind: 'full_audit', status: hecho ? 'succeeded' : 'running', progress: Math.round(t * 100), step: hecho ? null : actual, steps,
-    score: t >= (n - 1) / n ? base.score : null, coverage: t >= (n - 1) / n ? base.coverage : null, summary: hecho ? base.summary : null,
+    score: puntaje ? base.score : null, coverage: puntaje ? base.coverage : null, summary: hecho && !sinDemo ? base.summary : null,
     created_at: new Date(inicio).toISOString(), started_at: new Date(inicio).toISOString(),
     finished_at: hecho ? new Date(inicio + DURACION).toISOString() : null,
   };
@@ -396,22 +433,50 @@ function probarCanal(org: string, body: unknown) {
 
 // ── DeepWiki (E40–E44) ───────────────────────────────────────────────────────────────────────────────────────
 // E42 devuelve wikiRunRunning en las primeras consultas de cada corrida y luego wikiRunDone, para ver el progreso.
+// fx.wikiRuns solo existen en la demo con datos; en otra org cada generación es una corrida nueva de esa org.
 const consultasWiki = new Map<string, number>();
-function verWikiRun(id: string) {
-  if (id !== fx.wikiRunDone.id) {
-    const r = fx.wikiRuns.find((x) => x.id === id);
-    return r ?? falla(404, 'not_found', 'Esa wiki no existe');
-  }
-  const n = (consultasWiki.get(id) ?? 0) + 1;
+const wikisNuevas = new Map<string, string>();                  // corrida → org
+function verWikiRun(org: string, id: string, contar = true): WikiRun {
+  const deOrg = wikisNuevas.get(id);
+  const deDemo = deOrg === undefined && !vacia(org);
+  if (deOrg !== org && !deDemo) return falla(404, 'not_found', 'Esa wiki no existe');
+  if (deDemo && id !== fx.wikiRunDone.id) return fx.wikiRuns.find((x) => x.id === id) ?? falla(404, 'not_found', 'Esa wiki no existe');
+  const n = (consultasWiki.get(id) ?? 0) + (contar ? 1 : 0);   // sin contar: el doc no adelanta el progreso
   consultasWiki.set(id, n);
-  return n <= 3 ? { ...fx.wikiRunRunning, id } : fx.wikiRunDone;
+  return n <= 3 ? { ...fx.wikiRunRunning, id } : { ...fx.wikiRunDone, id };
 }
-function generarWiki(body: unknown) {
+const listarWikis = (org: string) => vacia(org)
+  ? [...wikisNuevas].filter(([, o]) => o === org).map(([id]) => verWikiRun(org, id, false)).reverse()   // más recientes primero
+  : fx.wikiRuns;
+function generarWiki(org: string, body: unknown) {
   exigirAdmin();
   const b = (body ?? {}) as { max_usd?: number };
   if (b.max_usd != null && (b.max_usd <= 0 || b.max_usd > 5)) falla(422, 'invalid_body', 'El tope va de 0 a 5 USD');
-  consultasWiki.set(fx.wikiRunDone.id, 0);                       // cada generación vuelve a mostrar el progreso
-  return { wiki_run_id: fx.wikiRunDone.id, cached: false };
+  const id = vacia(org) ? crypto.randomUUID() : fx.wikiRunDone.id;
+  if (vacia(org)) wikisNuevas.set(id, org);
+  consultasWiki.set(id, 0);                                      // cada generación vuelve a mostrar el progreso
+  return { wiki_run_id: id, cached: false };
+}
+
+// ── Lecturas de la demo (E18, E24, E25, E28, E29b): en una org sin sus datos, lo que da la API con las tablas vacías ──
+// El tráfico del ataque simulado en esa org sí se ve: es el de la simulación, no el de la demo.
+const traficoDe = (org: string) => !vacia(org) || incidentesDe(org).some((i) => simulados.has(i.id))
+  ? fx.traffic : { buckets: [], top_ips: [] };
+const usoIa = (org: string) => (vacia(org) ? { ...fx.aiUsage, today_usd: 0 } : fx.aiUsage);
+const exportVacio = (org: string) => [
+  `# Informe de seguridad de VanGUARD: ${me().orgs.find((o) => o.id === org)?.name ?? ''}`,
+  `> Generado por VanGUARD (https://officialvanguard.com) el ${new Date().toISOString()} UTC · esquema vanguard-export 1.0`, '',
+  '## Cobertura', 'VanGUARD no pudo revisar: Supabase, Cloudflare, Codebase y Rendimiento.', '',
+  '## Hallazgos (0 de 0)', 'Todavía no hay hallazgos abiertos.', '',
+  'Fin del informe. VanGUARD no guarda ninguna respuesta que generes con este texto.',
+].join('\n');
+function exportar(org: string, q: URLSearchParams) {
+  const archivo = `vanguard-${orgsNuevas.find((o) => o.id === org)?.slug ?? 'demo'}-20261024`;
+  return q.get('format') === 'json'
+    ? new Response(JSON.stringify({ schema: 'vanguard-export.v1', findings: hallazgosDe(org).length }, null, 2), {
+        headers: { 'content-type': 'application/json', 'content-disposition': `attachment; filename="${archivo}.json"` } })
+    : new Response(vacia(org) ? exportVacio(org) : fx.exportMd, {
+        headers: { 'content-type': 'text/markdown; charset=utf-8', 'content-disposition': `attachment; filename="${archivo}.md"` } });
 }
 
 const ORG = '\\/api\\/orgs\\/([^/]+)';
@@ -421,12 +486,12 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r('\\/api\\/demo\\/join'),             () => ({ org_id: ORG_DEMO })],
   ['POST', r('\\/api\\/orgs'),                    (_m, b) => crearOrg(b)],
   ['GET',  r(`${ORG}\\/overview`),                (m) => vacia(m[1]!) ? fx.overviewVacio : fx.overview],
-  ['GET',  r(`${ORG}\\/modules\\/(\\w+)\\/state`), (m) => fx.moduleState[m[2] as keyof typeof fx.moduleState] ?? falla(404, 'not_found', 'Módulo desconocido')],
+  ['GET',  r(`${ORG}\\/modules\\/(\\w+)\\/state`), (m) => estadoModulo(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/connections`),             (m) => structuredClone(listaDe(m[1]!))],   // copia: TanStack no ve cambios en el mismo array
   ['POST', r(`${ORG}\\/connections`),             (m, b) => conectarFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/connections\\/([^/]+)\\/test`), (m) => probarFalso(m[1]!, m[2]!)],
   ['DELETE', r(`${ORG}\\/connections\\/([^/]+)`), (m) => quitarFalso(m[1]!, m[2]!)],
-  ['POST', r(`${ORG}\\/scans`),                   () => iniciarScan()],
+  ['POST', r(`${ORG}\\/scans`),                   (m) => iniciarScan(m[1]!)],
   ['GET',  r(`${ORG}\\/findings`),                (m, _b, q) => listarHallazgos(m[1]!, q)],
   ['GET',  r(`${ORG}\\/findings\\/([^/]+)`),      (m) => structuredClone(hallazgo(m[1]!, m[2]!))],
   ['PATCH', r(`${ORG}\\/findings\\/([^/]+)`),     (m, b) => patchHallazgo(m[1]!, m[2]!, b)],
@@ -438,34 +503,36 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/actions\\/propose`),       (m, b) => proponerFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/confirm`), (m, b) => confirmarFalso(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
-  ['GET',  r(`${ORG}\\/traffic`),                 () => fx.traffic],
-  ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[2]!)],
-  ['POST', r(`${ORG}\\/wiki\\/estimate`),         () => { exigirAdmin(); return fx.wikiEstimate; }],
-  ['POST', r(`${ORG}\\/wiki\\/runs`),             (_m, b) => generarWiki(b)],
-  ['GET',  r(`${ORG}\\/wiki\\/runs`),             () => fx.wikiRuns],
-  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), () => fx.wikiDoc],
-  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[2]!)],
+  ['GET',  r(`${ORG}\\/traffic`),                 (m) => traficoDe(m[1]!)],
+  ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[1]!, m[2]!)],
+  ['POST', r(`${ORG}\\/wiki\\/estimate`),         () => { exigirAdmin(); return fx.wikiEstimate; }],   // solo lee GitHub; cached_run_id null
+  ['POST', r(`${ORG}\\/wiki\\/runs`),             (m, b) => generarWiki(m[1]!, b)],
+  ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m) => listarWikis(m[1]!)],
+  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), (m) => ({ ...fx.wikiDoc, run_id: verWikiRun(m[1]!, m[2]!, false).id })],
+  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                (m) => listarContactos(m[1]!)],
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],
-  ['GET',  r(`${ORG}\\/ai\\/usage`),              () => fx.aiUsage],
-  ['GET',  r(`${ORG}\\/perf\\/runs`),             () => fx.perfRuns],
-  ['GET',  r(`${ORG}\\/mcp-tokens`),              () => fx.mcpTokens],
+  ['GET',  r(`${ORG}\\/ai\\/usage`),              (m) => usoIa(m[1]!)],
+  ['GET',  r(`${ORG}\\/perf\\/runs`),             (m) => (vacia(m[1]!) ? [] : fx.perfRuns)],
+  ['GET',  r(`${ORG}\\/mcp-tokens`),              (m) => (vacia(m[1]!) ? [] : fx.mcpTokens)],
   // Rutas que el FRONT pide con {crudo:true} devuelven un Response de verdad.
-  ['GET',  r(`${ORG}\\/export`),                  (_m, _b, q) => q.get('format') === 'json'
-    ? new Response(JSON.stringify({ schema: 'vanguard-export.v1', findings: hallazgosDe(ORG_DEMO).length }, null, 2), {
-        headers: { 'content-type': 'application/json', 'content-disposition': 'attachment; filename="vanguard-demo-20261024.json"' } })
-    : new Response(fx.exportMd, {
-        headers: { 'content-type': 'text/markdown; charset=utf-8', 'content-disposition': 'attachment; filename="vanguard-demo-20261024.md"' } })],
+  ['GET',  r(`${ORG}\\/export`),                  (m, _b, q) => exportar(m[1]!, q)],
 ];
+
+const MIEMBRO = /^\/api\/orgs\/([^/]+)(?:\/|$)/;
 
 export async function fixtureFetch<T>(ruta: string, o: { method?: string; body?: unknown }): Promise<T> {
   await espera(250);
   const [camino = '', consulta = ''] = ruta.split('?');
   const q = new URLSearchParams(consulta);
+  // orgMember (§15.3): una org de la que no eres miembro da 404, sin confirmar que existe. POST /api/orgs no lleva org.
+  const org = camino.match(MIEMBRO)?.[1];
+  if (org !== undefined && !me().orgs.some((x) => x.id === org)) falla(404, 'not_found', 'Organización no encontrada');
   for (const [met, re, h] of rutas) {
     const m = camino.match(re);
     if (m && met === (o.method ?? 'GET')) return h(m, o.body, q) as T;
   }
-  throw new ApiError(404, 'not_found', `Sin fixture para ${o.method ?? 'GET'} ${camino}`);
+  console.debug('fixtures: sin ruta', o.method ?? 'GET', camino);
+  throw new ApiError(404, 'not_found', 'Ruta inexistente');     // como app.notFound: la UI pinta el mensaje, la ruta no va en él
 }

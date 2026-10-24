@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { Navigate, Outlet, useLocation, useParams } from 'react-router';
 import type { Me, Role } from '@vanguard/contracts';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
-import { ULTIMA_ORG } from '@/lib/aterrizaje';
+import { nextDe, ULTIMA_ORG } from '@/lib/aterrizaje';
 import { useMe } from '@/lib/consultas';
 import { useSesion } from './sesion';
 import NoEncontrada from './paginas/NoEncontrada';
@@ -16,7 +16,7 @@ export function RequireSession({ children }: { children?: ReactNode }) {
   const s = useSesion();
   const loc = useLocation();
   if (s.cargando) return <Cargando />;
-  if (!s.activa) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
+  if (!s.activa) return <Navigate to={`/login?next=${encodeURIComponent(nextDe(loc.pathname, loc.search))}`} replace />;
   return children ?? <Outlet />;
 }
 

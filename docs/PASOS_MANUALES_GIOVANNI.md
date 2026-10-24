@@ -323,6 +323,37 @@ Cloudflare inyecta `static.cloudflareinsights.com/beacon.min.js` en la web y nue
 1. Cloudflare → zona `officialvanguard.com` → **Speed → Observatory** (o **Analytics & Logs → Web Analytics**) → desactiva **Real User Monitoring (RUM)** / **Automatic setup** para `officialvanguard.com`.
 2. Escríbeme «listo, paso 16» y compruebo que la consola queda limpia.
 
+### Paso 17 · Revisión de código: activar, pegar el webhook y probar con un push · 15 min (cuando te avise de que E47 está en producción)
+Antes: tu contacto de «Tienda Demo» tiene que estar **verificado** (número real con «Verificar por WhatsApp», o sandbox
+verificado a mano por mí) y yo abro la ventana de avisos de la demo. Gabriel ya te añadió al repo con permiso Write.
+
+**Alta** (ventana normal, tu sesión de admin de «Tienda Demo» → Codebase → tarjeta «Revisión automática de código»):
+1. Activa «Revisar cada push». El chip pasa a «ESPERANDO A GITHUB» y se abren los «Pasos en GitHub».
+2. Paso 1 de la tarjeta: el enlace lleva a `github.com/gabgaru1/vanguard-demo-victima/settings/hooks/new`.
+3. Paso 2, **Payload URL** `https://officialvanguard.com/webhooks/github/<uuid>`, con «Copiar».
+4. Paso 4, **Secret** `vgw_…` (47 caracteres), con «Copiar». **Cópialo y pégalo en GitHub antes de salir o recargar:**
+   después solo se ve «Termina en ••xxxx» y hoy no se puede generar otro.
+
+**En GitHub** (Add webhook): Content type `application/json` · «Let me select individual events» → **Pushes** y
+**Pull requests** · Active → **Add webhook**.
+
+**Ping:** en unos 5 s el chip pasa a «CONECTADA · ÚLTIMO EVENTO hh:mm». Si sale «CON ERROR», pásame la frase de debajo.
+
+**Push real** (en tu equipo, una sola vez: `git clone https://github.com/gabgaru1/vanguard-demo-victima.git`):
+```bash
+node demo/empujar-revision.mjs <ruta-del-clon>
+```
+- Imprime la hora del push. Cronometra hasta que llegue el WhatsApp.
+- En la tarjeta: fila «main · sha7» con «REVISANDO…» y luego «1 NUEVO · CRÍTICA». El chip del aviso dice «WHATSAPP EN X S…»
+  o «AVISO NO ENVIADO: …». Pásame la frase tal cual.
+- Al abrir la fila: «Clave live de Stripe…» en `src/lib/pagos.ts:3`. El enlace del WhatsApp abre esa fila directamente.
+- Ajustes → «Avisos»: cambia un selector y «Guardar» → «Guardado · hh:mm».
+- Si sale algo que parezca un código en inglés en lugar de una frase, avísame: falta en la lista de motivos del FRONT.
+
+**Después de cada prueba:** `node demo/empujar-revision.mjs <ruta-del-clon> --deshacer` y, en el hallazgo, **«Marcar
+arreglado»** (nunca «Ignorar»), para que el puntaje quede limpio y el push siguiente vuelva a ser nuevo. Si GitHub
+bloquea el push por la clave, usa `--plan-b`.
+
 ## Después de que WhatsApp funcione de punta a punta (P1)
 
 ### Paso 12 · Llamada de voz (ElevenLabs + Twilio de prueba) · 30 min

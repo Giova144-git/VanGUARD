@@ -1,0 +1,8 @@
+{
+  "name": "tienda-demo/panel-legacy",
+  "description": "Panel legado en PHP (simulado) con una dependencia vulnerable para la demo.",
+  "require": {
+    "php": ">=7.4",
+    "facade/ignition": "2.5.1"
+  }
+}

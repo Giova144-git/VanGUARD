@@ -1,0 +1,7 @@
+# apps/victima/.dev.vars (catálogo de S03 03.6). Copiar a .dev.vars y rellenar; .dev.vars nunca se versiona.
+# [var] endpoint de ingesta · en local el apps/api de dev-node (:8787); en producción https://officialvanguard.com/ingest/v1/events
+VG_INGEST_URL=http://localhost:8787/ingest/v1/events
+# [var] id de la conexión `ingest` (cabecera x-vg-conn) · se ve al crearla en Conexiones
+VG_INGEST_CONN_ID=
+# [secreta] secreto HMAC de la ingesta · se muestra UNA vez al crear la conexión `ingest`
+VG_INGEST_SECRET=

@@ -20,3 +20,9 @@ coverage/
 *.pem
 *.key
 packages/deepwiki/out/
+
+# Siembra de Rendimiento (plan §10.10): los LHR crudos de PSI no se versionan, solo el resumen
+demo/perf-lhr/*
+!demo/perf-lhr/resumen.json
+# El repo víctima sí lleva su lockfile vulnerable (CB_DEP_VULN); el patrón global de arriba lo ignoraría
+!demo/repo-vulnerable/package-lock.json

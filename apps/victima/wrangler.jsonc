@@ -1,0 +1,28 @@
+// Worker de la app víctima de la demo (S03 03.7). Lo despliega su propia conexión de Workers Builds con
+// `npx wrangler@4.152.0 deploy -c apps/victima/wrangler.jsonc`. Sin tail_consumers: en Free no hay Tail Workers (A7.6);
+// los eventos de borde llegan a VanGUARD solo por la ingesta firmada en lotes (A7.5).
+{
+  "$schema": "https://unpkg.com/wrangler@4.152.0/config-schema.json",
+  "name": "vanguard-victima",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-20",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Explícito: al declarar routes, Wrangler inferiría false y se perdería la URL *.workers.dev de respaldo.
+  "workers_dev": true,
+  "routes": [{ "pattern": "demo.officialvanguard.com", "custom_domain": true }],
+
+  // Recursos de Rendimiento (S10 10.11). Lo que exista en public/ lo sirve el borde sin invocar al Worker
+  // (no gasta cupo ni entra en la ingesta); todo lo demás (/, /login, /admin, sondeos) llega a src/worker.ts.
+  "assets": { "directory": "./public" },
+
+  "observability": { "enabled": true },
+
+  // Solo variables no secretas: cada deploy reemplaza las del panel por estas. VG_INGEST_SECRET es un Secret de
+  // runtime que Giovanni carga en el panel de vanguard-victima. VG_INGEST_CONN_ID es el id de la conexión `ingest`
+  // de la org de demo: se rellena al crearla en Conexiones; vacío, la víctima sirve igual y no envía eventos.
+  "vars": {
+    "VG_INGEST_URL": "https://officialvanguard.com/ingest/v1/events",
+    "VG_INGEST_CONN_ID": ""
+  }
+}

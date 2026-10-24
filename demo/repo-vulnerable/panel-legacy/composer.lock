@@ -1,0 +1,21 @@
+{
+  "_readme": [
+    "Lockfile escrito a mano para la demo (sin correr composer): solo facade/ignition 2.5.1.",
+    "Arreglo esperado por la auditoria: 2.5.2 (CVE-2021-3129, en KEV)."
+  ],
+  "content-hash": "00000000000000000000000000000000",
+  "packages": [
+    {
+      "name": "facade/ignition",
+      "version": "2.5.1",
+      "require": {
+        "php": ">=7.1"
+      }
+    }
+  ],
+  "packages-dev": [],
+  "platform": {
+    "php": ">=7.4"
+  },
+  "platform-dev": []
+}

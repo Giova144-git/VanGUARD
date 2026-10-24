@@ -1,0 +1,10 @@
+{
+  // Config de Cloudflare Workers de la tienda demo (da el stack cloudflare_workers al auditar).
+  "name": "tienda-demo-pedidos",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-11-01",
+  "vars": {
+    // Secreto de la conexión de ingesta: NO debería estar en el repo. Lo inyecta la siembra (CB_KEY_REUSE).
+    "VG_INGEST_SECRET": "__VG_INGEST_SECRET__"
+  }
+}

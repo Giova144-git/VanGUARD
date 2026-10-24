@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // Sin @cloudflare/workers-types (la víctima no tiene dependencias): fetch, Request, Response y crypto.subtle
+  // vienen de @types/node de la raíz, y lo poco propio de Workers (waitUntil) se tipa a mano en src/ingesta.ts.
+  "include": ["src"]
+}

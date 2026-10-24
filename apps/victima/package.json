@@ -1,0 +1,10 @@
+{
+  "name": "@vanguard/victima",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.dev.vars --watch src/dev-node.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  }
+}

@@ -18,9 +18,13 @@ export const PATRONES_SECRETO: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bvg[iks]_[A-Za-z0-9_-]{20,}/g, '[REDACTADO:token]'],                                     // vgi_ ingesta (S05), vgk_ MCP, vgs_ (S13)
   [/\bcf(?:k|ut|at)_[A-Za-z0-9_-]{30,}/g, '[REDACTADO:cloudflare]'],                             // formatos nuevos de Cloudflare (token-formats)
   [/\bAIza[0-9A-Za-z_-]{35}\b/g, '[REDACTADO:api_key]'],                                       // clave de Google (PSI, S10)
-  [/([?&]key=)[^&\s]+/g, '$1[REDACTADO]'],                                                     // la URL de PSI lleva key=
+  // Parámetros con secreto, dentro o fuera de una URL: key= de PSI, ?token=, &access_token=, client_secret=, sig=…
+  [/(^|[?&\s;,"'(])((?:access_|refresh_|id_|auth_)?token|api[_-]?key|key|client_secret|secret|password|passwd|sig|signature)=([^&\s"'<>#;,)]+)/gi,
+    '$1$2=[REDACTADO]'],
   [/\b(?:AKIA|ASIA)[A-Z2-7]{16}\b/g, '[REDACTADO:token]'],
-  [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g, 'Bearer [REDACTADO]'],
+  // Cabecera Authorization pegada en texto (log, evidencia, README): se tapa entera, con o sin esquema.
+  [/\b(authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?[^\s,;"']+/gi, '$1[REDACTADO]'],
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTADO]'],
   [/\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/([^:\s/@]+):[^@\s]+@/g, '$1://$2:[REDACTADO]@'],
 ];
 const tel = (t: string) => { const d = t.replace(/\D/g, ''); return '+' + d.slice(0, 2) + '•••' + d.slice(-4); };   // +58•••4567 (S15 15.11)

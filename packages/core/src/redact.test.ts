@@ -29,6 +29,7 @@ const CASOS: Array<[string, string, string]> = [
   ['AKIA', 'AK' + 'IA' + R(16, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'), '[REDACTADO:token]'],
   ['ASIA', 'AS' + 'IA' + R(16, 'QRSTUVWXYZ234567'), '[REDACTADO:token]'],
   ['Bearer', 'Bea' + 'rer ' + R(40), 'Bearer [REDACTADO]'],
+  ['Authorization', 'Authori' + 'zation: Basic ' + R(40), 'Authorization: [REDACTADO]'],
   ['clave privada', '-----BEGIN ' + 'PRIVATE KEY-----\n' + R(64) + '\n-----END ' + 'PRIVATE KEY-----', '[REDACTADO:clave_privada]'],
 ];
 
@@ -59,9 +60,10 @@ describe('redactString: cada patrón de 15.11 queda enmascarado', () => {
   });
   it('hay un caso positivo por cada patrón de PATRONES_SECRETO', () => {
     for (const [re] of PATRONES_SECRETO) {
-      const casa = CASOS.some(([, s]) => new RegExp(re.source).test(s))
-        || new RegExp(re.source).test('?key=x')
-        || new RegExp(re.source).test('postgres://u:p@h');
+      const sinG = () => new RegExp(re.source, re.flags.replace('g', ''));   // conserva la i de los patrones que la llevan
+      const casa = CASOS.some(([, s]) => sinG().test(s))
+        || sinG().test('?key=x')
+        || sinG().test('postgres://u:p@h');
       expect(casa, re.source).toBe(true);
     }
   });
@@ -158,5 +160,28 @@ describe('redactForExport (S13 13.2)', () => {
     const v = { z: 1, a: { y: 2, b: 3 } };
     expect(JSON.stringify(redactForExport(v, { ips: 'mask_24' }))).toBe('{"a":{"b":3,"y":2},"z":1}');
     expect(Object.keys(v)).toEqual(['z', 'a']);
+  });
+});
+
+describe('parámetros y cabeceras con secreto fuera de una URL (prueba de fuga, §15.11)', () => {
+  const v = 'LEAK7Q2Xabcdefghij';
+  it('?token=, &access_token=, token= suelto y client_secret= quedan tapados', () => {
+    expect(redactString(`GET /cb?token=${v}&x=1`)).toBe('GET /cb?token=[REDACTADO]&x=1');
+    expect(redactString(`refresh &access_token=${v} ok`)).toBe('refresh &access_token=[REDACTADO] ok');
+    expect(redactString(`token=${v}`)).toBe('token=[REDACTADO]');
+    expect(redactString(`error: client_secret=${v}; reintento`)).toBe('error: client_secret=[REDACTADO]; reintento');
+    expect(redactString(`url ...&key=${v}`)).not.toContain(v);
+  });
+  it('Authorization: Bearer / Basic / token se tapa entera', () => {
+    for (const h of [`Authorization: Bearer ${v}`, `authorization: basic ${v}`, `Authorization=token ${v}`]) {
+      expect(redactString(h)).toMatch(/^authorization\s*[:=]\s*\[REDACTADO\]$/i);
+    }
+    expect(redactString(`bearer ${v}`)).toBe('Bearer [REDACTADO]');
+  });
+  it('no toca palabras sin =, ni input_tokens, y es idempotente', () => {
+    expect(redactString('max_tokens 2000, input_tokens: 10')).toBe('max_tokens 2000, input_tokens: 10');
+    const una = redactString(`Authorization: Bearer ${v} y ?token=${v}`);
+    expect(redactString(una)).toBe(una);
+    expect(una).not.toContain('LEAK7Q2X');
   });
 });

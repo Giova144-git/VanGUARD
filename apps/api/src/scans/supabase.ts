@@ -24,9 +24,10 @@ export function normalizarRef(entrada: string): string | null {
   return panel?.[1] ?? null;
 }
 
-// Respuesta JSON de más bytes que esto → 'invalid' sin parsearla (§A7: 10 ms de CPU). 750 KB ≈ 1000 lints reales por
-// advisor; medido en el hilo, 2 × 750 KB ≈ 6,8 ms por paso y 2 × 1,95 MB ≈ 12 ms (solo el parse, ≈ 5,5).
-export const MAX_RESPUESTA = 750_000;
+// Respuesta JSON de más bytes que esto → 'invalid' sin parsearla (§A7: 10 ms de CPU). 300 KB ≈ 390 lints reales por
+// advisor: el paso entero (2 advisors, recorte y evaluación) mide ≈ 7 ms en Node; con 750 KB (≈ 970 lints) llegaba a
+// 12–17 ms y moría por CPU (1102 → DLQ) en vez de dar un 'invalid' explicable.
+export const MAX_RESPUESTA = 300_000;
 
 // Cuerpo con tope de bytes: un Content-Length de más se rechaza sin leer y, sin él, la lectura se corta al pasar del
 // tope (una respuesta de decenas de MB nunca se decodifica entera). null = demasiado grande.
@@ -79,10 +80,13 @@ export async function mgmt(pat: string, ref: string, path: string,
 }
 const backoff = (i: number, ms?: number) => new Promise((r) => setTimeout(r, ms ?? 500 * 2 ** i + Math.random() * 250));
 
-export const sqlRead = async <T>(pat: string, ref: string, query: string): Promise<T[]> => {
+// Claves que trae cada fila de su consulta. Una fila sin ellas daría 0 borradores y la fuente contaría como mirada
+// entera: auto-verificaría hallazgos que siguen ahí. Forma inesperada → 'invalid' (fuente caída, nunca verde).
+export const sqlRead = async <T>(pat: string, ref: string, query: string, claves: readonly string[] = []): Promise<T[]> => {
   try {
     const out = await mgmt(pat, ref, '/database/query/read-only', { method: 'POST', body: { query }, timeoutMs: 20000, tries: 1 });
     if (!Array.isArray(out)) throw new ProviderError('invalid');   // forma de la respuesta 201 [no verificado]: prueba 08:00
+    if (out.some((f) => !f || typeof f !== 'object' || claves.some((k) => !(k in (f as object))))) throw new ProviderError('invalid');
     return out as T[];
   } catch (e) {
     if (e instanceof ProviderError && e.status === 500) throw new ProviderError('invalid', 500);   // error de SQL: no transitorio
@@ -274,9 +278,9 @@ export const pasoSupabase: FnPaso = async (env, m) => {
     const [advS, advP, s1, s2, s3] = await Promise.all([
       caps.advisors === false ? sinPermiso<unknown>() : intentar(() => mgmt(pat, ref, '/advisors/security')),
       caps.advisors === false ? sinPermiso<unknown>() : intentar(() => mgmt(pat, ref, '/advisors/performance')),
-      caps.sql_read_only === false ? sinPermiso<FilaSql1[]>() : intentar(() => sqlRead<FilaSql1>(pat, ref, SQL1)),
-      caps.sql_read_only === false ? sinPermiso<FilaSql2[]>() : intentar(() => sqlRead<FilaSql2>(pat, ref, SQL2)),
-      caps.sql_read_only === false ? sinPermiso<FilaSql3[]>() : intentar(() => sqlRead<FilaSql3>(pat, ref, SQL3B)),
+      caps.sql_read_only === false ? sinPermiso<FilaSql1[]>() : intentar(() => sqlRead<FilaSql1>(pat, ref, SQL1, ['tabla', 'rls_activa'])),
+      caps.sql_read_only === false ? sinPermiso<FilaSql2[]>() : intentar(() => sqlRead<FilaSql2>(pat, ref, SQL2, ['tablename', 'policyname', 'cmd'])),
+      caps.sql_read_only === false ? sinPermiso<FilaSql3[]>() : intentar(() => sqlRead<FilaSql3>(pat, ref, SQL3B, ['funcion', 'hay_pre_request'])),
     ]);
     return { advS, advP, s1, s2, s3 };
   });

@@ -325,6 +325,13 @@ describe('pasoSupabase', () => {
     expect(doble.ops.length + doble.rpcs.length).toBe(8);
   });
 
+  it('SQL con filas de forma inesperada (sin sus claves): la fuente cuenta como caída y su regla no se auto-verifica', async () => {
+    resp.s1 = [{ nombre: 'pedidos', rls: false }];                        // ni tabla ni rls_activa: 0 borradores engañosos
+    expect(await pasoSupabase(env, m)).toEqual({ status: 'done', findings: 0, error_code: 'parcial:1' });
+    expect(verificadas()).toEqual(['SB_POLICY_ALLOW_ALL', 'SB_RPC_ANON_NO_LIMIT']);
+    expect(detalle()?.miradas).toMatchObject({ sql_rls: false, sql_politicas: true, sql_rpc: true });
+  });
+
   it('una fuente SQL caída: verifica las reglas de los otros dos SQL, no la suya ni los advisors', async () => {
     resp.s2 = 403;
     resp.sec = { lints: [lint('auth_users_exposed', 1, 'ERROR')] };

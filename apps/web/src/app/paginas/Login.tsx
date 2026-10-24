@@ -2,6 +2,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { Eye, EyeOff } from 'lucide-react';
 import { Me } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
@@ -34,6 +35,7 @@ function traducir(e: { message?: string; code?: string } | null, modo: Modo): st
 function Formulario({ modo }: { modo: Modo }) {
   const [email, setEmail] = useState('');
   const [clave, setClave] = useState('');
+  const [ver, setVer] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const qc = useQueryClient();
@@ -59,6 +61,7 @@ function Formulario({ modo }: { modo: Modo }) {
       setError(mensajeDe(e));
     } finally {
       setClave('');
+      setVer(false);   // la siguiente contraseña vuelve a ir oculta
       setOcupado(false);
     }
   };
@@ -71,9 +74,18 @@ function Formulario({ modo }: { modo: Modo }) {
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor={`${modo}-clave`}>Contraseña</Label>
-        <Input id={`${modo}-clave`} type="password" required value={clave} onChange={(e) => setClave(e.target.value)}
-          autoComplete={modo === 'entrar' ? 'current-password' : 'new-password'} aria-invalid={!!error || undefined}
-          aria-describedby={modo === 'crear' ? 'crear-ayuda' : undefined} />
+        <div className="relative">
+          {/* Visible, sin corrector ni mayúsculas automáticas: el corrector del navegador puede mandar el texto fuera. */}
+          <Input id={`${modo}-clave`} type={ver ? 'text' : 'password'} required value={clave} onChange={(e) => setClave(e.target.value)}
+            autoComplete={modo === 'entrar' ? 'current-password' : 'new-password'} aria-invalid={!!error || undefined}
+            spellCheck={false} autoCapitalize="none" autoCorrect="off" className="pr-12"
+            aria-describedby={modo === 'crear' ? 'crear-ayuda' : undefined} />
+          <Button type="button" variant="fantasma" size="icono" className="absolute inset-y-0 right-0 my-auto rounded-full text-muted-foreground"
+            aria-label={ver ? 'Ocultar contraseña' : 'Mostrar contraseña'} aria-pressed={ver} aria-controls={`${modo}-clave`}
+            onClick={() => setVer((v) => !v)}>
+            {ver ? <EyeOff /> : <Eye />}
+          </Button>
+        </div>
         {modo === 'crear' ? <span id="crear-ayuda" className="text-[12.5px] text-texto-3">Mínimo 10 caracteres, con letras y números.</span> : null}
       </div>
       {error ? <p role="alert" className="rounded-lg border border-mal-borde bg-mal-relleno px-3 py-2 text-sm font-medium text-mal">{error}</p> : null}
@@ -87,7 +99,8 @@ function Formulario({ modo }: { modo: Modo }) {
 export default function Login() {
   return (
     <div className="mx-auto flex min-h-svh w-full max-w-md flex-col justify-center gap-8 px-4 py-10">
-      <Link to="/" aria-label="Volver al inicio"><Marca /></Link>
+      {/* El isotipo grande: aquí se nota que el ojo mira (sigue al puntero) y parpadea. */}
+      <Link to="/" aria-label="Volver al inicio" className="self-start rounded-sm"><Marca simbolo /></Link>
       <div className="flex flex-col gap-2">
         <h1 className="text-[22px] font-semibold">Entra a tu panel</h1>
         <p className="text-[15px] text-muted-foreground">¿Solo quieres mirar? <Link to="/demo" className="font-medium text-foreground underline underline-offset-4">Ver la demo sin cuenta</Link></p>

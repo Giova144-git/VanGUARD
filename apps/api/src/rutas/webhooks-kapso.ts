@@ -1,16 +1,18 @@
 import { Hono, type Context } from 'hono';
-import { redact } from '@vanguard/core';
+import { redact, textoSeguro, unaLinea } from '@vanguard/core';
 import { canjearBotonAlerta, parsearBoton } from '../actions/approvals.ts';
 import type { AppEnv } from '../env.ts';
 import { db } from '../lib/db.ts';
 import { fail } from '../lib/errors.ts';
-import { sha256Hex, verificarHmacHex } from '../lib/hmac.ts';
+import { igualesCt, sha256Hex, verificarHmacHex } from '../lib/hmac.ts';
 import { log } from '../lib/log.ts';
-import { enmascararTelefono } from '../notify/kapso.ts';
+import { BAJA, clavesVerificacion, codigoConClaves, VERIFICAR } from '../lib/verificacion.ts';
+import { enmascararTelefono, enviarTexto, KapsoError } from '../notify/kapso.ts';
 
 // E31 · POST /webhooks/kapso · firma de Kapso · P0 (S15 15.4 y 15.10). Orden: cuerpo crudo → HMAC en tiempo constante
 // ANTES de parsear (firma mala o sin secreto → 401 sin efecto) → dedupe por X-Idempotency-Key en webhook_events →
-// 200 inmediato (Kapso exige 200 en ≤ 10 s) y el proceso sigue en waitUntil.
+// 200 inmediato (Kapso exige 200 en ≤ 10 s) y el proceso sigue en waitUntil. Entrantes (asignaciones/back-whatsapp-real.md
+// B3): cualquiera registra wa_last_inbound_at; botón → canje; «VERIFICAR <código>» y «BAJA/STOP/SALIR» → contacts.
 export const webhooksKapso = new Hono<AppEnv>();
 
 type Obj = Record<string, unknown>;
@@ -35,6 +37,30 @@ const DESDE: Record<Estado, string[]> = {
 };
 const CLAVE_VALIDA = /^[\x21-\x7e]{1,200}$/;   // cabe en webhook_events.external_id (≤ 200)
 const MAX_ITEMS = 100;
+const MAX_CUERPO = 300;                        // del texto entrante solo se mira el principio
+const MAX_CANDIDATOS = 20;                     // contactos con el mismo teléfono (uno por org como mucho)
+const REMITENTE = /^[1-9][0-9]{7,14}$/;        // E.164 sin '+', como el `from` de Meta
+
+// Subpeticiones por invocación: Workers Free admite 50; nos quedamos en 40 y una ya se fue en el dedupe. Cada paso
+// reserva su peor caso antes de empezar (fetch con su reintento de red = 2, RL_WA = 1, cada consulta o rpc = 1); el
+// número de candidatos no cuenta: sus códigos se calculan en memoria con una sola getKeys.
+export const PRESUPUESTO = 40;
+export type Presupuesto = { quedan: number; omitidos: number };
+const COSTE = {
+  estado: 1,       // update de notifications
+  entrada: 1,      // update de contacts.wa_last_inbound_at
+  boton: 4,        // vg_redeem_approval + incidente y contacto + update del incidente
+  verificar: 6,    // getKeys + candidatos + (update + orgs + envío·2 | orgs + RL_WA + envío·2 | RL_WA + envío·2)
+  baja: 4,         // update + RL_WA + envío·2
+} as const;
+function gastar(p: Presupuesto, n: number): boolean {
+  if (p.quedan < n) {
+    p.omitidos++;
+    return false;
+  }
+  p.quedan -= n;
+  return true;
+}
 
 // Con buffering (que va apagado) Kapso manda {data:[…]}; sin él, un evento por petición.
 export function itemsDe(payload: unknown): Obj[] {
@@ -98,40 +124,196 @@ async function actualizarEstado(env: CloudflareBindings, m: Obj, estado: Estado,
   log('info', 'kapso.estado', { rid, estado, filas: Array.isArray(data) ? data.length : 0, ...(error ? { error_code: error } : {}) });
 }
 
-async function registrarBoton(env: CloudflareBindings, m: Obj, conversacion: Obj, rid: string) {
-  const id = idBoton(m);
-  if (!id) {
-    log('debug', 'kapso.texto_ignorado', { rid, type: str(m.type) });   // P1: «VERIFICAR <código>» (§06.9)
-    return;
-  }
-  const b = parsearBoton(id);
-  const remitente = (str(m.from) ?? str(conversacion.phone_number) ?? '').replace(/\D/g, '');
+// ── Textos de servicio (dentro de la ventana de 24 h: el usuario acaba de escribir) ─────────────────────────────────
+// El de código no válido y el de la baja son iguales exista o no el teléfono en alguna org: no revelan nada.
+export const textoListo = (org: string) =>
+  `Listo: este WhatsApp recibirá alertas de seguridad de VanGUARD para "${org}". Para dejar de recibirlas escribe BAJA.`;
+export const TEXTO_CODIGO_NO_VALIDO =
+  'No pudimos verificar ese código. Envía el mensaje tal como aparece en Ajustes de VanGUARD e inténtalo de nuevo.';
+export const TEXTO_BAJA =
+  'Listo: este WhatsApp ya no recibirá alertas de seguridad de VanGUARD. Para volver a activarlas, verifícalo desde Ajustes.';
+
+// URL con esquema, www.… o algo con forma de dominio (acme.com): WhatsApp los vuelve enlace.
+const URL_EN_TEXTO = /\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S*|[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*\.[a-z]{2,}\b\S*/giu;
+const sinUrl = (s: string) => s.replace(URL_EN_TEXTO, ' ');
+
+/** Nombre de la org para la confirmación: sin caracteres de formato (bidi, ancho cero), sin URL, redactado, en una
+ *  línea de ≤ 40 y sin comillas dobles (va entre comillas). Vacío → «tu organización». */
+export function nombreParaMensaje(nombre: string): string {
+  const base = sinUrl(String(nombre).slice(0, 200).replace(/\p{Cf}/gu, ''));
+  const t = unaLinea(sinUrl(textoSeguro(base, 40)).replace(/"/g, "'"), 40);
+  return t || 'tu organización';
+}
+
+async function registrarBoton(env: CloudflareBindings, m: Obj, remitente: string, rid: string, p: Presupuesto) {
+  const b = parsearBoton(idBoton(m) ?? '');
   const enmascarado = remitente.length >= 8 ? enmascararTelefono(remitente) : null;
   log('info', 'kapso.boton', { rid, accion: b?.accion ?? 'desconocido', codigo: b?.codigo ?? null, remitente: enmascarado });
   // ack/snz: canje del nonce y efecto sobre el incidente (§15.10). ok/no/blk solo se registran hasta el hito siguiente.
   // Un canje sin efecto (repetido, vencido, de otra org, remitente que no es contacto) queda solo en el log.
   if (b?.accion !== 'ack' && b?.accion !== 'snz') return;
+  if (!gastar(p, COSTE.boton)) return;
   const resultado = await canjearBotonAlerta(env, b, remitente, rid);
   log(resultado === 'aplicado' ? 'info' : 'warn', 'kapso.boton_canje',
     { rid, accion: b.accion, codigo: b.codigo, resultado, remitente: enmascarado });
 }
 
+// Cualquier entrante abre la ventana de 24 h de ese teléfono en TODAS las orgs (la ventana es por usuario y número de
+// VanGUARD, no por org), en una sola sentencia.
+async function registrarEntrada(env: CloudflareBindings, tel: string, rid: string) {
+  const { data, error } = await db(env).from('contacts').update({ wa_last_inbound_at: new Date().toISOString() })
+    .eq('phone_e164', `+${tel}`).select('id');
+  if (error) log('error', 'kapso.entrada_error', { rid, code: error.code ?? null });
+  else log('debug', 'kapso.entrada', { rid, filas: Array.isArray(data) ? data.length : 0 });
+}
+
+// Respuesta de servicio. Un fallo de Kapso se registra (código corto, nunca el texto) y no corta nada.
+async function responder(env: CloudflareBindings, tel: string, texto: string, tipo: string, rid: string) {
+  try {
+    await enviarTexto(env, `+${tel}`, texto);
+    log('info', 'kapso.respuesta', { rid, tipo, remitente: enmascararTelefono(tel) });
+  } catch (e) {
+    log('warn', 'kapso.respuesta_error', { rid, tipo, remitente: enmascararTelefono(tel),
+      code: e instanceof KapsoError ? e.code : 'unavailable', detalle: e instanceof KapsoError ? e.detalle : null });
+  }
+}
+
+// Las respuestas que cualquiera puede provocar (código malo, BAJA, repetición) llevan RL_WA: 3 por minuto y teléfono.
+// Sin binding o si falla, no se responde (falla cerrada: cada respuesta gasta cupo).
+async function responderConTope(env: CloudflareBindings, tel: string, texto: string, tipo: string, rid: string) {
+  let pasa = false;
+  try {
+    pasa = (await env.RL_WA.limit({ key: `wa:${tel}` })).success;
+  } catch {
+    log('warn', 'kapso.rl_wa_error', { rid });
+  }
+  if (!pasa) {
+    log('info', 'kapso.respuesta_limitada', { rid, tipo, remitente: enmascararTelefono(tel) });
+    return;
+  }
+  await responder(env, tel, texto, tipo, rid);
+}
+
+async function nombreDeOrg(env: CloudflareBindings, org: string, rid: string): Promise<string> {
+  const { data, error } = await db(env).from('orgs').select('name').eq('id', org).maybeSingle();
+  if (error) log('warn', 'kapso.org_error', { rid, code: error.code ?? null });
+  return nombreParaMensaje(str(obj(data).name) ?? '');
+}
+
+// «VERIFICAR <código>». Quien prueba ser dueño del teléfono es el `from` (lo autentica Meta); el código solo dice QUÉ
+// contacto: es un HMAC con el org_id dentro, así que se recalcula el de CADA contacto con ese teléfono (todas las orgs)
+// con UNA getKeys y se compara en tiempo constante. Los ya verificados entran en la búsqueda solo para que repetir el
+// mensaje sea idempotente: sus fechas no se tocan y se vuelve a confirmar (con RL_WA).
+async function verificar(env: CloudflareBindings, tel: string, propuesto: string, rid: string) {
+  const admin = db(env);
+  const e164 = `+${tel}`;
+  const remitente = enmascararTelefono(tel);
+  const { data, error } = await admin.from('contacts').select('id, org_id, verified_at')
+    .eq('phone_e164', e164).eq('whatsapp', true).limit(MAX_CANDIDATOS);
+  if (error) {
+    log('error', 'kapso.verificar_error', { rid, paso: 'candidatos', code: error.code ?? null });
+    return;
+  }
+  const candidatos = (Array.isArray(data) ? data : []).map(obj);
+  let casa: { id: string; org: string; verificado: boolean } | null = null;
+  if (candidatos.length) {
+    let keys: Awaited<ReturnType<typeof clavesVerificacion>>;
+    try {
+      keys = await clavesVerificacion(env, admin);
+    } catch (e) {
+      log('error', 'kapso.verificar_error', { rid, paso: 'claves', name: e instanceof Error ? e.name : typeof e });
+      return;
+    }
+    const codigo = propuesto.toUpperCase();
+    for (const c of candidatos) {
+      const id = str(c.id), org = str(c.org_id);
+      if (id && org && await igualesCt(await codigoConClaves(keys, org, id), codigo)) {
+        casa = { id, org, verificado: !!str(c.verified_at) };
+        break;
+      }
+    }
+  }
+  if (!casa) {
+    log('info', 'kapso.verificar', { rid, resultado: 'no_casa', remitente });
+    await responderConTope(env, tel, TEXTO_CODIGO_NO_VALIDO, 'codigo_no_valido', rid);
+    return;
+  }
+  if (casa.verificado) {
+    log('info', 'kapso.verificar', { rid, resultado: 'ya_verificado', org_id: casa.org, remitente });
+    await responderConTope(env, tel, textoListo(await nombreDeOrg(env, casa.org, rid)), 'listo', rid);
+    return;
+  }
+  const t = new Date().toISOString();
+  const u = await admin.from('contacts').update({ verified_at: t, optin_at: t })
+    .eq('id', casa.id).eq('org_id', casa.org).eq('phone_e164', e164).is('verified_at', null).select('id');
+  if (u.error) {
+    log('error', 'kapso.verificar_error', { rid, paso: 'update', code: u.error.code ?? null });
+    return;
+  }
+  if (!Array.isArray(u.data) || u.data.length === 0) {
+    // Otro evento lo verificó entre la lectura y el update: ese ya respondió.
+    log('info', 'kapso.verificar', { rid, resultado: 'carrera', org_id: casa.org, remitente });
+    return;
+  }
+  log('info', 'kapso.verificar', { rid, resultado: 'verificado', org_id: casa.org, remitente });
+  await responder(env, tel, textoListo(await nombreDeOrg(env, casa.org, rid)), 'listo', rid);
+}
+
+// «BAJA», «STOP» o «SALIR»: verified_at = null en TODAS las filas con ese teléfono (la política de Meta exige respetar
+// cualquier baja). optin_at se conserva: es la evidencia histórica del consentimiento que hubo; un VERIFICAR nuevo lo
+// reescribe. La confirmación es la misma haya filas o no.
+async function darDeBaja(env: CloudflareBindings, tel: string, rid: string) {
+  const { data, error } = await db(env).from('contacts').update({ verified_at: null }).eq('phone_e164', `+${tel}`).select('id');
+  if (error) {
+    log('error', 'kapso.baja_error', { rid, code: error.code ?? null });
+    return;
+  }
+  log('info', 'kapso.baja', { rid, filas: Array.isArray(data) ? data.length : 0, remitente: enmascararTelefono(tel) });
+  await responderConTope(env, tel, TEXTO_BAJA, 'baja', rid);
+}
+
+// whatsapp.message.received: 1) última entrada; 2) botón → canje; 3) texto → VERIFICAR o BAJA; el resto no se contesta.
+async function procesarEntrante(env: CloudflareBindings, it: Obj, rid: string, p: Presupuesto) {
+  const m = obj(it.message);
+  const digitos = (str(m.from) ?? str(obj(it.conversation).phone_number) ?? '').replace(/\D/g, '');
+  const tel = REMITENTE.test(digitos) ? digitos : null;
+  if (!tel) log('info', 'kapso.sin_telefono', { rid, type: str(m.type) });   // p. ej. usuario con nombre de usuario
+  else if (gastar(p, COSTE.entrada)) await registrarEntrada(env, tel, rid);
+
+  if (idBoton(m)) {
+    await registrarBoton(env, m, digitos, rid, p);
+    return;
+  }
+  if (!tel) return;
+  const cuerpo = str(m.type) === 'text' ? (str(obj(m.text).body) ?? '').slice(0, MAX_CUERPO) : '';
+  const v = VERIFICAR.exec(cuerpo);
+  if (v) {
+    if (gastar(p, COSTE.verificar)) await verificar(env, tel, v[1]!, rid);
+  } else if (BAJA.test(cuerpo)) {
+    if (gastar(p, COSTE.baja)) await darDeBaja(env, tel, rid);
+  } else {
+    log('debug', 'kapso.texto_ignorado', { rid, type: str(m.type) });   // cada respuesta gasta cupo: no se contesta
+  }
+}
+
 // Proceso de un webhook ya verificado y deduplicado. Nunca lanza: corre en waitUntil.
-export async function procesarKapso(env: CloudflareBindings, evento: string | null, payload: unknown, rid: string) {
+export async function procesarKapso(env: CloudflareBindings, evento: string | null, payload: unknown, rid: string,
+  p: Presupuesto = { quedan: PRESUPUESTO - 1, omitidos: 0 }) {
   for (const it of itemsDe(payload)) {
     try {
-      const m = obj(it.message);
       if (evento === 'whatsapp.message.received') {
-        await registrarBoton(env, m, obj(it.conversation), rid);
+        await procesarEntrante(env, it, rid, p);
         continue;
       }
+      const m = obj(it.message);
       const estado = evento ? ESTADO_DE_EVENTO[evento] : ESTADO_DE_EVENTO[`whatsapp.message.${String(obj(m.kapso).status)}`];
-      if (estado) await actualizarEstado(env, m, estado, rid);
-      else log('debug', 'kapso.evento_ignorado', { rid, evento });
+      if (!estado) log('debug', 'kapso.evento_ignorado', { rid, evento });
+      else if (gastar(p, COSTE.estado)) await actualizarEstado(env, m, estado, rid);
     } catch (e) {
       log('error', 'kapso.proceso_error', { rid, name: e instanceof Error ? e.name : typeof e });
     }
   }
+  if (p.omitidos) log('warn', 'kapso.presupuesto_agotado', { rid, omitidos: p.omitidos });
 }
 
 // waitUntil del Worker (y del doble de dev-node.ts); sin ExecutionContext, c.executionCtx lanza y se espera aquí.

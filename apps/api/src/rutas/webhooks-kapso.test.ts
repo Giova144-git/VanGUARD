@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError as ApiErrorBody } from '@vanguard/contracts';
 import { sha256Hex } from '../lib/hmac.ts';
@@ -6,9 +7,21 @@ import { envDoble } from '../test/dobles.ts';
 
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
+// getKeys de mentira: FPK de bytes conocidos (0x11…) para recalcular los códigos con node:crypto; cuenta las llamadas.
+const llaves = vi.hoisted(() => ({ llamadas: 0 }));
+vi.mock('../lib/keyring.ts', () => ({
+  getKeys: async (_env: unknown, _admin: unknown, kid: string) => {
+    llaves.llamadas++;
+    const fpk = await crypto.subtle.importKey('raw', new Uint8Array(32).fill(0x11), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return { kid, kek: fpk, fpk };
+  },
+  activeKid: async () => 'v1',
+}));
 
 const { app } = await import('../app.ts');
-const { codigoError, resumenKapso } = await import('./webhooks-kapso.ts');
+const { codigoError, nombreParaMensaje, resumenKapso, TEXTO_BAJA, TEXTO_CODIGO_NO_VALIDO, textoListo } =
+  await import('./webhooks-kapso.ts');
+const { textoEnlace } = await import('../lib/verificacion.ts');
 
 const enc = new TextEncoder();
 // Secreto y nonce armados en tiempo de ejecución: ningún literal con forma de secreto real.
@@ -222,7 +235,9 @@ describe('E31 · botones: registro', () => {
     expect(r.status).toBe(200);
     expect(doble.rpcs).toEqual([{ name: 'vg_redeem_approval',
       args: { p_approval: null, p_nonce_hash: `\\x${await sha256Hex(NONCE)}`, p_recipient: TEL } }]);
-    expect(doble.ops.map((o) => o.table)).toEqual(['webhook_events']);
+    // Además del dedupe, solo la última entrada del teléfono (B3): nada de incidentes.
+    expect(doble.ops.map((o) => o.table)).toEqual(['webhook_events', 'contacts']);
+    expect(Object.keys(doble.ops[1]!.payload as object)).toEqual(['wa_last_inbound_at']);
     const linea = lineas().find((l) => l.includes('"kapso.boton"'))!;
     expect(JSON.parse(linea)).toMatchObject({ accion: 'ack', codigo: 'A1F3C9', remitente: '+58•••4567' });
     expect(JSON.parse(lineas().find((l) => l.includes('"kapso.boton_canje"'))!)).toMatchObject({ resultado: 'sin_canje' });
@@ -244,7 +259,9 @@ describe('E31 · botones: registro', () => {
       await enviar(boton(`${a}:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave: `x${i}` });
     }
     expect(doble.rpcs).toHaveLength(0);
-    expect(doble.ops.every((o) => o.table === 'webhook_events')).toBe(true);
+    // Solo el dedupe y la última entrada del teléfono (B3).
+    expect(doble.ops.every((o) => o.table === 'webhook_events'
+      || (o.table === 'contacts' && Object.keys(o.payload as object).join() === 'wa_last_inbound_at'))).toBe(true);
   });
 
   it('resumenKapso marca los botones que no casan como desconocido', () => {
@@ -374,5 +391,289 @@ describe('E31 · botones ack/snz: canje del nonce', () => {
     await enviar(boton(`ack:A1F3C9:${NONCE_SNZ}`), { evento: 'whatsapp.message.received', clave: 'r2' });
     expect(incUpdates()).toHaveLength(0);
     expect(resultado()).toEqual(['resuelto', 'ya_ack']);
+  });
+});
+
+describe('E31 · VERIFICAR, BAJA y última entrada (B3)', () => {
+  const ORG_A = 'aaaa0000-0000-4000-8000-00000000000a';
+  const ORG_B = 'bbbb0000-0000-4000-8000-00000000000b';
+  const C_A = 'c0c00000-0000-4000-8000-00000000000a';
+  const C_B = 'c0c00000-0000-4000-8000-00000000000b';
+  const C_OTRO = 'c0c00000-0000-4000-8000-0000000000c1';
+  const OTRO = '58' + '4249998877';
+  const SIN_CONTACTO = '58' + '4161112233';
+  const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  type Contacto = { id: string; org_id: string; phone_e164: string; whatsapp: boolean; verified_at: string | null;
+    optin_at: string | null; wa_last_inbound_at: string | null };
+  let contactos: Contacto[];
+  let orgs: Record<string, string>;
+  let rlWa: ReturnType<typeof vi.fn>;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let envWa: Partial<CloudflareBindings>;
+  let n = 0;
+
+  // Referencia independiente (node:crypto) del código de E26: HMAC-SHA256(fpk, contact|org|id), 6 hex en mayúsculas.
+  const codigoDe = (org: string, id: string) =>
+    createHmac('sha256', Buffer.alloc(32, 0x11)).update(`contact|${org}|${id}`).digest('hex').slice(0, 6).toUpperCase();
+  const contacto = (id: string, org_id: string, tel: string): Contacto =>
+    ({ id, org_id, phone_e164: `+${tel}`, whatsapp: true, verified_at: null, optin_at: null, wa_last_inbound_at: null });
+  const fila = (id: string) => contactos.find((c) => c.id === id)!;
+  // ¿La fila pasa los .eq de la consulta? 'is.<col>' es el .is(col, null) que añade conIs.
+  const pasa = (f: Record<string, unknown>, op: Op) =>
+    op.filters.every(([c, o, v]) => o !== 'eq' || (c.startsWith('is.') ? f[c.slice(3)] === v : f[c] === v));
+  // El doble común no implementa .is(): aquí se añade y queda como filtro ['is.<col>', 'eq', valor].
+  const conIs = (c: ReturnType<typeof dbDoble>['client']) => ({ ...c, from: (t: string) => {
+    const b = c.from(t);
+    return Object.assign(b, { is: (col: string, v: unknown) => b.eq(`is.${col}`, v) });
+  } });
+
+  beforeEach(() => {
+    n = 0;
+    llaves.llamadas = 0;
+    contactos = [contacto(C_A, ORG_A, TEL), contacto(C_B, ORG_B, TEL), contacto(C_OTRO, ORG_A, OTRO)];
+    orgs = { [ORG_A]: 'Acme Seguridad', [ORG_B]: 'Banco Ejemplo' };
+    estado.client = conIs(doble.client);
+    tabla = (op) => {
+      if (op.table === 'orgs' && op.action === 'select') {
+        const id = String(eqDe(op, 'id'));
+        return { data: orgs[id] ? { name: orgs[id] } : null };
+      }
+      if (op.table !== 'contacts') return undefined;
+      const filas = contactos.filter((f) => pasa(f, op));
+      if (op.action === 'select') return { data: filas.map((f) => ({ id: f.id, org_id: f.org_id, verified_at: f.verified_at })) };
+      if (op.action === 'update') {
+        for (const f of filas) Object.assign(f, op.payload);
+        return { data: filas.map((f) => ({ id: f.id })) };
+      }
+      return undefined;
+    };
+    // Doble de RL_WA: 3 por clave (la ventana de 60 s no corre dentro de una prueba).
+    const usos = new Map<string, number>();
+    rlWa = vi.fn(async ({ key }: { key: string }) => {
+      const k = (usos.get(key) ?? 0) + 1;
+      usos.set(key, k);
+      return { success: k <= 3 };
+    });
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: 'wamid.RESP1' }] })));
+    vi.stubGlobal('fetch', fetchMock);
+    envWa = { KAPSO_API_KEY: ['kapso', 'prueba'].join('-'), KAPSO_PHONE_NUMBER_ID: '1234567890',
+      RL_WA: { limit: rlWa } as unknown as RateLimit };
+  });
+
+  const texto = (body: string, from: string | null = TEL) => ({
+    message: { id: `wamid.T${++n}`, ...(from ? { from } : {}), type: 'text', text: { body }, kapso: { direction: 'inbound' } },
+    ...(from ? { conversation: { phone_number: `+${from}` } } : {}),
+  });
+  const entra = (p: unknown, clave = `k${++n}`) => enviar(p, { evento: 'whatsapp.message.received', clave, env: envWa });
+  type Enviado = { messaging_product: string; to: string; type: string; text: { body: string } };
+  const enviados = (): Enviado[] => fetchMock.mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)) as Enviado);
+  const cambios = (col: string) => doble.ops.filter((o) => o.table === 'contacts' && o.action === 'update'
+    && col in (o.payload as object));
+  const sinRastro = (cod: string) => {
+    const todo = lineas().join('\n');
+    expect(todo).not.toContain('4141234567');
+    expect(todo).not.toMatch(new RegExp(`\\b${cod}\\b`, 'i'));
+    expect(todo).not.toMatch(/VERIFICAR\s|Acme|Banco/);   // ni el texto ni el nombre de la org
+  };
+
+  it('VERIFICAR con código y from correctos → verified_at y optin_at, y una confirmación con el nombre de la org', async () => {
+    const cod = codigoDe(ORG_A, C_A);
+    const r = await entra(texto(`VERIFICAR ${cod}`));
+    expect(r.status).toBe(200);
+    expect(fila(C_A).verified_at).toMatch(ISO);
+    expect(fila(C_A).optin_at).toBe(fila(C_A).verified_at);
+    expect(fila(C_B).verified_at).toBeNull();
+    // Candidatos: ese teléfono con whatsapp, en todas las orgs (sin org_id); UNA getKeys para los dos candidatos.
+    const sel = doble.ops.find((o) => o.table === 'contacts' && o.action === 'select')!;
+    expect(eqDe(sel, 'phone_e164')).toBe(`+${TEL}`);
+    expect(eqDe(sel, 'whatsapp')).toBe(true);
+    expect(eqDe(sel, 'org_id')).toBeUndefined();
+    expect(llaves.llamadas).toBe(1);
+    const [u] = cambios('verified_at');
+    expect(u!.payload).toEqual({ verified_at: fila(C_A).verified_at, optin_at: fila(C_A).verified_at });
+    expect([eqDe(u!, 'id'), eqDe(u!, 'org_id'), eqDe(u!, 'phone_e164'), eqDe(u!, 'is.verified_at')])
+      .toEqual([C_A, ORG_A, `+${TEL}`, null]);
+    expect(enviados()).toEqual([{ messaging_product: 'whatsapp', to: TEL, type: 'text',
+      text: { body: 'Listo: este WhatsApp recibirá alertas de seguridad de VanGUARD para "Acme Seguridad". Para dejar de recibirlas escribe BAJA.' } }]);
+    expect(rlWa).not.toHaveBeenCalled();   // la primera confirmación no se puede repetir: no gasta RL_WA
+    expect(JSON.parse(lineas().find((l) => l.includes('"kapso.verificar"'))!))
+      .toMatchObject({ resultado: 'verificado', org_id: ORG_A, remitente: '+58•••4567' });
+    sinRastro(cod);
+    expect(JSON.stringify(doble.ops.find((o) => o.table === 'webhook_events')!.payload)).not.toContain(cod);
+  });
+
+  it('el código correcto desde otro teléfono → no verifica nada; responde lo mismo que a un código malo', async () => {
+    await entra(texto(`VERIFICAR ${codigoDe(ORG_A, C_A)}`, OTRO));
+    expect(contactos.every((c) => c.verified_at === null)).toBe(true);
+    expect(cambios('verified_at')).toHaveLength(0);
+    expect(enviados()).toEqual([expect.objectContaining({ to: OTRO, text: { body: TEXTO_CODIGO_NO_VALIDO } })]);
+  });
+
+  it('un contacto con whatsapp apagado no es candidato aunque el código sea el suyo', async () => {
+    fila(C_A).whatsapp = false;
+    await entra(texto(`VERIFICAR ${codigoDe(ORG_A, C_A)}`));
+    expect(fila(C_A).verified_at).toBeNull();
+    expect(enviados().map((e) => e.text.body)).toEqual([TEXTO_CODIGO_NO_VALIDO]);
+  });
+
+  it('código malo → respuesta genérica (igual exista o no el teléfono); la 4.ª en el mismo minuto no responde', async () => {
+    expect([codigoDe(ORG_A, C_A), codigoDe(ORG_B, C_B)]).not.toContain('000000');
+    for (let i = 0; i < 4; i++) await entra(texto('VERIFICAR 000000'));
+    expect(enviados().map((e) => e.text.body)).toEqual([TEXTO_CODIGO_NO_VALIDO, TEXTO_CODIGO_NO_VALIDO, TEXTO_CODIGO_NO_VALIDO]);
+    expect(rlWa).toHaveBeenCalledTimes(4);
+    expect(rlWa).toHaveBeenCalledWith({ key: `wa:${TEL}` });
+    expect(lineas().filter((l) => l.includes('"kapso.respuesta_limitada"'))).toHaveLength(1);
+    expect(contactos.every((c) => c.verified_at === null)).toBe(true);
+    // Un teléfono que no está en ninguna org recibe exactamente el mismo texto y no se consultan claves.
+    llaves.llamadas = 0;
+    await entra(texto('VERIFICAR 000000', SIN_CONTACTO));
+    expect(enviados().at(-1)).toEqual({ messaging_product: 'whatsapp', to: SIN_CONTACTO, type: 'text',
+      text: { body: TEXTO_CODIGO_NO_VALIDO } });
+    expect(llaves.llamadas).toBe(0);
+    sinRastro('000000');
+  });
+
+  it("'verificar <código>' en minúsculas también verifica", async () => {
+    const cod = codigoDe(ORG_A, C_A);
+    await entra(texto(`verificar ${cod.toLowerCase()}`));
+    expect(fila(C_A).verified_at).toMatch(ISO);
+    expect(enviados().map((e) => e.text.body)).toEqual([textoListo('Acme Seguridad')]);
+  });
+
+  it('el texto completo del enlace wa.me de E26 (textoEnlace) también casa', async () => {
+    await entra(texto(textoEnlace(codigoDe(ORG_B, C_B))));
+    expect(fila(C_B).verified_at).toMatch(ISO);
+    expect(fila(C_A).verified_at).toBeNull();
+    expect(enviados().map((e) => e.text.body)).toEqual([textoListo('Banco Ejemplo')]);
+  });
+
+  it('dos orgs con el mismo teléfono: cada código verifica solo su contacto', async () => {
+    await entra(texto(`VERIFICAR ${codigoDe(ORG_B, C_B)}`));
+    expect([fila(C_A).verified_at, typeof fila(C_B).verified_at]).toEqual([null, 'string']);
+    await entra(texto(`VERIFICAR ${codigoDe(ORG_A, C_A)}`));
+    expect(fila(C_A).verified_at).toMatch(ISO);
+    const us = cambios('verified_at');
+    expect(us.map((u) => [eqDe(u, 'id'), eqDe(u, 'org_id')])).toEqual([[C_B, ORG_B], [C_A, ORG_A]]);
+    expect(enviados().map((e) => e.text.body)).toEqual([textoListo('Banco Ejemplo'), textoListo('Acme Seguridad')]);
+    expect(fila(C_OTRO).verified_at).toBeNull();
+  });
+
+  it('repetir el VERIFICAR es idempotente: no cambia fechas y vuelve a confirmar (con RL_WA); el mismo evento, nada', async () => {
+    const cod = codigoDe(ORG_A, C_A);
+    await entra(texto(`VERIFICAR ${cod}`), 'r1');
+    const { verified_at, optin_at } = fila(C_A);
+    await new Promise((ok) => setTimeout(ok, 5));
+    await entra(texto(`VERIFICAR ${cod}`), 'r2');
+    await entra(texto(`VERIFICAR ${cod}`), 'r2');   // misma X-Idempotency-Key: deduplicado
+    expect(fila(C_A)).toMatchObject({ verified_at, optin_at });
+    expect(cambios('verified_at')).toHaveLength(1);
+    expect(enviados().map((e) => e.text.body)).toEqual([textoListo('Acme Seguridad'), textoListo('Acme Seguridad')]);
+    expect(rlWa).toHaveBeenCalledOnce();
+    expect(lineas().some((l) => l.includes('"ya_verificado"'))).toBe(true);
+  });
+
+  it('BAJA, STOP y SALIR: verified_at = null en todas las filas del teléfono, optin_at se conserva, y se confirma', async () => {
+    const antes = '2026-10-24T14:00:00.000Z';
+    for (const [i, palabra] of ['BAJA', 'stop', 'Salir por favor'].entries()) {
+      for (const c of contactos) Object.assign(c, { verified_at: antes, optin_at: antes });
+      await entra(texto(palabra), `baja${i}`);
+      expect([fila(C_A).verified_at, fila(C_B).verified_at]).toEqual([null, null]);
+      expect([fila(C_A).optin_at, fila(C_B).optin_at]).toEqual([antes, antes]);
+      expect(fila(C_OTRO).verified_at).toBe(antes);
+    }
+    const us = cambios('verified_at');
+    expect(us).toHaveLength(3);
+    for (const u of us) {
+      expect(u.payload).toEqual({ verified_at: null });
+      expect(u.filters).toEqual([['phone_e164', 'eq', `+${TEL}`]]);
+    }
+    expect(enviados().map((e) => e.text.body)).toEqual([TEXTO_BAJA, TEXTO_BAJA, TEXTO_BAJA]);
+    // Sin contactos con ese teléfono: la misma confirmación (no revela nada).
+    await entra(texto('BAJA', SIN_CONTACTO));
+    expect(enviados().at(-1)).toMatchObject({ to: SIN_CONTACTO, text: { body: TEXTO_BAJA } });
+    expect(lineas().join('\n')).not.toContain('4141234567');
+  });
+
+  it('cualquier entrante (texto, botón, imagen, solo conversation.phone_number) actualiza wa_last_inbound_at', async () => {
+    await entra(texto('hola'));
+    await entra(boton(`ack:A1F3C9:${NONCE}`));
+    await entra({ message: { id: 'wamid.IMG', from: TEL, type: 'image', image: { id: 'm1' } } });
+    await entra({ message: { id: 'wamid.SIN_FROM', type: 'reaction' }, conversation: { phone_number: `+${TEL}` } });
+    const us = cambios('wa_last_inbound_at');
+    expect(us).toHaveLength(4);
+    for (const u of us) {
+      expect(Object.keys(u.payload as object)).toEqual(['wa_last_inbound_at']);
+      expect(String((u.payload as Record<string, unknown>).wa_last_inbound_at)).toMatch(ISO);
+      expect(u.filters).toEqual([['phone_e164', 'eq', `+${TEL}`]]);   // una sentencia, todas las orgs
+    }
+    expect([fila(C_A).wa_last_inbound_at, fila(C_B).wa_last_inbound_at].every((t) => ISO.test(String(t)))).toBe(true);
+    expect(fila(C_OTRO).wa_last_inbound_at).toBeNull();
+    // «hola» no se contesta: ni RL_WA ni envío.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(rlWa).not.toHaveBeenCalled();
+    expect(lineas().some((l) => l.includes('"kapso.texto_ignorado"'))).toBe(true);
+  });
+
+  it('sin from ni conversation.phone_number → solo el log kapso.sin_telefono', async () => {
+    const r = await entra(texto(`VERIFICAR ${codigoDe(ORG_A, C_A)}`, null));
+    expect(r.status).toBe(200);
+    expect(doble.ops.map((o) => o.table)).toEqual(['webhook_events']);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(rlWa).not.toHaveBeenCalled();
+    expect(llaves.llamadas).toBe(0);
+    expect(lineas().some((l) => l.includes('"kapso.sin_telefono"'))).toBe(true);
+  });
+
+  it('un fallo al responder (Kapso caído o sin configurar) no tumba nada: 200, contacto verificado y log', async () => {
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 503 }));
+    const r = await entra(texto(`VERIFICAR ${codigoDe(ORG_A, C_A)}`));
+    expect(r.status).toBe(200);
+    expect(fila(C_A).verified_at).toMatch(ISO);
+    expect(JSON.parse(lineas().find((l) => l.includes('"kapso.respuesta_error"'))!)).toMatchObject({ tipo: 'listo', code: 'unavailable' });
+    envWa = { ...envWa, KAPSO_API_KEY: undefined };
+    fetchMock.mockClear();
+    await entra(texto('BAJA'));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(lineas().some((l) => l.includes('"kapso.respuesta_error"') && l.includes('"sin_config"'))).toBe(true);
+  });
+
+  it('sin binding RL_WA no se responde lo que pasa por el tope (falla cerrada)', async () => {
+    envWa = { ...envWa, RL_WA: undefined as unknown as RateLimit };
+    await entra(texto('VERIFICAR 000000'));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(lineas().some((l) => l.includes('"kapso.respuesta_limitada"'))).toBe(true);
+  });
+
+  it('presupuesto: un lote de 10 VERIFICAR en el peor caso no pasa de 40 subpeticiones', async () => {
+    // Diez contactos con su propio teléfono y su código bueno; Kapso sin red → cada envío reintenta una vez (2 fetch).
+    const items = Array.from({ length: 10 }, (_, i) => {
+      const tel = '58414' + String(1000000 + i);
+      const id = `d0d00000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+      contactos.push(contacto(id, ORG_A, tel));
+      return { message: { id: `wamid.L${i}`, from: tel, type: 'text', text: { body: `VERIFICAR ${codigoDe(ORG_A, id)}` } } };
+    });
+    fetchMock.mockImplementation(async () => { throw new TypeError('sin red'); });
+    await entra({ data: items });
+    const subpeticiones = doble.ops.length + doble.rpcs.length + llaves.llamadas + fetchMock.mock.calls.length
+      + rlWa.mock.calls.length;
+    expect(subpeticiones).toBeLessThanOrEqual(40);
+    expect(contactos.filter((c) => c.verified_at).length).toBe(5);
+    expect(JSON.parse(lineas().find((l) => l.includes('"kapso.presupuesto_agotado"'))!)).toMatchObject({ omitidos: 6 });
+  });
+
+  it('nombreParaMensaje: sin URL, sin comillas dobles, sin caracteres de formato, una línea de ≤ 40', () => {
+    expect(nombreParaMensaje('Acme Seguridad')).toBe('Acme Seguridad');
+    const hostil = nombreParaMensaje('Acme https://evil.example/x?t=1 "VIP" visita www.malo.test o acme.com\nya');
+    expect(hostil).not.toMatch(/https?:|evil|www\.|malo\.test|acme\.com|"|\n/i);
+    expect(hostil).toContain('Acme');
+    expect(nombreParaMensaje('‮abc​ def')).toBe('abc def');
+    expect(nombreParaMensaje('x'.repeat(80)).length).toBeLessThanOrEqual(40);
+    for (const vacio of ['', '   ', 'https://solo.url', 'dominio.com']) expect(nombreParaMensaje(vacio)).toBe('tu organización');
+  });
+
+  it('el nombre de la org llega saneado a la confirmación', async () => {
+    orgs[ORG_A] = 'Mi "Org" en https://phish.example';
+    await entra(texto(`VERIFICAR ${codigoDe(ORG_A, C_A)}`));
+    expect(enviados().map((e) => e.text.body)).toEqual([textoListo("Mi 'Org' en")]);
   });
 });

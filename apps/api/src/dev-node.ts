@@ -13,7 +13,7 @@ const PUERTO = 8787;
 
 const pasa: RateLimit = { limit: async () => ({ success: true }) };
 
-const env = { ...process.env, VG_ENV: process.env.VG_ENV ?? 'local', RL_API: pasa, RL_COSTLY: pasa, RL_INGEST: pasa } as
+const env = { ...process.env, VG_ENV: process.env.VG_ENV ?? 'local', RL_API: pasa, RL_COSTLY: pasa, RL_INGEST: pasa, RL_WA: pasa } as
   unknown as CloudflareBindings;
 env.JOBS_Q = colaEnSerie(env, (e) => log('error', 'dev.job_error', { name: (e as Error)?.name })) as unknown as Queue<JobMsg>;
 

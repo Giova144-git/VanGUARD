@@ -17,12 +17,13 @@ import { recortar } from '../scans/repo-paso.ts';
 import { codigoGithub, ghHeaders, leerAcotado } from '../scans/repo.ts';
 import type { RespuestaCola } from '../wiki/pasos.ts';
 
-// Revisión de código en cada push (asignaciones/revision-codigo.md §2): mensajes {kind:'review'} de vg-jobs. Paso 'diff'
-// (§2.2–2.5): claim CAS → config y conexión (el repo sale de connections.meta, nunca del payload) → compare base...head
-// con el PAT en formato diff → solo las líneas AÑADIDAS, en compacto → reglas (secretos y .env) → aFila → ocultarRutas →
-// vg_review_findings (decide «nuevo» y alert_state en una transacción) → si queda 'pending', encola el paso 'aviso'
-// (notify/revision.ts). Como la wiki, decide ack o retry: un transitorio (429, 403 con límite, 5xx, red, plazo) se
-// reintenta 2 veces y después la revisión queda failed con su código; lo que agota la CPU llega a la DLQ (failed/dlq).
+// Revisión de código en cada push y PR (asignaciones/revision-codigo.md §2): mensajes {kind:'review'} de vg-jobs. Paso
+// 'diff' (§2.2–2.5): claim CAS → config y conexión (el repo sale de connections.meta, nunca del payload) → compare
+// base...head con el PAT en formato diff → solo las líneas AÑADIDAS, en compacto → reglas (secretos y .env) →
+// aFila → ocultarRutas → vg_review_findings (decide «nuevo» y alert_state en una transacción; p_write solo en un
+// push, y un PR de fork va con sin_aviso) → si queda 'pending', encola el paso 'aviso' (notify/revision.ts). Como la
+// wiki, decide ack o retry: un transitorio (429, 403 con límite, 5xx, red, plazo) se reintenta 2 veces y después la
+// revisión queda failed con su código; lo que agota la CPU llega a la DLQ (failed/dlq).
 // Subpeticiones (§2.7): claim 1 + config y conexión 2 + PAT y llaves ≤ 6 + compare ≤ 4 + last_error 'token' ≤ 1 +
 // vg_review_findings 1 (+1 de rescate si la base rechaza el lote, 23514) + encolar 1 ≤ 17 de 40.
 
@@ -42,7 +43,10 @@ const escalonado = (intento: number) => 10 * 2 ** Math.max(0, intento - 1);
 const obj = (x: unknown): Record<string, unknown> =>
   (x && typeof x === 'object' && !Array.isArray(x) ? x as Record<string, unknown> : {});
 
-type FilaRevision = { id: string; config_id: string; event: string; base_sha: string; head_sha: string };
+// alert_reason: 'fork' lo pone E47 en un PR de un fork de alguien de fuera (§1.3); viaja como sin_aviso a la RPC.
+type FilaRevision = {
+  id: string; config_id: string; event: string; base_sha: string; head_sha: string; alert_reason: string | null;
+};
 // Lo que sale de withSecret: nunca el token. 'grande' = 406/422 (diff demasiado grande para GitHub).
 type Leido = { tipo: 'diff'; texto: string; cortado: boolean } | { tipo: 'grande' }
   | { tipo: 'fallo'; code: string; token: boolean };
@@ -98,7 +102,7 @@ export async function ocultarRutas(filas: readonly Fila[]): Promise<{ filas: Fil
 async function reclamar(env: CloudflareBindings, m: MsgRevision, intento: number): Promise<FilaRevision | null> {
   const { data, error } = await db(env).from('code_reviews').update({ status: 'running', started_at: new Date().toISOString() })
     .eq('id', m.review_id).eq('org_id', m.org_id).in('status', intento > 1 ? ['queued', 'running'] : ['queued'])
-    .select('id, config_id, event, base_sha, head_sha').maybeSingle();
+    .select('id, config_id, event, base_sha, head_sha, alert_reason').maybeSingle();
   if (error) throw new ProviderError('unavailable');
   return (data as FilaRevision | null) ?? null;
 }
@@ -241,8 +245,10 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
     : fuera.length ? 'hallazgos_truncados' : null;
   let anadidas = 0;
   for (const a of p.archivos) for (const l of a.lineas) if (l.t === '+') anadidas++;
+  // PR (§2.5): p_write false, nada va a findings (el código aún no está en la rama). Fork: sin_aviso, solo en la app.
+  const fork = rev.alert_reason === 'fork';
   const p_meta = { files_changed: p.archivos.length, lines_added: anadidas, partial: motivo !== null,
-    error_code: motivo ?? (oc.ocultas ? 'tripwire' : null) };
+    error_code: motivo ?? (oc.ocultas ? 'tripwire' : null), ...(fork ? { sin_aviso: 'fork' } : {}) };
   const llamar = (rows: Fila[], meta: typeof p_meta) => admin.rpc('vg_review_findings',
     { p_org: m.org_id, p_review: rev.id, p_rows: rows, p_write: rev.event === 'push', p_meta: meta });
   let r = await llamar(oc.filas, p_meta);
@@ -265,9 +271,10 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
       return { retry: escalonado(intento) };
     }
   }
-  log('info', 'revision.fin', { review: m.review_id, sha7: rev.head_sha.slice(0, 7), ms: Date.now() - t0, archivos: p.archivos.length,
-    anadidas, filas: oc.filas.length, omitidas: fuera.length, ocultas: oc.ocultas, nuevos: res.nuevos ?? null,
-    parcial: p_meta.partial, error_code: p_meta.error_code, alert_state: res.alert_state ?? null, intento });
+  log('info', 'revision.fin', { review: m.review_id, evento: rev.event, sha7: rev.head_sha.slice(0, 7), ms: Date.now() - t0,
+    archivos: p.archivos.length, anadidas, filas: oc.filas.length, omitidas: fuera.length, ocultas: oc.ocultas,
+    nuevos: res.nuevos ?? null, parcial: p_meta.partial, error_code: p_meta.error_code, fork,
+    alert_state: res.alert_state ?? null, intento });
   return 'ack';
 }
 

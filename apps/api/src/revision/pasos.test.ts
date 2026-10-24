@@ -63,6 +63,8 @@ let entorno: ReturnType<typeof envDoble>;
 
 const cumple = (f: Fila, op: Op) => op.filters.every(([c, o, v]) =>
   o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : o === 'is' ? (f[c] ?? null) === v : true);
+const proyectar = (f: Fila, cols?: string): Fila =>
+  (cols ? Object.fromEntries(cols.split(',').map((c) => c.trim()).map((c) => [c, f[c] ?? null])) : { ...f });
 
 beforeEach(() => {
   fila = { id: REV, org_id: ORG, config_id: CFG, event: 'push', base_sha: BASE, head_sha: HEAD, status: 'queued',
@@ -85,7 +87,11 @@ beforeEach(() => {
       if (op.table !== 'code_reviews') return undefined;
       const hit = cumple(fila, op) ? fila : null;
       if (op.action === 'select') return { data: hit };
-      if (op.action === 'update') { if (hit) Object.assign(fila, op.payload); return { data: hit }; }
+      // Como PostgREST, un update().select(cols) devuelve solo esas columnas: el claim tiene que pedir lo que usa.
+      if (op.action === 'update') {
+        if (hit) Object.assign(fila, op.payload);
+        return { data: hit && proyectar(hit, op.returning) };
+      }
       return undefined;
     },
     // vg_review_findings (0013): CAS sobre la running de esa org; deja done y el alert_state que diga la prueba.
@@ -412,6 +418,57 @@ describe('paso diff · diff y filas (§2.2–2.5)', () => {
     expect(await correr(1)).toEqual({ retry: 10 });
     expect(await correr(3)).toBe('ack');
     expect(fila).toMatchObject({ status: 'failed', error_code: 'unavailable' });
+  });
+});
+
+describe('paso diff · pull_request (B7)', () => {
+  it('PR del mismo repo → compare base...head de la fila en el repo de meta, p_write false, sin sin_aviso y aviso', async () => {
+    Object.assign(fila, { event: 'pull_request', pr_number: 12, alert_reason: null });
+    expect(await correr()).toBe('ack');
+    expect(fetchMock.mock.calls[0]![0]).toBe(`https://api.github.com/repos/Acme/Tienda/compare/${BASE}...${HEAD}`);
+    expect(rpcs[0]).toMatchObject({ p_org: ORG, p_review: REV, p_write: false,
+      p_meta: { files_changed: 1, lines_added: 3, partial: false, error_code: null } });
+    expect(rpcs[0]!.p_meta).not.toHaveProperty('sin_aviso');
+    expect(filas().map((f) => f.rule_id)).toEqual(['CB_SECRET_STRIPE_LIVE']);
+    expect(entorno.enviados).toEqual([avisoEncolado()]);
+  });
+
+  it('push sin alert_reason → p_write true y sin sin_aviso, como antes', async () => {
+    Object.assign(fila, { alert_reason: null });
+    await correr();
+    expect(rpcs[0]).toMatchObject({ p_write: true });
+    expect(rpcs[0]!.p_meta).not.toHaveProperty('sin_aviso');
+  });
+
+  it('PR de un fork (alert_reason fork) → p_write false y sin_aviso fork, sin consultas de más que un push', async () => {
+    await correr();   // push de referencia
+    const consultas = doble.ops.length;
+    doble.ops.length = 0;
+    rpcs = [];
+    Object.assign(fila, { status: 'queued', event: 'pull_request', pr_number: 31, alert_reason: 'fork',
+      alert_state: 'none' });
+    rpcAlerta = 'none';   // la 0013 deja none/fork: no hay paso aviso
+    expect(await correr()).toBe('ack');
+    expect(rpcs).toHaveLength(1);
+    expect(rpcs[0]).toMatchObject({ p_write: false, p_meta: { sin_aviso: 'fork', partial: false } });
+    expect(doble.ops.length).toBe(consultas);   // alert_reason sale del mismo claim
+    expect(de('code_reviews', 'update')[0]!.returning).toMatch(/\balert_reason\b/);
+    expect(entorno.enviados).toEqual([avisoEncolado()]);   // solo el del push
+    expect(lineas()).toContain('"fork":true');
+  });
+
+  it('el rescate del 23514 también manda sin_aviso fork y p_write false', async () => {
+    Object.assign(fila, { event: 'pull_request', pr_number: 31, alert_reason: 'fork' });
+    rpcError = (n) => (n === 1 ? { code: '23514' } : null);
+    expect(await correr()).toBe('ack');
+    expect(rpcs.map((a) => [a.p_write, (a.p_meta as Fila).sin_aviso])).toEqual([[false, 'fork'], [false, 'fork']]);
+    expect(rpcs[1]).toMatchObject({ p_meta: { error_code: 'tripwire' } });
+  });
+
+  it('un reintento (attempts > 1) de un PR de fork que retoma la running sigue mandando sin_aviso', async () => {
+    Object.assign(fila, { status: 'running', event: 'pull_request', pr_number: 31, alert_reason: 'fork' });
+    expect(await correr(2)).toBe('ack');
+    expect(rpcs[0]).toMatchObject({ p_write: false, p_meta: { sin_aviso: 'fork' } });
   });
 });
 

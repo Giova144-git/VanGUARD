@@ -6,6 +6,7 @@ export type Op = {
   action: 'select' | 'insert' | 'upsert' | 'update' | 'delete';
   columns?: string;
   head?: boolean;
+  returning?: string;   // columnas del .select() tras insert/upsert/update/delete (lo que devuelve la escritura)
   filters: Filtro[];
   payload?: unknown;
   options?: unknown;
@@ -27,7 +28,7 @@ export function dbDoble(h: Manejadores = {}) {
     const op: Op = { table, action: 'select', filters: [] };
     const b = {
       select(columns?: string, o?: { count?: string; head?: boolean }) {
-        if (op.action === 'select') { op.columns = columns; op.head = o?.head; }
+        if (op.action === 'select') { op.columns = columns; op.head = o?.head; } else op.returning = columns;
         return b;
       },
       insert(payload: unknown) { op.action = 'insert'; op.payload = payload; return b; },

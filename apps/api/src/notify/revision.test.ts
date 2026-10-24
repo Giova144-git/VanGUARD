@@ -144,6 +144,36 @@ describe('aviso · envío', () => {
   });
 });
 
+describe('aviso · pull_request (B7)', () => {
+  it('el aviso de un PR dice «Pull request #N hacia main (sha7).» con la misma url y las mismas lecturas que un push', async () => {
+    await avisar();   // push de referencia
+    const lecturas = doble.ops.length;
+    Object.assign(rev, { event: 'pull_request', pr_number: 12, alert_state: 'pending' });
+    notifs = [];
+    doble.ops.length = 0;
+    expect(await avisar()).toBe('ack');
+    expect(doble.ops.length).toBe(lecturas);
+    const lectura = doble.ops.find((o) => o.table === 'code_reviews' && o.action === 'select' && !o.head)!;
+    expect(lectura.columns).toContain('event');
+    expect(lectura.columns).toContain('pr_number');
+    expect(enviados()[1]!.text.body).toBe(['VanGUARD · Revisión de código', 'Pull request #12 hacia main (9f1c2e7).',
+      'Nuevo: 1 crítico.', '- 1 clave o token en el código',
+      `Rota las claves expuestas y revisa el detalle: https://officialvanguard.com/o/${ORG}/codebase?revision=${REV}`].join('\n'));
+    expect(notifs[0]).toMatchObject({ code_review_id: REV, template: 'code_review_v1', status: 'sent' });
+    expect(rev).toMatchObject({ alert_state: 'sent' });
+  });
+
+  it('PR parcial sin nuevos → «No pudimos revisar entero este pull request.»; nada del PR más allá del número', async () => {
+    Object.assign(rev, { event: 'pull_request', pr_number: 7, partial: true, max_severity: null, new_findings: [],
+      counts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 } });
+    await avisar();
+    const cuerpo = enviados()[0]!.text.body;
+    expect(cuerpo).toBe(['VanGUARD · Revisión de código', 'Pull request #7 hacia main (9f1c2e7).',
+      'No pudimos revisar entero este pull request.',
+      `Revísalo en VanGUARD: https://officialvanguard.com/o/${ORG}/codebase?revision=${REV}`].join('\n'));
+  });
+});
+
 describe('aviso · lo que no sale', () => {
   it('ventana de 24 h cerrada → fila failed/window_closed sin llamar a Kapso y not_sent/window_closed', async () => {
     contactos[1]!.wa_last_inbound_at = hace(2 * 86_400_000);

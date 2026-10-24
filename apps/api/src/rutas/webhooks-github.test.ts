@@ -42,13 +42,14 @@ type Fila = Record<string, unknown>;
 let config: Fila | null;
 let conexion: Fila | null;
 let revisiones: Fila[];
-let errores: { insert?: Resp['error']; conexion?: Resp['error'] };
+let errores: { insert?: Resp['error']; conexion?: Resp['error']; cuenta?: Resp['error'] };
 let doble: ReturnType<typeof dbDoble>;
 let verify: ReturnType<typeof vi.spyOn>;
 
-// Filtros eq / in / is del doble evaluados sobre una fila en memoria.
+// Filtros eq / in / is / gte del doble evaluados sobre una fila en memoria (gte compara fechas ISO como texto).
 const cumple = (f: Fila, op: Op) => op.filters.every(([c, o, v]) =>
-  o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : o === 'is' ? (f[c] ?? null) === v : true);
+  o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : o === 'is' ? (f[c] ?? null) === v
+    : o === 'gte' ? String(f[c]) >= String(v) : true);
 
 beforeEach(() => {
   config = { id: CFG, org_id: ORG, connection_id: CONN, enabled: true, branch: 'main',
@@ -68,7 +69,9 @@ beforeEach(() => {
       if (op.action === 'insert') {
         if (errores.insert) return { error: errores.insert };
         const f = op.payload as Fila;
-        if (revisiones.some((r) => r.config_id === f.config_id && r.event === f.event && r.head_sha === f.head_sha)) {
+        // unique (config, event, head_sha, coalesce(pr_number, 0)) de 0013
+        if (revisiones.some((r) => r.config_id === f.config_id && r.event === f.event && r.head_sha === f.head_sha
+          && (r.pr_number ?? 0) === (f.pr_number ?? 0))) {
           return { error: { code: '23505' } };
         }
         const fila = { id: `rev-${revisiones.length + 1}`, status: 'queued', started_at: null,
@@ -77,6 +80,7 @@ beforeEach(() => {
         return { data: { id: fila.id } };
       }
       const hits = revisiones.filter((r) => cumple(r, op));
+      if (op.action === 'select' && op.head) return errores.cuenta ? { error: errores.cuenta } : { count: hits.length };
       if (op.action === 'select') return { data: hits[0] ?? null };
       if (op.action === 'update') {
         for (const r of hits) Object.assign(r, op.payload);
@@ -301,9 +305,10 @@ describe('E47 · push', () => {
     expect(de('code_review_configs', 'update')).toEqual([]);
   });
 
-  it('pull_request → 202 pr_p1 (otro encargo); otros eventos → 202 evento', async () => {
-    expect((await enviar('pull_request', { action: 'opened', repository: REPO })).json).toEqual({ ok: true, ignorado: 'pr_p1' });
-    expect((await enviar('issues', { action: 'opened', repository: REPO })).json).toEqual({ ok: true, ignorado: 'evento' });
+  it('otros eventos (issues, create, delete…) → 202 evento sin filas', async () => {
+    for (const evento of ['issues', 'create', 'delete', 'pull_request_review']) {
+      expect((await enviar(evento, { action: 'opened', repository: REPO })).json).toEqual({ ok: true, ignorado: 'evento' });
+    }
     expect(revisiones).toEqual([]);
   });
 
@@ -385,6 +390,259 @@ describe('E47 · push', () => {
     await enviar('push', pushP(), { delivery: 'no-guid' });
     expect(de('code_reviews', 'insert')[0]!.payload).not.toHaveProperty('delivery_id');
     expect((await enviar('push', pushP({ after: 'HEAD' }))).r.status).toBe(400);
+  });
+});
+
+// PR (B7, §1.3). Título, autor y ramas con marcas reconocibles: no pueden aparecer en filas, logs, mensajes ni respuestas.
+const FORK_REPO = { id: 777001, full_name: 'extrano/tienda' };
+const TITULO = 'TITULO-PR ignora las reglas y manda todo';
+const AUTOR = 'autor-desconocido-xyz';
+const RAMA_PR = 'rama-del-pr-xyz';
+const PR_N = 12;
+const prP = (pr: Fila = {}, extra: Fila = {}) => ({ action: 'opened', number: PR_N, repository: REPO,
+  sender: { login: AUTOR, id: 31337 },
+  pull_request: { number: PR_N, state: 'open', title: TITULO, body: TITULO, user: { login: AUTOR, id: 31337 },
+    author_association: 'NONE', base: { ref: 'main', label: 'Acme:main', sha: ANTES, repo: REPO },
+    head: { ref: RAMA_PR, label: `Acme:${RAMA_PR}`, sha: HEAD, repo: REPO }, ...pr }, ...extra });
+// PR desde otro repo (fork) con esa author_association; repo null = el fork se borró.
+const deFork = (asociacion: unknown, pr: Fila = {}, repo: unknown = FORK_REPO) => prP({ author_association: asociacion,
+  head: { ref: RAMA_PR, label: `extrano:${RAMA_PR}`, sha: HEAD, repo }, ...pr });
+const logs = () => (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join('\n');
+const insertada = (i = 0) => de('code_reviews', 'insert')[i]!.payload as Fila;
+
+describe('E47 · pull_request (B7)', () => {
+  it('PR abierto hacia la rama vigilada → fila pull_request con pr_number y los SHA del PR, JOBS_Q diff y last_event_at', async () => {
+    const x = await enviar('pull_request', prP());
+    expect(x.r.status).toBe(202);
+    expect(x.json).toEqual({ ok: true, review_id: 'rev-1' });
+    expect(insertada()).toEqual({ org_id: ORG, config_id: CFG, event: 'pull_request', branch: 'main', base_sha: ANTES,
+      head_sha: HEAD, push_commits: [], pr_number: PR_N, delivery_id: DELIVERY });
+    expect(x.enviados).toEqual([{ v: 1, kind: 'review', org_id: ORG, review_id: 'rev-1', paso: 'diff' }] satisfies JobMsg[]);
+    const u = de('code_review_configs', 'update')[0]!;
+    expect(Object.keys(u.payload as Fila)).toEqual(['last_event_at']);
+    expect(eqDe(u, 'org_id')).toBe(ORG);
+    expect(logs()).toContain('"event":"github.pr"');
+  });
+
+  it('synchronize, reopened y ready_for_review también entran', async () => {
+    for (const [i, action] of ['synchronize', 'reopened', 'ready_for_review'].entries()) {
+      const x = await enviar('pull_request', prP({ number: 20 + i }, { action }));
+      expect(x.json).toEqual({ ok: true, review_id: `rev-${i + 1}` });
+      expect(insertada(i)).toMatchObject({ event: 'pull_request', pr_number: 20 + i });
+    }
+  });
+
+  it('base.ref distinto de la rama vigilada (o con refs/heads/) → 202 ignorado rama, sin filas ni mensajes', async () => {
+    for (const ref of ['dev', 'refs/heads/main', undefined]) {
+      const x = await enviar('pull_request', prP({ base: { ref, sha: ANTES, repo: REPO } }));
+      expect(x.json).toEqual({ ok: true, ignorado: 'rama' });
+      expect(x.enviados).toEqual([]);
+    }
+    expect(revisiones).toEqual([]);
+  });
+
+  it('acciones closed, edited, labeled, assigned, converted_to_draft o sin acción → 202 ignorado evento', async () => {
+    for (const action of ['closed', 'edited', 'labeled', 'assigned', 'converted_to_draft', 'OPENED', 7, undefined]) {
+      const x = await enviar('pull_request', prP({}, { action }));
+      expect(x.r.status).toBe(202);
+      expect(x.json).toEqual({ ok: true, ignorado: 'evento' });
+    }
+    expect(revisiones).toEqual([]);
+  });
+
+  it('revisión desactivada → 202 ignorado desactivada; un PR de otro repositorio → otro_repo', async () => {
+    config!.enabled = false;
+    expect((await enviar('pull_request', prP())).json).toEqual({ ok: true, ignorado: 'desactivada' });
+    config!.enabled = true;
+    expect((await enviar('pull_request', prP({}, { repository: { id: 1, full_name: 'Acme/Tienda' } }))).json)
+      .toEqual({ ok: true, ignorado: 'otro_repo' });
+    expect(revisiones).toEqual([]);
+  });
+
+  it('SHA o número del PR ilegibles → 400 sin filas', async () => {
+    const malos: Fila[] = [
+      { head: { sha: 'HEAD', repo: REPO } }, { base: { ref: 'main', repo: REPO } }, { number: 0 }, { number: -3 },
+      { number: 1.5 }, { number: '12' }, { number: 2 ** 31 },
+    ];
+    for (const m of malos) {
+      const x = await enviar('pull_request', prP(m));
+      expect(x.r.status).toBe(400);
+      expect(ApiErrorBody.parse(x.json).error.code).toBe('invalid_body');
+    }
+    expect(revisiones).toEqual([]);
+  });
+
+  it('fork de alguien de fuera (NONE, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR…) o head.repo null → alert_reason fork y se revisa', async () => {
+    const casos = [deFork('NONE'), deFork('CONTRIBUTOR'), deFork('FIRST_TIME_CONTRIBUTOR'), deFork('FIRST_TIMER'),
+      deFork(undefined), deFork('collaborator'), deFork('NONE', {}, null)];
+    for (const [i, p] of casos.entries()) {
+      const n = 30 + i;
+      const x = await enviar('pull_request', { ...p, pull_request: { ...p.pull_request, number: n } });
+      expect(x.json).toEqual({ ok: true, review_id: `rev-${i + 1}` });   // la respuesta no dice nada del fork
+      expect(insertada(i)).toMatchObject({ event: 'pull_request', pr_number: n, alert_reason: 'fork' });
+      expect(x.enviados).toHaveLength(1);
+    }
+    expect(logs()).toContain('"fork":true');
+  });
+
+  it('PR del mismo repo (con cualquier asociación) o de un fork de OWNER, MEMBER o COLLABORATOR → sin alert_reason', async () => {
+    const casos = [prP(), prP({ author_association: 'FIRST_TIME_CONTRIBUTOR' }),
+      prP({ head: { sha: HEAD, repo: { id: String(REPO_ID) } } }), deFork('COLLABORATOR'), deFork('MEMBER'), deFork('OWNER'),
+      deFork('COLLABORATOR', {}, null)];
+    for (const [i, p] of casos.entries()) {
+      const n = 40 + i;
+      await enviar('pull_request', { ...p, pull_request: { ...p.pull_request, number: n } });
+      expect(insertada(i)).toMatchObject({ pr_number: n });
+      expect(insertada(i)).not.toHaveProperty('alert_reason');
+    }
+  });
+
+  it('synchronize con head nuevo → fila nueva; el mismo head → repetido; el mismo head en otro PR → otra fila', async () => {
+    await enviar('pull_request', prP());
+    const nuevo = await enviar('pull_request', prP({ head: { sha: MEDIO, repo: REPO } }, { action: 'synchronize' }));
+    expect(nuevo.json).toEqual({ ok: true, review_id: 'rev-2' });
+    expect(insertada(1)).toMatchObject({ base_sha: ANTES, head_sha: MEDIO, pr_number: PR_N });
+    doble.ops.length = 0;
+    const mismo = await enviar('pull_request', prP({ head: { sha: MEDIO, repo: REPO } }, { action: 'synchronize' }));
+    expect(mismo.json).toEqual({ ok: true, ignorado: 'repetido' });
+    expect(mismo.enviados).toEqual([]);
+    const leida = de('code_reviews', 'select')[0]!;
+    expect(leida.filters).toEqual(expect.arrayContaining([['event', 'eq', 'pull_request'], ['head_sha', 'eq', MEDIO],
+      ['pr_number', 'eq', PR_N], ['org_id', 'eq', ORG]]));
+    const otroPr = await enviar('pull_request', prP({ number: PR_N + 1 }));
+    expect(otroPr.json).toEqual({ ok: true, review_id: 'rev-3' });
+    // Y un push del mismo commit tampoco choca con el PR (otro evento).
+    expect((await enviar('push', pushP())).json).toEqual({ ok: true, review_id: 'rev-4' });
+    expect(revisiones).toHaveLength(4);
+  });
+
+  it('failed → «Redeliver» la reabre conservando fork; una entrega de un fork marca fork una fila que no lo era', async () => {
+    await enviar('pull_request', deFork('NONE'));
+    Object.assign(revisiones[0]!, { status: 'failed', error_code: 'unavailable', partial: true });
+    doble.ops.length = 0;
+    const otra = 'a1b2c3d4-0000-4000-8000-000000000999';
+    const x = await enviar('pull_request', deFork('NONE'), { delivery: otra });
+    expect(x.json).toEqual({ ok: true, review_id: 'rev-1', reintento: true });
+    expect(revisiones[0]).toMatchObject({ status: 'queued', error_code: null, partial: false, delivery_id: otra,
+      alert_reason: 'fork', pr_number: PR_N });
+    expect(de('code_reviews', 'update')[0]!.filters).toContainEqual(['status', 'eq', 'failed']);
+    expect(x.enviados).toEqual([{ v: 1, kind: 'review', org_id: ORG, review_id: 'rev-1', paso: 'diff' }]);
+
+    // Otra entrega del mismo head y PR que ya no parece fork (p. ej. el autor pasó a COLLABORATOR): el fork se queda.
+    revisiones[0]!.status = 'failed';
+    doble.ops.length = 0;
+    expect((await enviar('pull_request', deFork('COLLABORATOR'))).json)
+      .toEqual({ ok: true, review_id: 'rev-1', reintento: true });
+    expect(de('code_reviews', 'update')[0]!.payload).not.toHaveProperty('alert_reason');
+    expect(revisiones[0]!.alert_reason).toBe('fork');
+
+    // Al revés: una fila sin fork que reabre una entrega de fork pasa a fork (lo prudente).
+    await enviar('pull_request', prP({ number: 50 }));
+    revisiones[1]!.status = 'failed';
+    expect((await enviar('pull_request', deFork('NONE', { number: 50 }))).json)
+      .toEqual({ ok: true, review_id: 'rev-2', reintento: true });
+    expect(revisiones[1]!.alert_reason).toBe('fork');
+  });
+
+  it('el título, el autor y las ramas del PR no llegan a filas, logs, mensajes ni respuestas', async () => {
+    const r1 = await enviar('pull_request', deFork('NONE'));
+    const r2 = await enviar('pull_request', deFork('NONE'));   // repetido
+    revisiones[0]!.status = 'failed';
+    const r3 = await enviar('pull_request', deFork('NONE'));   // reintento
+    const r4 = await enviar('pull_request', deFork('NONE', { base: { ref: RAMA_PR, sha: ANTES } }));   // ignorado rama
+    const visto = JSON.stringify([revisiones, doble.ops.map((o) => o.payload ?? null), [r1, r2, r3, r4].map((r) => [r.json,
+      r.enviados]), logs()]);
+    for (const s of [TITULO, AUTOR, RAMA_PR, 'extrano', 'Acme:']) expect(visto).not.toContain(s);
+    expect(logs()).toContain('"pr":12');
+  });
+
+  it('autor de casa en un PR de fork, pero la entrega la dispara otro (sender ≠ user) o sin ids → fork', async () => {
+    // Un COLLABORATOR abre el PR con la rama del fork de un extraño; cada push del extraño llega como synchronize con
+    // la asociación del autor y sender = quien empujó.
+    const casos = [{ ...deFork('COLLABORATOR', { number: 60 }), action: 'synchronize', sender: { id: 666 } },
+      deFork('MEMBER', { number: 61, user: null }), { ...deFork('OWNER', { number: 62 }), sender: undefined },
+      { ...deFork('COLLABORATOR', { number: 63 }, null), sender: { id: '666' } }];
+    for (const [i, p] of casos.entries()) {
+      expect((await enviar('pull_request', p)).json).toEqual({ ok: true, review_id: `rev-${i + 1}` });
+      expect(insertada(i)).toMatchObject({ pr_number: 60 + i, alert_reason: 'fork' });
+    }
+    // Ids como cadena de dígitos valen; en un PR del mismo repo sender no se mira (empujar al repo exige escritura).
+    await enviar('pull_request', { ...deFork('COLLABORATOR', { number: 64, user: { id: '31337' } }),
+      sender: { id: 31337 } });
+    await enviar('pull_request', prP({ number: 65 }, { action: 'synchronize', sender: { id: 666 } }));
+    expect(insertada(4)).not.toHaveProperty('alert_reason');
+    expect(insertada(5)).not.toHaveProperty('alert_reason');
+  });
+});
+
+// Un PR de fork lo abre cualquier cuenta de GitHub: tope propio por config y hora, y un cubo de RL_COSTLY aparte.
+const shaN = (i: number) => (0xabc000 + i).toString(16).padStart(40, '0');
+const forkSync = (i: number, n = 99) => prP({ number: n, author_association: 'NONE',
+  head: { ref: RAMA_PR, sha: shaN(i), repo: FORK_REPO } }, { action: 'synchronize' });
+
+describe('E47 · pull_request de forks: topes', () => {
+  it('con 10 revisiones de PR de la config en la última hora (las propias cuentan), otro de fork → tope_fork', async () => {
+    for (let i = 0; i < 3; i++) await enviar('pull_request', prP({ number: 60 + i }));
+    expect(de('code_reviews', 'select')).toEqual([]);   // un PR propio no consulta el tope
+    for (let i = 0; i < 7; i++) {
+      expect((await enviar('pull_request', forkSync(i))).json).toEqual({ ok: true, review_id: `rev-${i + 4}` });
+    }
+    expect(revisiones).toHaveLength(10);
+    doble.ops.length = 0;
+    const x = await enviar('pull_request', forkSync(7));
+    expect(x.r.status).toBe(202);
+    expect(x.json).toEqual({ ok: true, ignorado: 'tope_fork' });
+    expect(x.enviados).toEqual([]);
+    expect(revisiones).toHaveLength(10);
+    const cuenta = de('code_reviews', 'select')[0]!;
+    expect(cuenta.head).toBe(true);
+    expect(cuenta.filters).toEqual(expect.arrayContaining([['org_id', 'eq', ORG], ['config_id', 'eq', CFG],
+      ['event', 'eq', 'pull_request']]));
+    const desde = cuenta.filters.find(([c, o]) => c === 'created_at' && o === 'gte')?.[2];
+    expect(Math.abs(Date.now() - 3600_000 - Date.parse(String(desde)))).toBeLessThan(60_000);
+    expect(de('code_reviews', 'insert')).toEqual([]);
+    expect(logs()).toContain('"motivo":"tope_fork"');
+
+    // Los PR propios, los de casa y los push no pasan por el tope.
+    expect((await enviar('pull_request', prP({ number: 70 }))).json).toEqual({ ok: true, review_id: 'rev-11' });
+    expect((await enviar('pull_request', deFork('MEMBER', { number: 71 }))).json).toEqual({ ok: true, review_id: 'rev-12' });
+    expect((await enviar('push', pushP())).json).toEqual({ ok: true, review_id: 'rev-13' });
+    // Las de hace más de una hora ya no cuentan.
+    for (const r of revisiones) r.created_at = new Date(Date.now() - 2 * 3600_000).toISOString();
+    expect((await enviar('pull_request', forkSync(8))).json).toEqual({ ok: true, review_id: 'rev-14' });
+  });
+
+  it('si la cuenta del tope falla → 500 sin fila ni mensaje', async () => {
+    errores.cuenta = { code: '57014' };
+    const x = await enviar('pull_request', forkSync(0));
+    expect(x.r.status).toBe(500);
+    expect(ApiErrorBody.parse(x.json).error.code).toBe('internal');
+    expect(revisiones).toEqual([]);
+    expect(x.enviados).toEqual([]);
+  });
+
+  it('un cubo de RL_COSTLY por clase de evento: las entregas de PR de un fork no dejan sin revisar un push', async () => {
+    const usos = new Map<string, number>();
+    const rl = { limit: vi.fn(async ({ key }: { key: string }) => {
+      usos.set(key, (usos.get(key) ?? 0) + 1);
+      return { success: usos.get(key)! <= 10 };
+    }) };
+    const env = { RL_COSTLY: rl };
+    for (let i = 0; i < 5; i++) {
+      expect((await enviar('pull_request', { ...deFork('NONE'), action: 'edited' }, { env })).json)
+        .toEqual({ ok: true, ignorado: 'evento' });
+      expect((await enviar('pull_request', forkSync(i), { env })).json).toHaveProperty('review_id');
+    }
+    const lleno = await enviar('pull_request', forkSync(5), { env });   // el de PR sí se llena
+    expect(lleno.r.status).toBe(429);
+    const x = await enviar('push', pushP(), { env });
+    expect(x.r.status).toBe(202);
+    expect(x.json).toEqual({ ok: true, review_id: 'rev-6' });
+    expect(x.enviados).toHaveLength(1);
+    expect((await enviar('issues', { action: 'opened', repository: REPO }, { env })).json)
+      .toEqual({ ok: true, ignorado: 'evento' });
+    expect((await enviar('ping', ping(), { env })).r.status).toBe(200);
+    expect(Object.fromEntries(usos)).toEqual({ [`ghpr:${CFG}`]: 11, [`gh:${CFG}`]: 2, [`ghx:${CFG}`]: 1 });
   });
 });
 

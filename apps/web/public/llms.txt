@@ -8,6 +8,9 @@
 
 ## Documentación
 - [README](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/README.md): qué hace y cómo evaluarlo en 5 minutos
+- [ARQUITECTURA](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/ARQUITECTURA.md): Worker único en el plan gratuito, auditoría por pasos en una cola, Supabase con Realtime
+- [SECURITY](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/SECURITY.md): cifrado de sobre, guardas de claves, topes de IA
+- [THREAT_MODEL](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/THREAT_MODEL.md): amenazas y mitigaciones
 
 ## Optional
 - [Descripción del proyecto](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/project-description.md)

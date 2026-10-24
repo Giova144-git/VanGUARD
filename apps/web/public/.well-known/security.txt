@@ -1,4 +1,5 @@
 Contact: https://github.com/platanus-hack/platanus-hack-26-ve-team-22/issues/new
 Expires: 2027-04-24T00:00:00.000Z
+Policy: https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/SECURITY.md
 Preferred-Languages: es, en
 Canonical: https://officialvanguard.com/.well-known/security.txt

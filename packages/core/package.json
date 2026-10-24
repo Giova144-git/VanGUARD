@@ -2,6 +2,7 @@
   "name": "@vanguard/core",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./crypto": "./src/crypto.ts"

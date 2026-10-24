@@ -1,0 +1,221 @@
+# Pasos manuales para Giovanni
+
+Estado al sábado 24-oct, ~06:15 Caracas. Lo hace una persona porque pide entrar a un panel, tener una cuenta o pegar un secreto.
+
+**Reglas para todos los pasos:**
+- **Nunca pegues un valor secreto en un chat**, ni en el mío ni en el de FRONT o BACK, ni en `docs/`. Cuando termines un paso, escríbeme solo «listo, paso N» y yo verifico desde aquí sin ver el valor.
+- **Mismo valor en local y en el Worker** para todo lo de Supabase: hay un solo proyecto (`accshmgmfrqrxubpuxcl`).
+- **Dónde va cada cosa:**
+  - *Secret del Worker*: Cloudflare → Workers & Pages → `vanguard` → Settings → **Variables and Secrets** → Add → tipo **Secret**.
+  - *Local del BACK*: archivo `apps/api/.dev.vars` (no existe aún: cópialo de `apps/api/.dev.vars.example`).
+  - *Local del FRONT*: archivo `apps/web/.env.development.local`.
+  - *Tu lista maestra*: `.env` de la raíz. Los tres están en `.gitignore`.
+- Las rutas de menú de cada panel son aproximadas: si un nombre cambió, busca el más parecido.
+
+---
+
+## Ahora (el backend ya está en vivo desde `fc46a10`)
+
+### Paso 1 · Configurar Auth de Supabase · 5 min
+Supabase → proyecto **hackaton 22** (`accshmgmfrqrxubpuxcl`):
+1. Authentication → URL Configuration:
+   - **Site URL**: `https://officialvanguard.com`
+   - **Redirect URLs**, exactamente estas 3, sin comodines:
+     - `https://officialvanguard.com/auth/callback`
+     - `https://vanguard.giovannizm14.workers.dev/auth/callback`
+     - `http://localhost:5173/auth/callback`
+2. Authentication → Sign In / Providers:
+   - **Anonymous sign-ins: ON** (lo usa el botón «Ver demo»).
+   - **Confirm email: OFF**.
+   - Si aparece el límite de altas anónimas por IP, ponlo en **300 por hora**.
+3. Realtime → Settings: **«Allow public access»: OFF**. Enlace directo: `https://supabase.com/dashboard/project/accshmgmfrqrxubpuxcl/realtime/settings`. En el menú está en el ícono **Realtime** de la barra izquierda, pestaña **Settings**, y suele venir bajo el título «Channel Restrictions». Si no lo ves ahí, busca en **Project Settings → Realtime**. Apágalo y pulsa **Save**. No rompe nada: la app solo usa canales privados (`org:<id>`, `private: true`).
+
+Escríbeme «listo, paso 1» y el BACK prueba el login anónimo.
+
+### Paso 2 · Crear las dos claves secretas de Supabase · 3 min
+Supabase → Project Settings → **API Keys** → pestaña **Secret keys** (la nueva, **no** la de *Legacy*):
+1. Crea una llamada **`vanguard-worker`**. Va al panel del Worker.
+2. Crea otra llamada **`vanguard-local`**. Va a tu PC.
+
+Las dos empiezan por `sb_secret_`. **Nunca uses la `service_role` de la pestaña Legacy.**
+
+### Paso 3 · Llenar el `.env` de la raíz · 5 min
+Por ahora **solo este archivo**. El Worker y las carpetas de cada app van después, en el paso 3b.
+
+**Dónde está:** el archivo se llama `.env` y está en la carpeta principal del proyecto, la misma de `package.json`. Ya tiene las 33 líneas, cada una con la forma `NOMBRE=valor`.
+
+**Cómo se escribe:** el valor va pegado después del `=`. Sin espacios, sin comillas, sin cambiar el nombre y sin borrar líneas. Ejemplo: `PSI_API_KEY=AIzaSy…`.
+
+**1. Estas ya están llenas: no las toques.** Las revisé desde aquí sin ver los valores, y tienen la forma correcta.
+
+| Línea | Qué es |
+|---|---|
+| `VITE_SUPABASE_URL` y `SUPABASE_URL` | La dirección del proyecto de Supabase (las dos iguales) |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | La clave pública `sb_publishable_…` |
+| `SUPABASE_SECRET_KEY` | La clave secreta `sb_secret_…`: la **`vanguard-local`** del paso 2 |
+| `ANTHROPIC_API_KEY` | La key de Claude `sk-ant-…`: la de **`team22-dev`** |
+| `VITE_API_PROXY`, `VG_ENV`, `APP_ORIGIN` | Valores fijos de desarrollo local |
+
+**2. Estas cinco las llena un comando.** No salen de ningún panel: se inventan al azar en tu PC. En una terminal, dentro de la carpeta del proyecto:
+```bash
+node scripts/generar-secretos.mjs
+```
+Solo escribe en líneas vacías, nunca pisa un valor que ya exista y nunca muestra los valores en pantalla.
+
+| Línea | Para qué |
+|---|---|
+| `VG_KEK_PEPPER` y `VG_FP_PEPPER` | Las dos «pimientas» del cifrado de las credenciales. **Cópialas también a tu gestor de contraseñas:** si se pierden, lo que guarden los clientes ya no se puede descifrar |
+| `VG_HUMO_TOKEN` | Token temporal para medir la CPU del Worker (paso 4) |
+| `TEST_USER_A_PASSWORD` y `TEST_USER_B_PASSWORD` | Contraseñas de los usuarios de prueba `idor-a` e `idor-b`. El BACK crea los usuarios con ellas |
+
+**3. Estas se dejan vacías por ahora.** Cada una se llena en su paso.
+
+| Línea | Cuándo |
+|---|---|
+| `KAPSO_API_KEY`, `KAPSO_PHONE_NUMBER_ID`, `KAPSO_WEBHOOK_SECRET` | Paso 7 (WhatsApp) |
+| `SUPABASE_HUMO_PAT` | Paso 9 (proyecto víctima) |
+| `PSI_API_KEY` | Paso 10 (sábado ~15:00) |
+| `ELEVENLABS_…` (4) y `TWILIO_…` (4) | Paso 12 (llamada, P1) |
+| `VG_INGEST_URL`, `VG_INGEST_CONN_ID`, `VG_INGEST_SECRET` | Cuando se cree la conexión de ingesta de la app víctima |
+| `VG_EDGE_SECRET` | Solo si un paso de la auditoría se muda a una Edge Function (P1) |
+| `KAPSO_WABA_ID`, `VG_VERSION`, `IA_CORTE` | **Siempre vacías** (número propio de WhatsApp, versión que pone el deploy e interruptor de emergencia) |
+
+Escríbeme «listo, paso 3». Verifico desde aquí que las líneas estén llenas y con la forma correcta, sin ver los valores.
+
+### Paso 3b · Pasar los valores al Worker y a cada app · 10 min (después; lo hacemos juntos)
+1. **A las carpetas de cada app**, con un comando: `node scripts/repartir-env.mjs`. Copia a `apps/api/.dev.vars` y a `apps/web/.env.development.local` solo las líneas que le tocan a cada una.
+2. **Al Worker** (Cloudflare → Workers & Pages → `vanguard` → Settings → Variables and Secrets → Add → tipo **Secret**). Mismo nombre que en el `.env`, con dos excepciones marcadas:
+
+| Secret del Worker | Valor |
+|---|---|
+| `SUPABASE_URL` | Igual que en el `.env` |
+| `SUPABASE_SECRET_KEY` | **Distinto:** la clave **`vanguard-worker`** del paso 2, no la del `.env` |
+| `ANTHROPIC_API_KEY` | **Distinto:** la key de **`team22-prod`** del paso 5 |
+| `VG_KEK_PEPPER`, `VG_FP_PEPPER` | **Exactamente** las del `.env` |
+| `VG_HUMO_TOKEN` | La del `.env` (se borra después del paso 4) |
+
+Cuando esté, verifico que `/api/me` responda 401 sin token y el BACK da por aceptado el hito 1.
+
+### Paso 4 · Token de la prueba de humo (temporal) · 2 min
+Sirve para medir cuánta CPU gasta cada paso del Worker: es la evidencia de que «corre en el plan gratuito».
+1. El valor ya lo creó `node scripts/generar-secretos.mjs` en el paso 3 (línea `VG_HUMO_TOKEN` del `.env`).
+2. En el paso 3b se copia al Worker como Secret con el mismo nombre.
+3. Escríbeme «listo, paso 4». Yo corro la prueba, anotamos las cifras y después **borras ese secreto** del panel.
+
+### Paso 5 · Claves de Claude (Anthropic) · 10 min
+platform.claude.com → Settings → **Workspaces**:
+1. Crea dos workspaces: **`team22-dev`** (tope de gasto **100 USD**) y **`team22-prod`** (tope **150 USD**). El tope es la barrera final si algo se descontrola.
+2. En cada uno, API keys → crea una key.
+3. Dónde va cada una:
+   - **`team22-prod`** → Secret del Worker `ANTHROPIC_API_KEY`.
+   - **`team22-dev`** → `ANTHROPIC_API_KEY` en `apps/api/.dev.vars` **y** en el `.env` de la raíz (este último lo usa la CLI de DeepWiki para la prueba real).
+4. **No** crees `IA_CORTE` todavía: es el interruptor de emergencia y solo se toca si hay que apagar la IA.
+
+### Paso 6 · Aprobar una decisión de seguridad del BACK · 1 min
+Supabase marca un aviso porque la función `join_demo_org()` (el plan B del botón «Ver demo») la puede ejecutar cualquier usuario autenticado. El BACK propone **quitar ese permiso con una migración nueva en cuanto el botón «Ver demo» funcione en producción**. Respóndeme «apruebo la (b)», o dime si prefieres dejarlo marcado como aceptado.
+
+---
+
+## Esta mañana (antes de las 12:00)
+
+### Paso 7 · WhatsApp con Kapso (P0: el centro de la demo) · 20 min
+1. En Kapso, entra al proyecto y activa el **Sandbox de WhatsApp**.
+2. Desde **tu teléfono** (y los del equipo que vayan a recibir alertas), únete al sandbox con el código que muestra Kapso.
+3. Copia y guarda como **Secrets del Worker** (y en `apps/api/.dev.vars`):
+   - `KAPSO_API_KEY`: Project → API keys.
+   - `KAPSO_PHONE_NUMBER_ID`: el id del número del sandbox.
+4. Webhooks → crea uno con la URL **`https://officialvanguard.com/webhooks/kapso`** y copia su secreto como **`KAPSO_WEBHOOK_SECRET`**.
+5. Escríbeme «listo, paso 7». Yo coordino con el BACK la primera prueba de envío.
+
+### Paso 8 · Las dos pimientas del cifrado · 3 min (el BACK ya pasó el hito 2)
+1. Ya las creó `node scripts/generar-secretos.mjs` en el paso 3 (`VG_KEK_PEPPER` y `VG_FP_PEPPER` del `.env`).
+2. En el paso 3b van al Worker y a `apps/api/.dev.vars`. **El mismo valor en los tres sitios.**
+3. **Guárdalas también en tu gestor de contraseñas.** Si se pierden, las credenciales que guarden los clientes no se pueden descifrar.
+4. **Nunca las cambies** después de que alguien guarde una conexión: las credenciales ya cifradas dejarían de abrirse.
+
+### Paso 9 · Proyecto víctima de la demo (lo puede hacer Gabriel) · 20 min
+1. En **otra cuenta** de Supabase (la de Gabriel), crea el proyecto **`vanguard-demo`** en plan Free.
+2. El BACK entrega el SQL de siembra (`demo/seed-victima.sql`): se pega en el SQL Editor de ese proyecto.
+3. Crea un **token de acceso personal con alcance solo a ese proyecto y de solo lectura** (empieza por `sbp_`), con caducidad de **30 días**.
+4. Ese token va en `apps/api/.dev.vars` como **`SUPABASE_HUMO_PAT`**. No va al Worker ni al chat.
+
+### Paso 10 · Clave de PageSpeed Insights · 10 min (sábado ~15:00)
+1. En Google Cloud, crea un proyecto y habilita **PageSpeed Insights API**.
+2. En Credentials, crea una **API key restringida solo a esa API**.
+3. Guárdala como Secret del Worker **`PSI_API_KEY`** (y en `.dev.vars`).
+
+### Paso 11 · Dominio en Squarespace · 3 min
+1. **Verifica el correo del titular.** Busca el correo de Squarespace y confírmalo: si no, suspenden el dominio a los 15 días.
+2. Deja activada la **renovación automática**.
+
+---
+
+## Después de que WhatsApp funcione de punta a punta (P1)
+
+### Paso 12 · Llamada de voz (ElevenLabs + Twilio de prueba) · 30 min
+1. **Twilio, cuenta de prueba, sin pagar:**
+   - Verifica los teléfonos del equipo que van a recibir la llamada.
+   - Activa el permiso geográfico para **Venezuela**.
+   - Si la cuenta de prueba no deja llamar a +58, avísame y usamos la voz dentro de la app, que no necesita número.
+2. **ElevenLabs:**
+   - Crea el agente **«VanGUARD»** e importa el número de Twilio.
+   - Crea una API key con tope de créditos.
+3. **Secrets del Worker:** `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` y `ELEVENLABS_PHONE_NUMBER_ID`.
+4. **No pagues Twilio** sin decidirlo antes (presupuesto en efectivo = 0).
+
+---
+
+## Domingo por la mañana (trabajo de personas, no de chats)
+- **README:** escrito a mano por una persona (regla del hackatón). El plan trae el esquema en la sección 16.9.
+- **Video de respaldo** de la demo, de 3 minutos, con el WhatsApp real. Guárdalo en la nube del equipo y en un pendrive, **no** en git.
+- **Logo** de VanGUARD de 1000×1000 px y máx. 500 KB, para reemplazar `project-logo.png`.
+- **Pitch** y ensayo del guion: sección 16.7 del plan.
+
+---
+
+## Anexo · De dónde sale cada variable del `.env`
+
+**Leyenda:**
+- **Cuándo:** **Ya** = ahora · **Mañana** = esta mañana · **P1** = después de que WhatsApp funcione · **Vacía** = se deja así.
+- **Generar** = lo llena `node scripts/generar-secretos.mjs` (paso 3). La única excepción es `VG_EDGE_SECRET`, que se genera aparte y solo si hace falta, con `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`.
+
+| Variable | De dónde sale | Cuándo |
+|---|---|---|
+| `VITE_SUPABASE_URL` | Supabase → Project Settings → Data API → Project URL: `https://accshmgmfrqrxubpuxcl.supabase.co` | Ya ✅ |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase → Project Settings → API Keys → **Publishable key** (`sb_publishable_…`) | Ya ✅ |
+| `VITE_API_PROXY` | Fijo: `http://localhost:8787` (lo pone el script) | Ya |
+| `VG_ENV` | Fijo: `local` (lo pone el script) | Ya |
+| `APP_ORIGIN` | Fijo: `http://localhost:5173` (lo pone el script) | Ya |
+| `VG_VERSION` | Nada: en producción la pone el deploy | Vacía |
+| `SUPABASE_URL` | Igual que `VITE_SUPABASE_URL` | Ya ✅ |
+| `SUPABASE_SECRET_KEY` | Supabase → API Keys → **Secret keys** → crear `vanguard-local` (en local) y `vanguard-worker` (en el Worker). **No** la `service_role` legacy | Ya ✅ |
+| `ANTHROPIC_API_KEY` | platform.claude.com → Settings → Workspaces → `team22-dev` (local) y `team22-prod` (Worker) → API keys | Ya ✅ |
+| `VG_HUMO_TOKEN` | **Generar** (temporal; se borra tras la prueba) | Ya (paso 4) |
+| `VG_KEK_PEPPER` | **Generar**. El mismo valor en local y en el Worker; guárdalo en tu gestor de contraseñas | Mañana (hito 2) |
+| `VG_FP_PEPPER` | **Generar** otro distinto. Igual que la anterior | Mañana (hito 2) |
+| `KAPSO_API_KEY` | Kapso → tu proyecto → API keys | Mañana (paso 7) |
+| `KAPSO_PHONE_NUMBER_ID` | Kapso → WhatsApp → Sandbox: id del número del sandbox | Mañana (paso 7) |
+| `KAPSO_WEBHOOK_SECRET` | Kapso → Webhooks → crear uno con URL `https://officialvanguard.com/webhooks/kapso` → copiar su secreto | Mañana (paso 7) |
+| `KAPSO_WABA_ID` | Solo con número propio de WhatsApp Business (no con el sandbox) | Vacía |
+| `SUPABASE_HUMO_PAT` | Supabase (cuenta de Gabriel) → Account → Access Tokens → token **de solo lectura y solo del proyecto `vanguard-demo`**, 30 días (`sbp_…`). Solo local | Mañana (paso 9) |
+| `PSI_API_KEY` | Google Cloud → APIs & Services → habilitar **PageSpeed Insights API** → Credentials → API key restringida a esa API | Sáb ~15:00 (paso 10) |
+| `TEST_USER_A_PASSWORD`, `TEST_USER_B_PASSWORD` | **Generar** dos contraseñas cualesquiera; el BACK crea con ellas los usuarios de prueba `idor-a@vanguard.test` e `idor-b@vanguard.test`. Solo local | Cuando el BACK las pida |
+| `VG_EDGE_SECRET` | **Generar**. Solo si un paso de la auditoría se muda a una Edge Function de Supabase | Vacía por ahora |
+| `ELEVENLABS_API_KEY` | elevenlabs.io → Developers → API Keys (con tope de créditos) | P1 (paso 12) |
+| `ELEVENLABS_AGENT_ID` | ElevenLabs → Agents → agente «VanGUARD» → su id | P1 |
+| `ELEVENLABS_PHONE_NUMBER_ID` | ElevenLabs → Phone Numbers → el número de Twilio importado | P1 |
+| `ELEVENLABS_WEBHOOK_SECRET` | ElevenLabs → Agents → Webhooks | P1 |
+| `TWILIO_ACCOUNT_SID` | console.twilio.com → Account Info (`AC…`), cuenta de **prueba** | P1 |
+| `TWILIO_API_KEY`, `TWILIO_API_SECRET` | Twilio → Account → API keys & tokens → crear (`SK…` y su secreto) | P1 |
+| `TWILIO_FROM` | Twilio → Phone Numbers → el número de prueba, en formato `+1…` | P1 |
+| `IA_CORTE` | Nada: es el interruptor de emergencia de la IA y solo se pone en `1`, en el panel del Worker, si hay que apagarla | Vacía |
+| `VG_INGEST_URL` | Lo usa la app víctima; en producción, `https://officialvanguard.com/ingest/v1/events` | Sáb ~15:00 (app víctima) |
+| `VG_INGEST_CONN_ID` | Se ve al crear la conexión «ingesta» en Conexiones de VanGUARD | Sáb ~15:00 |
+| `VG_INGEST_SECRET` | Se muestra **una sola vez** al crear esa conexión (`vgi_…`) | Sáb ~15:00 |
+
+## Ya está hecho (no tienes que hacer nada)
+- **Dominio y zona:** `officialvanguard.com` en Cloudflare, con DNSSEC, HTTPS estricto, SPF y DMARC.
+- **Deploy automático:** cada push a `main` despliega con Workers Builds.
+- **Colas** `vg-jobs` y `vg-jobs-dlq` creadas.
+- **Variables de build** `VITE_SUPABASE_*` cargadas.
+- **Base de datos:** migraciones `0001`–`0003` aplicadas y el backend en vivo (`/api/health` → 200).

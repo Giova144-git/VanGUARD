@@ -6,7 +6,7 @@ Estado al sábado 24-oct, ~06:15 Caracas. Lo hace una persona porque pide entrar
 - **Nunca pegues un valor secreto en un chat**, ni en el mío ni en el de FRONT o BACK, ni en `docs/`. Cuando termines un paso, escríbeme solo «listo, paso N» y yo verifico desde aquí sin ver el valor.
 - **Mismo valor en local y en el Worker** para todo lo de Supabase: hay un solo proyecto (`accshmgmfrqrxubpuxcl`).
 - **Dónde va cada cosa:**
-  - *Secret del Worker*: Cloudflare → Workers & Pages → `vanguard` → Settings → **Variables and Secrets** → Add → tipo **Secret**.
+  - *Secret del Worker*: **desde ahora, con `node scripts/subir-secretos-worker.mjs NOMBRE…`**, que lee el valor del `.env` de la raíz. **No uses el panel:** guardar o borrar un secreto ahí publica el código viejo que la página tenía cargado. La excepción es `SUPABASE_SECRET_KEY`, que en el Worker lleva otro valor que en local; si algún día hay que cambiarla, recarga la página del Worker justo antes y avísame para redesplegar.
   - *Local del BACK*: archivo `apps/api/.dev.vars` (no existe aún: cópialo de `apps/api/.dev.vars.example`).
   - *Local del FRONT*: archivo `apps/web/.env.development.local`.
   - *Tu lista maestra*: `.env` de la raíz. Los tres están en `.gitignore`.
@@ -143,7 +143,10 @@ node scripts/kapso-config.mjs
 Busca en tu proyecto de Kapso el número sandbox y escribe **`KAPSO_PHONE_NUMBER_ID`**. Además genera **`KAPSO_WEBHOOK_SECRET`**: ese secreto lo elegimos nosotros y Kapso firma con él cada aviso. Solo llena líneas vacías y no muestra ni la key ni el secreto.
 
 **7D · Al Worker y a la app**
-1. Cloudflare → Workers & Pages → `vanguard` → Settings → Variables and Secrets → Add → **Secret**, con estos 3 nombres y los valores del `.env`: **`KAPSO_API_KEY`**, **`KAPSO_PHONE_NUMBER_ID`** y **`KAPSO_WEBHOOK_SECRET`**.
+1. **No uses el panel de Cloudflare para secretos.** Al guardar un secreto ahí se publica una versión nueva con el código que la página tenía cargado, y producción vuelve a un commit viejo. Pasó el sábado a las 11:05Z. Sube los 3 con este comando, que parte de la versión desplegada:
+   ```bash
+   node scripts/subir-secretos-worker.mjs KAPSO_API_KEY KAPSO_PHONE_NUMBER_ID KAPSO_WEBHOOK_SECRET
+   ```
 2. `node scripts/repartir-env.mjs` para copiarlos a `apps/api/.dev.vars`.
 3. **No** llenes `KAPSO_WABA_ID`: es para número propio, no para el sandbox.
 4. Escríbeme «listo, paso 7». Yo verifico los nombres en el Worker y coordino con el BACK la primera prueba de envío.

@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0008h.
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0008i.
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -328,33 +328,39 @@ export type Database = {
           created_at: string
           id: string
           name: string
+          optin_at: string | null
           org_id: string
           phone_e164: string
           priority: number
           verified_at: string | null
           voice: boolean
+          wa_last_inbound_at: string | null
           whatsapp: boolean
         }
         Insert: {
           created_at?: string
           id?: string
           name: string
+          optin_at?: string | null
           org_id: string
           phone_e164: string
           priority?: number
           verified_at?: string | null
           voice?: boolean
+          wa_last_inbound_at?: string | null
           whatsapp?: boolean
         }
         Update: {
           created_at?: string
           id?: string
           name?: string
+          optin_at?: string | null
           org_id?: string
           phone_e164?: string
           priority?: number
           verified_at?: string | null
           voice?: boolean
+          wa_last_inbound_at?: string | null
           whatsapp?: boolean
         }
         Relationships: [
@@ -1101,11 +1107,13 @@ export type Database = {
           created_at: string
           id: string
           name: string
+          optin_at: string | null
           org_id: string
           phone_e164: string
           priority: number
           verified_at: string | null
           voice: boolean
+          wa_last_inbound_at: string | null
           whatsapp: boolean
         }[]
         SetofOptions: {

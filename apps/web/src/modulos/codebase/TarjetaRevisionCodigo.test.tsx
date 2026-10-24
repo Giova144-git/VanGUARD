@@ -93,6 +93,13 @@ describe('TarjetaRevisionCodigo', () => {
     expect(html).toContain('aria-label="Pull request"');
   });
 
+  it('«Generar otro secreto» solo para owner y admin con la revisión activa; el viewer no lo ve', () => {
+    expect(tarjeta(ADMIN, ESPERANDO)).toContain('Generar otro secreto');
+    expect(tarjeta(VIEWER, ESPERANDO)).not.toContain('Generar otro secreto');
+    const apagada = { ...ESPERANDO, config: { ...ESPERANDO.config!, enabled: false, state: 'off' as const } };
+    expect(tarjeta(ADMIN, apagada)).not.toContain('Generar otro secreto');
+  });
+
   it('el secreto del alta (E46) no queda en el MutationCache ni en el almacenamiento tras reset()', async () => {
     const guardados: string[] = [];
     const almacen = { setItem: (k: string, v: string) => guardados.push(`${k}=${v}`), getItem: () => null, removeItem() {} };

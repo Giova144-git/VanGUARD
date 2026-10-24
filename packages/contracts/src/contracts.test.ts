@@ -86,9 +86,10 @@ describe('fixtures de la wiki', () => {
     expect(doc.overview_md).not.toContain('```');
   });
 
-  it('el Mermaid pasa la lista blanca del CLI deepwiki (flowchart LR de 6 nodos)', () => {
-    // Misma línea segura que deepwiki/src/index.mjs (commit 14c229a).
-    const SEGURA = /^\s*(flowchart LR|[A-Za-z0-9_]+(\[[A-Za-z0-9 ]{1,40}\])?\s*(-->(\|[A-Za-z0-9 ]{1,30}\|)?\s*[A-Za-z0-9_]+(\[[A-Za-z0-9 ]{1,40}\])?)?)\s*$/;
+  it('el Mermaid pasa la lista blanca del motor (flowchart LR de 6 nodos)', () => {
+    // Misma lista que validarMermaid (packages/deepwiki/src/sanitizar.ts): etiquetas con tildes y eñe, 40 en nodos y
+    // 30 en flechas. Una conexión por línea, como en el fixture.
+    const SEGURA = /^\s*(flowchart LR|[A-Za-z0-9_]+(\[[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]{1,40}\])?\s*(-->(\|[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]{1,30}\|)?\s*[A-Za-z0-9_]+(\[[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]{1,40}\])?)?)\s*$/;
     const lineas = (doc.mermaid ?? '').split('\n').filter((l) => l.trim());
     expect(doc.mermaid_descartado).toBe(false);
     expect(lineas[0]).toBe('flowchart LR');
@@ -107,12 +108,36 @@ describe('fixtures de la wiki', () => {
     const leidos = doc.paginas.flatMap((p) => p.archivos);
     expect(new Set(leidos).size).toBe(leidos.length);
     for (const a of leidos) expect(a).not.toMatch(/(^|\/)\.env|(-lock\.json|\.lock|lock\.yaml)$/);
+    for (const a of leidos) expect(a).not.toMatch(/(^|\/)(tsconfig\.json|\.gitignore)$/);   // también los excluye el motor
     expect(doc.paginas.length).toBeGreaterThanOrEqual(4);
-    expect(doc.paginas.length).toBeLessThanOrEqual(6);
+    expect(doc.paginas.length).toBeLessThanOrEqual(13);   // WikiDoc.paginas: 12 áreas + «(otros)»
     expect(new Set(doc.paginas.map((p) => p.id)).size).toBe(doc.paginas.length);
     expect(doc.stats.areas).toBe(doc.paginas.length);
     expect(doc.stats.files_leidos).toBe(leidos.length);
     expect(doc.stats.files_total).toBe(fx.wikiEstimate.files_total);
+  });
+
+  it('«Riesgos» cita cada hallazgo crítico o alto de la auditoría y no usa su evidencia', () => {
+    const riesgos = doc.overview_md.slice(doc.overview_md.indexOf('## Riesgos y puntos de atención'));
+    // Qué frase del texto cubre cada hallazgo grave (clave: regla y recurso). Si aparece un grave nuevo en
+    // hallazgos.ts sin su frase aquí, la prueba falla: hay que nombrarlo también en la wiki.
+    const CITA: Record<string, string> = {
+      'CB_SECRET_SUPABASE_SERVICE_ROLE src/lib/supabaseAdmin.ts:4': 'llave maestra de la base de datos',
+      'CB_ENV_COMMITTED .env': 'archivo .env',
+      'CB_SECRET_POSTGRES_URL .env:3': 'contraseña de la base de datos',
+      'CB_DEP_VULN Packagist:facade/ignition@2.5.1': 'tomar el control del servidor',
+      'CB_DEP_VULN npm:lodash@4.17.15': 'lodash',
+      'SB_RLS_DISABLED public.pedidos': 'tabla de pedidos',
+      'SB_RPC_ANON_NO_LIMIT public.enviar_otp': 'sin sesión y sin límite',
+      'SB_POLICY_ALLOW_ALL public.perfiles': 'leer los perfiles',
+    };
+    const graves = fx.findings.filter((f) => f.severity === 'critical' || f.severity === 'high')
+      .map((f) => `${f.rule_id} ${f.resource}`);
+    expect(Object.keys(CITA).sort()).toEqual([...graves].sort());
+    for (const [clave, frase] of Object.entries(CITA)) expect(riesgos, clave).toContain(frase);
+    // Lo que no sale de un hallazgo va como observación, y nada de la evidencia (filas, ubicaciones) ni marcas [Hn].
+    expect(riesgos).toMatch(/^Observación \(no es un hallazgo de la auditoría\):/m);
+    expect(riesgos).not.toMatch(/500|archivo de configuración|\[H\d/);
   });
 
   it('la estimación cuadra con los precios y queda por encima del costo real', () => {

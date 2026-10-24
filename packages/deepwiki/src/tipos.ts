@@ -39,6 +39,7 @@ export type LlmRespuesta = { texto: string; modelo: string; uso: LlmUso; stop_re
 export type Llm = (p: LlmPeticion) => Promise<LlmRespuesta>;
 
 // Hallazgos de VanGUARD que se cruzan con la sección de riesgos (solo títulos y rutas: nunca evidencia).
+// `path` es evidence.path, sin el número de línea (no el resource «src/a.ts:4»).
 export type HallazgoBreve = { rule_id: string; severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   title: string; path?: string };
 
@@ -48,12 +49,15 @@ export type Deps = {
   githubToken?: string;       // PAT de la conexión GitHub (repos privados); nunca se registra
   limites?: Partial<Limites>;
   modelos?: WikiModelos;      // por defecto { fast: 'claude-haiku-5-5', smart: 'claude-sonnet-5-5' }
+  // undefined = no hubo auditoría; [] = VanGUARD auditó y no reportó nada. El documento dice cosas distintas.
   hallazgos?: HallazgoBreve[];
+  auditoria_at?: string;      // ISO de la auditoría de donde salen los hallazgos (aviso «Riesgos según…»)
   ahora?: () => Date;         // inyectable para pruebas
 };
 
 export type Area = { nombre: string; archivos: string[] };
-export type ResumenArea = { area: string; texto: string; archivos: string[] };
+// `titulo`: nombre legible que propone el modelo para la página (ya saneado); si falta, se usa tituloDeArea.
+export type ResumenArea = { area: string; texto: string; archivos: string[]; titulo?: string };
 export type Consumo = { input_tokens: number; output_tokens: number; cost_usd: number };
 
 // Estado serializable entre pasos (va a wiki_runs.state jsonb): solo rutas y resúmenes, nunca el código leído.
@@ -69,7 +73,14 @@ export type EstadoWiki = {
   resumenes: ResumenArea[];
   consumo: Consumo;
   avisos: string[];
+  // Pasos aplicados (1 tras `arbol`). El BACK guarda con compare-and-set sobre este número para que dos entregas del
+  // mismo mensaje no pisen resúmenes; un paso que no cambia nada devuelve el MISMO objeto y no lo sube.
+  n?: number;
+  sintesis_iniciada?: string;  // ISO: marcarSintesis lo pone antes de pagar la síntesis (ver LEEME)
 };
+
+// Qué mensaje encola el BACK después de guardar un estado (siguientePaso).
+export type SiguientePaso = { paso: 'triage' } | { paso: 'area'; area: string } | { paso: 'sintesis' };
 
 // Resultado final sin run_id (lo pone el BACK al guardar).
 export type ResultadoWiki = Omit<WikiDoc, 'run_id'>;

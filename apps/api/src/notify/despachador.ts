@@ -108,8 +108,10 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     // used1h de 15.9: un aviso failed o skipped_cap no gasta tope.
     admin.from('notifications').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('channel', 'whatsapp')
       .gte('created_at', new Date(ahora - 3600_000).toISOString()).in('status', ESTADOS_CUENTAN),
-    // Tormenta: incidentes de la org con started_at en los últimos 2 min (incidents no tiene created_at), este incluido.
-    admin.from('incidents').select('rule_ids', { count: 'exact' }).eq('org_id', orgId).gte('started_at', desde2m).limit(50),
+    // Tormenta: incidentes high y critical de la org con started_at en los últimos 2 min (incidents no tiene created_at),
+    // este incluido. Los low/medium del ruido de internet no degradan el aviso del ataque (decisión del ORQUESTADOR).
+    admin.from('incidents').select('rule_ids', { count: 'exact' }).eq('org_id', orgId).gte('started_at', desde2m)
+      .in('severity', ['high', 'critical']).limit(50),
     ipBloqueo ? hayConexionAccion(admin, orgId, rid) : Promise.resolve(false),
   ]);
   if (c.error || o.error || u.error || t.error || !o.data) {

@@ -266,6 +266,10 @@ describe('despachador · cuándo no avisa', () => {
     expect(msgs[0]!.text!.body).toBe('6 alertas nuevas en 2 min: 4 de Cloudflare y 2 de Supabase. Abre el panel para verlas.');
     expect(filasNotif()).toEqual([expect.objectContaining({ template: 'storm_v1', status: 'queued' })]);
     expect(de('approvals', 'insert')).toHaveLength(0);
+    // Solo cuentan high y critical de esta org en los últimos 2 min: el ruido low/medium no degrada el aviso.
+    const consulta = doble.ops.find((o) => o.table === 'incidents' && o.action === 'select' && !o.single)!;
+    expect(consulta.filters).toEqual(expect.arrayContaining([['org_id', 'eq', ORG], ['severity', 'in', ['high', 'critical']],
+      ['started_at', 'gte', expect.any(String)]]));
 
     storms = 1;
     fetchMock.mockClear();

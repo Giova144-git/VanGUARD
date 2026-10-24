@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { redact, textoSeguro, unaLinea } from '@vanguard/core';
-import { canjearBotonAlerta, parsearBoton } from '../actions/approvals.ts';
+import { canjearBotonAlerta, canjearBotonBloqueo, COSTE_BOTON_BLOQUEO, parsearBoton } from '../actions/approvals.ts';
 import type { AppEnv } from '../env.ts';
 import { db } from '../lib/db.ts';
 import { fail } from '../lib/errors.ts';
@@ -52,6 +52,7 @@ const COSTE = {
   boton: 4,        // vg_redeem_approval + incidente y contacto + update del incidente
   verificar: 6,    // getKeys + candidatos + (update + orgs + envío·2 | orgs + RL_WA + envío·2 | RL_WA + envío·2)
   baja: 4,         // update + RL_WA + envío·2
+  bloqueo: COSTE_BOTON_BLOQUEO + 3,   // canje y executeBlock/propuesta/cancelación + RL_WA + envío·2 de la respuesta
 } as const;
 function gastar(p: Presupuesto, n: number): boolean {
   if (p.quedan < n) {
@@ -149,8 +150,18 @@ async function registrarBoton(env: CloudflareBindings, m: Obj, remitente: string
   const b = parsearBoton(idBoton(m) ?? '');
   const enmascarado = remitente.length >= 8 ? enmascararTelefono(remitente) : null;
   log('info', 'kapso.boton', { rid, accion: b?.accion ?? 'desconocido', codigo: b?.codigo ?? null, remitente: enmascarado });
-  // ack/snz: canje del nonce y efecto sobre el incidente (§15.10). ok/no/blk solo se registran hasta el hito siguiente.
   // Un canje sin efecto (repetido, vencido, de otra org, remitente que no es contacto) queda solo en el log.
+  // ok/no/blk (§12.9, S15 15.10): ok → executeBlock (el mismo de E21), no → cancela, blk → propone con entrega por
+  // WhatsApp. La respuesta de servicio que devuelve el canje va con RL_WA: un botón viejo repetido no gasta cupo sin tope.
+  if (b?.accion === 'ok' || b?.accion === 'no' || b?.accion === 'blk') {
+    if (!gastar(p, COSTE.bloqueo)) return;
+    const c = await canjearBotonBloqueo(env, b, remitente, rid);
+    log(['ejecutado', 'ya_estaba', 'cancelado', 'propuesto'].includes(c.resultado) ? 'info' : 'warn', 'kapso.bloqueo_canje',
+      { rid, accion: b.accion, codigo: b.codigo, resultado: c.resultado, remitente: enmascarado });
+    if (c.texto) await responderConTope(env, remitente, c.texto, `bloqueo_${b.accion}`, rid);
+    return;
+  }
+  // ack/snz: canje del nonce y efecto sobre el incidente (§15.10).
   if (b?.accion !== 'ack' && b?.accion !== 'snz') return;
   if (!gastar(p, COSTE.boton)) return;
   const resultado = await canjearBotonAlerta(env, b, remitente, rid);

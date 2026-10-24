@@ -5,8 +5,14 @@ import { sha256Hex } from '../lib/hmac.ts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 import { envDoble } from '../test/dobles.ts';
 
-const estado = vi.hoisted(() => ({ client: null as unknown }));
+const estado = vi.hoisted(() => ({ client: null as unknown, bloqueo: null as null | ((...a: unknown[]) => unknown) }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
+// canjearBotonBloqueo real salvo que una prueba ponga estado.bloqueo (sus internos se prueban en actions/approvals.test.ts).
+vi.mock('../actions/approvals.ts', async (orig) => {
+  const real = await orig<typeof import('../actions/approvals.ts')>();
+  return { ...real, canjearBotonBloqueo: (...a: Parameters<typeof real.canjearBotonBloqueo>) =>
+    (estado.bloqueo ? estado.bloqueo(...a) : real.canjearBotonBloqueo(...a)) };
+});
 // getKeys de mentira: FPK de bytes conocidos (0x11…) para recalcular los códigos con node:crypto; cuenta las llamadas.
 const llaves = vi.hoisted(() => ({ llamadas: 0 }));
 vi.mock('../lib/keyring.ts', () => ({
@@ -254,14 +260,15 @@ describe('E31 · botones: registro', () => {
     expect(updates()).toHaveLength(0);
   });
 
-  it('ok, no y blk solo se registran (hito siguiente): ni canje ni efecto', async () => {
+  it('ok, no y blk van a canjearBotonBloqueo con el botón y el remitente; fuera de producción, dry_run sin efecto', async () => {
     for (const [i, a] of ['ok', 'no', 'blk'].entries()) {
       await enviar(boton(`${a}:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave: `x${i}` });
     }
+    // envDoble no es production: el canje real contesta dry_run sin tocar la base ni Cloudflare.
     expect(doble.rpcs).toHaveLength(0);
-    // Solo el dedupe y la última entrada del teléfono (B3).
     expect(doble.ops.every((o) => o.table === 'webhook_events'
       || (o.table === 'contacts' && Object.keys(o.payload as object).join() === 'wa_last_inbound_at'))).toBe(true);
+    expect(lineas().filter((l) => l.includes('"kapso.bloqueo_canje"') && l.includes('"dry_run"'))).toHaveLength(3);
   });
 
   it('resumenKapso marca los botones que no casan como desconocido', () => {
@@ -675,5 +682,50 @@ describe('E31 · VERIFICAR, BAJA y última entrada (B3)', () => {
     orgs[ORG_A] = 'Mi "Org" en https://phish.example';
     await entra(texto(`VERIFICAR ${codigoDe(ORG_A, C_A)}`));
     expect(enviados().map((e) => e.text.body)).toEqual([textoListo("Mi 'Org' en")]);
+  });
+});
+
+describe('E31 · botones ok/no/blk: respuesta del canje (§12.9)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let rlWa: ReturnType<typeof vi.fn>;
+  let canje: ReturnType<typeof vi.fn>;
+  const envBoton = () => ({ KAPSO_API_KEY: ['kapso', 'prueba'].join('-'), KAPSO_PHONE_NUMBER_ID: '1234567890',
+    RL_WA: { limit: rlWa } as unknown as RateLimit });
+  beforeEach(() => {
+    let usos = 0;
+    rlWa = vi.fn(async () => ({ success: ++usos <= 3 }));
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: 'wamid.R1' }] })));
+    vi.stubGlobal('fetch', fetchMock);
+    canje = vi.fn(async () => ({ resultado: 'ejecutado', texto: 'Bloqueada 186.92.x.x por 1 h. Puedes deshacerlo en la app.', action_id: 'a1' }));
+    estado.bloqueo = canje as unknown as (...a: unknown[]) => unknown;
+  });
+  afterEach(() => { estado.bloqueo = null; vi.unstubAllGlobals(); });
+  const pulsar = (a: string, clave: string) =>
+    enviar(boton(`${a}:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave, env: envBoton() });
+  const enviados = () => fetchMock.mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)) as { to: string; text: { body: string } });
+
+  it('ok ejecutado → un texto de servicio al remitente con la respuesta del canje (con RL_WA)', async () => {
+    await pulsar('ok', 'o1');
+    expect(canje).toHaveBeenCalledOnce();
+    expect(canje.mock.calls[0]!.slice(1, 3)).toEqual([{ accion: 'ok', codigo: 'A1F3C9', nonce: NONCE }, TEL]);
+    expect(rlWa).toHaveBeenCalledWith({ key: `wa:${TEL}` });
+    expect(enviados()).toEqual([expect.objectContaining({ to: TEL, text: { body: 'Bloqueada 186.92.x.x por 1 h. Puedes deshacerlo en la app.' } })]);
+    expect(lineas().some((l) => l.includes('"kapso.bloqueo_canje"') && l.includes('"ejecutado"') && !l.includes(TEL))).toBe(true);
+  });
+
+  it('sin texto no se responde; un botón viejo repetido no pasa de 3 respuestas por minuto', async () => {
+    canje.mockResolvedValueOnce({ resultado: 'sin_canje', texto: null });
+    await pulsar('no', 'n0');
+    expect(fetchMock).not.toHaveBeenCalled();
+    canje.mockResolvedValue({ resultado: 'sin_canje', texto: 'Código vencido o ya usado. Abre officialvanguard.com' });
+    for (let i = 1; i <= 4; i++) await pulsar('ok', `v${i}`);
+    expect(enviados()).toHaveLength(3);
+  });
+
+  it('sin presupuesto para el peor caso del canje, ni canje ni respuesta (queda omitido en el log)', async () => {
+    const { procesarKapso } = await import('./webhooks-kapso.ts');
+    await procesarKapso(envDoble(envBoton()).env, 'whatsapp.message.received', boton(`blk:A1F3C9:${NONCE}`), 'rid-x', { quedan: 5, omitidos: 0 });
+    expect(canje).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

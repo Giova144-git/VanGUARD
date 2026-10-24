@@ -1,7 +1,7 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Contact, ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate,
+  Contact, ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -68,6 +68,16 @@ export function useLanzarScan(org: string) {
   return useMutation({
     mutationFn: (body: ScanCreate) => api(`/api/orgs/${org}/scans`, { method: 'POST', body, esquema: ScanAccepted }),
   });
+}
+
+// ZIP en el navegador (F-18): E11 deja el scan en waiting_result y E23 le entrega el ZipResult ya validado en zip-local.ts.
+// Sin useMutation, como useConectar: el caché de mutaciones guardaría en `variables` las rutas y los previews de secretos.
+// Si E23 falla, el scan se queda esperando y el siguiente E11 del mismo usuario lo reemplaza (ZIP_RESULT_MISSING).
+export async function subirZip(org: string, archivo: { filename: string; size_bytes: number }, resultado: ZipResult): Promise<string> {
+  const body: ScanCreate = { kind: 'zip', ...archivo };
+  const { scan_run_id: id } = await api(`/api/orgs/${org}/scans`, { method: 'POST', body, esquema: ScanAccepted });
+  await api(`/api/orgs/${org}/scans/${encodeURIComponent(id)}/zip-result`, { method: 'POST', body: resultado, esquema: ScanAccepted });
+  return id;
 }
 
 // Incidentes: «Lo estoy viendo» y «Silenciar 1 h». Cuerpo {} explícito: un POST sin cuerpo haría fallar c.req.json() del BACK.

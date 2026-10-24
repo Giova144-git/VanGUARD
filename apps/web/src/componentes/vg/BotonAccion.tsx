@@ -16,12 +16,13 @@ type Props = Omit<React.ComponentProps<'button'>, 'children'> & {
 };
 
 // S14 §14.7. Ocupado ≠ deshabilitado: aria-busy y mismos colores, con Spinner delante.
-export function BotonAccion({ variante = 'secundaria', tam = 'fila', icono: Icono, ocupado, resultado, ayuda, children, className, disabled, ...props }: Props) {
+// El onClick va después del spread: si no, el del que llama pisaba el freno y un doble clic enviaba dos veces.
+export function BotonAccion({ variante = 'secundaria', tam = 'fila', icono: Icono, ocupado, resultado, ayuda, children, className, disabled, onClick, ...props }: Props) {
   if (resultado) return <span className={cn('inline-flex items-center text-sm font-medium', tam === 'grande' ? 'h-14' : 'h-11', TEXTO_ROL[resultado.rol])}>{resultado.texto}</span>;
   return (
     <span className="inline-flex flex-col gap-1">
       <Button variant={variante} size={tam} aria-busy={ocupado || undefined} disabled={disabled} className={className}
-        onClick={ocupado ? (e) => e.preventDefault() : undefined} {...props}>
+        {...props} onClick={ocupado ? (e) => e.preventDefault() : onClick}>
         {ocupado ? <Spinner /> : Icono ? <Icono /> : null}
         {children}
       </Button>

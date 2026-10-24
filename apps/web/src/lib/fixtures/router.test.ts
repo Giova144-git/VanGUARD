@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixtures as fx, type ConnectionCreated, type EstadoModulo, type ScanRun, type WikiRun } from '@vanguard/contracts';
+import { fixtures as fx, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
 import type { ApiError } from '../errores';
 import { fixtureFetch, simularAtaque } from './router';
 
@@ -37,7 +37,7 @@ describe('orgMember', () => {
   it.each([
     ['GET', 'overview'], ['GET', 'findings'], ['GET', `findings/${fx.findings[0]!.id}`], ['GET', 'modules/supabase/state'],
     ['GET', 'traffic'], ['GET', `scans/${fx.scanDone.id}`], ['GET', `wiki/runs/${fx.wikiRunDone.id}/doc`], ['GET', 'export'],
-    ['POST', 'connections'], ['POST', 'scans'], ['GET', 'ruta-que-no-existe'],
+    ['POST', 'connections'], ['POST', 'scans'], ['POST', `scans/${NADA}/zip-result`], ['GET', 'ruta-que-no-existe'],
   ])('una org ajena responde 404 a %s %s', async (method, resto) => {
     const e = await fallo(`/api/orgs/${AJENA}/${resto}`, method, {});
     expect(e).toMatchObject({ status: 404, code: 'not_found', message: 'Organización no encontrada' });
@@ -197,5 +197,135 @@ describe('ruta inexistente', () => {
   it('el mensaje es el de app.notFound', async () => {
     expect((await fallo(`/api/orgs/${DEMO}/nada`)).message).toBe('Ruta inexistente');
     expect((await fallo(`/api/orgs/${DEMO}/overview`, 'DELETE')).message).toBe('Ruta inexistente');
+  });
+});
+
+// F-18: el ZIP se abre en el navegador y E23 solo recibe el ZipResult. Igual que rutas/scans.ts del BACK en E11 y que el
+// plan en E23 (S09 09.3): 404 si no es de la org, 409 si no espera resultado, 413 > 1 MB, 422 fuera de contrato, 5 al día.
+describe('ZIP analizado en el navegador (E11 zip y E23)', () => {
+  const ZIP = { kind: 'zip', filename: 'mi-app.zip', size_bytes: 4096 };
+  const HALLAZGO = { rule_id: 'CB_SECRET_OPENAI', severity: 'critical', title: 'Clave de OpenAI en el código', resource: 'src/ia.ts:3',
+    evidence: { path: 'src/ia.ts', line: 3, preview: 'abcd…wxyz' } };
+  const resultado = (findings: unknown[] = [HALLAZGO]) =>
+    ({ files_seen: 12, deps: [{ ecosystem: 'npm', name: 'lodash', version: '4.17.20' }], findings, analyzer: 'core@0.1.0' });
+  const crear = async (org: string) => (await pedir<{ scan_run_id: string }>(`/api/orgs/${org}/scans`, 'POST', ZIP)).scan_run_id;
+  const destino = (org: string, id: string) => `/api/orgs/${org}/scans/${id}/zip-result`;
+  const ver = (org: string, id: string) => pedir<ScanRun>(`/api/orgs/${org}/scans/${id}`);
+
+  it('E11 zip crea un scan en waiting_result; otro E11 del mismo usuario reemplaza al que esperaba', async () => {
+    const id = await crear(nueva);
+    const run = ScanRun.parse(await ver(nueva, id));
+    expect(run).toMatchObject({ id, kind: 'zip', status: 'queued', step: 'waiting_result', progress: 0, started_at: null, error: null });
+    expect(run.steps).toEqual([{ name: 'zip', status: 'pending' }, { name: 'resumen_ia', status: 'pending' }]);
+
+    const otro = await crear(nueva);
+    expect(otro).not.toBe(id);
+    expect(ScanRun.parse(await ver(nueva, id))).toMatchObject({ status: 'failed', error: 'ZIP_RESULT_MISSING' });
+    expect(await fallo(destino(nueva, id), 'POST', resultado())).toMatchObject({ status: 409, code: 'conflict' });
+  });
+
+  it.each([
+    ['un filename fuera de la regex', { filename: 'código.zip' }, 'filename'],
+    ['un filename sin .zip', { filename: 'mi-app.tar' }, 'filename'],
+    ['menos de 22 B', { size_bytes: 21 }, 'size_bytes'],
+    ['más de 25 MB', { size_bytes: 25 * 1024 * 1024 + 1 }, 'size_bytes'],
+  ])('E11 zip con %s → 422 invalid_body con field_errors', async (_caso, malo, campo) => {
+    const e = await fallo(`/api/orgs/${nueva}/scans`, 'POST', { ...ZIP, ...malo });
+    expect(e).toMatchObject({ status: 422, code: 'invalid_body' });
+    expect(e.details?.field_errors).toHaveProperty(campo);
+  });
+
+  it('la sesión anónima no puede escribir: 403 en E11 zip y en E23', async () => {
+    sesion.tipo = 'anonima';
+    expect(await fallo(`/api/orgs/${DEMO}/scans`, 'POST', ZIP)).toMatchObject({ status: 403, code: 'forbidden' });
+    expect(await fallo(destino(DEMO, NADA), 'POST', resultado())).toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
+  it('E23 sin E11 → 404', async () => {
+    expect(await fallo(destino(nueva, NADA), 'POST', resultado())).toMatchObject({ status: 404, code: 'not_found' });
+  });
+
+  it('E23 con el scan de otra org → 404 y el scan sigue esperando', async () => {
+    const id = await crear(nueva);
+    expect(await fallo(destino(DEMO, id), 'POST', resultado())).toMatchObject({ status: 404, message: 'Esa auditoría no existe' });
+    expect(await ver(nueva, id)).toMatchObject({ status: 'queued', step: 'waiting_result' });
+  });
+
+  it('E23 con evidence de más → 422 y el scan sigue esperando', async () => {
+    const id = await crear(nueva);
+    const conDeMas = resultado([{ ...HALLAZGO, evidence: { ...HALLAZGO.evidence, snippet: 'la línea entera' } }]);
+    const e = await fallo(destino(nueva, id), 'POST', conDeMas);
+    expect(e).toMatchObject({ status: 422, code: 'invalid_body' });
+    expect(e.details?.field_errors).toHaveProperty('findings');
+    expect(await ver(nueva, id)).toMatchObject({ status: 'queued', step: 'waiting_result' });
+  });
+
+  it('E23 de más de 1 MB → 413', async () => {
+    const id = await crear(nueva);
+    const e = await fallo(destino(nueva, id), 'POST', { ...resultado(), relleno: 'x'.repeat(1024 * 1024) });
+    expect(e).toMatchObject({ status: 413, code: 'invalid_body' });
+  });
+
+  it('E23 feliz → 202 con el scan_run_id; el scan pasa por zip, puntaje y resumen_ia y sus hallazgos llegan con el prefijo', async () => {
+    const id = await crear(DEMO);
+    expect(await pedir(destino(DEMO, id), 'POST', resultado())).toEqual({ scan_run_id: id });
+    const corriendo = ScanRun.parse(await ver(DEMO, id));
+    expect(corriendo).toMatchObject({ kind: 'zip', status: 'running', step: 'zip' });
+    expect(corriendo.steps).toEqual([{ name: 'zip', status: 'running' }, { name: 'resumen_ia', status: 'pending' }]);
+    const deEste = async () => (await pedir<Finding[]>(`/api/orgs/${DEMO}/findings?module=codebase`)).filter((f) => f.scan_run_id === id);
+    expect(await deEste()).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await ver(DEMO, id)).toMatchObject({ status: 'running', step: 'puntaje' });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await ver(DEMO, id)).toMatchObject({ status: 'running', step: 'resumen_ia' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const fin = ScanRun.parse(await ver(DEMO, id));
+    expect(fin).toMatchObject({ status: 'succeeded', progress: 100, step: null });
+    expect(fin.steps).toEqual([{ name: 'zip', status: 'done', findings: 1 }, { name: 'resumen_ia', status: 'done' }]);
+
+    const nuevos = await deEste();
+    expect(nuevos).toEqual([expect.objectContaining({ module: 'codebase', rule_id: 'CB_SECRET_OPENAI', severity: 'critical',
+      title: HALLAZGO.title, resource: 'zip:mi-app.zip/src/ia.ts:3', status: 'open' })]);
+    Finding.parse(nuevos[0]);
+    // La demo conserva los suyos: el del ZIP lleva un id nuevo.
+    expect(fx.findings.map((f) => f.id)).not.toContain(nuevos[0]!.id);
+    expect(await pedir<Finding[]>(`/api/orgs/${DEMO}/findings?module=codebase`))
+      .toHaveLength(fx.findings.filter((f) => f.module === 'codebase').length + 1);
+  });
+
+  it('E23 dos veces → 409; también en una auditoría que no es de ZIP, y E11 zip con otro corriendo', async () => {
+    const id = await crear(nueva);
+    await pedir(destino(nueva, id), 'POST', resultado());
+    expect(await fallo(destino(nueva, id), 'POST', resultado())).toMatchObject({ status: 409, code: 'conflict' });
+    expect(await fallo(`/api/orgs/${nueva}/scans`, 'POST', ZIP)).toMatchObject({ status: 409, details: { scan_run_id: id } });
+    const { scan_run_id: completa } = await pedir<{ scan_run_id: string }>(`/api/orgs/${DEMO}/scans`, 'POST', { kind: 'full_audit' });
+    expect(await fallo(destino(DEMO, completa), 'POST', resultado())).toMatchObject({ status: 409 });
+    expect(await fallo(destino(DEMO, fx.scanDone.id), 'POST', resultado())).toMatchObject({ status: 409 });
+    await vi.advanceTimersByTimeAsync(8_000);
+  });
+
+  it('E23 pasados 15 min desde E11 → 409', async () => {
+    const id = await crear(nueva);
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 1_000);
+    expect(await fallo(destino(nueva, id), 'POST', resultado())).toMatchObject({ status: 409, code: 'conflict' });
+  });
+
+  // Módulo nuevo (resetModules): el contador del día empieza en cero y no depende de los tests de arriba.
+  it('el sexto resultado del día en la misma org → 429 budget_exceeded, sin gastar el scan', async () => {
+    vi.resetModules();
+    const { fixtureFetch: limpio } = await import('./router');
+    const pedirLimpio = async <T>(ruta: string, method = 'GET', body?: unknown) => {
+      const p = limpio<T>(ruta, { method, body }); p.catch(() => {}); await vi.advanceTimersByTimeAsync(300); return p;
+    };
+    const crearLimpio = async () => (await pedirLimpio<{ scan_run_id: string }>(`/api/orgs/${DEMO}/scans`, 'POST', ZIP)).scan_run_id;
+    for (let i = 0; i < 5; i++) {
+      await pedirLimpio(destino(DEMO, await crearLimpio()), 'POST', resultado());
+      await vi.advanceTimersByTimeAsync(8_000);
+    }
+    const sexto = await crearLimpio();
+    const e = await pedirLimpio(destino(DEMO, sexto), 'POST', resultado()).then(() => null, (x: unknown) => x as ApiError);
+    expect(e).toMatchObject({ status: 429, code: 'budget_exceeded' });
+    expect(await pedirLimpio<ScanRun>(`/api/orgs/${DEMO}/scans/${sexto}`)).toMatchObject({ status: 'queued', step: 'waiting_result' });
   });
 });

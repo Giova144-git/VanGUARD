@@ -1,9 +1,11 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, type ActionPublic, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type Finding, type Incident,
-  type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem, type WikiRun,
+  fixtures as fx, ScanCreate, ZipResult, type ActionPublic, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
+  type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
+  type WikiRun, type ZipFinding,
 } from '@vanguard/contracts';
+import { z } from 'zod';
 import { ApiError } from '../errores';
 import { tipoSesionFalsa } from '../supabase-doble';
 
@@ -155,11 +157,15 @@ function quitarFalso(org: string, id: string) {
   return new Response(null, { status: 204, headers: url ? { 'x-vg-revoke-url': url } : {} });
 }
 
-// Hallazgos por org, con estado (PATCH) y has_fix_prompt (fix-prompt).
+// Hallazgos por org, con estado (PATCH) y has_fix_prompt (fix-prompt). Antes de leerlos entran los de los ZIP terminados.
 const hallazgos = new Map<string, Finding[]>();
-const hallazgosDe = (org: string) => {
+const delOrg = (org: string) => {
   if (!hallazgos.has(org)) hallazgos.set(org, vacia(org) ? [] : structuredClone(fx.findings as unknown as Finding[]));
   return hallazgos.get(org)!;
+};
+const hallazgosDe = (org: string) => {
+  for (const [id, c] of zips) if (c.org === org) volcarZip(id, c);
+  return delOrg(org);
 };
 const hallazgo = (org: string, id: string) => hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
 
@@ -197,12 +203,15 @@ const scans = new Map<string, { org: string; inicio: number }>();
 const PROVEEDOR_PASO: Partial<Record<ScanRun['steps'][number]['name'], ConnectionPublic['provider']>> = {
   supabase: 'supabase', cloudflare: 'cloudflare', repo: 'github',
 };
-function iniciarScan(org: string) {
+function iniciarScan(org: string, body: unknown) {
+  if ((body as { kind?: unknown } | null)?.kind === 'zip') return iniciarZip(org, body);
   const id = crypto.randomUUID();
   scans.set(id, { org, inicio: Date.now() });
   return { scan_run_id: id };
 }
 function verScan(org: string, id: string): ScanRun {
+  const zip = zips.get(id);
+  if (zip?.org === org) return verZip(id, zip);
   const corrida = scans.get(id);
   if (corrida?.org !== org) {
     if (!corrida && !vacia(org) && id === fx.scanDone.id) return fx.scanDone as ScanRun;   // scanRunning lleva el mismo id
@@ -229,6 +238,98 @@ function verScan(org: string, id: string): ScanRun {
     created_at: new Date(inicio).toISOString(), started_at: new Date(inicio).toISOString(),
     finished_at: hecho ? new Date(inicio + DURACION).toISOString() : null,
   };
+}
+
+// ── ZIP analizado en el navegador (E11 con kind 'zip' y E23, F-18) ───────────────────────────────────────────
+// Como rutas/scans.ts del BACK: E11 crea el scan en waiting_result sin encolar nada; si ya había uno esperando del mismo
+// usuario, lo da por perdido (ZIP_RESULT_MISSING), y cualquier otro zip en curso da 409. E23 recibe el ZipResult.
+type CorridaZip = { org: string; creado: number; filename: string; requested_by: string; empezo: number | null;
+  fin: number | null; fallo: string | null; findings: ZipFinding[]; volcado: boolean };
+const zips = new Map<string, CorridaZip>();
+const DURACION_ZIP = 8_000;
+const EN_CURSO_MS = 15 * 60_000;
+const TOPE_ZIPS_DIA = 5;
+// `step` recorre la cadena del BACK; steps[] lleva solo los pasos del contrato, como pasosDe('zip').
+const PASOS_ZIP = ['zip', 'puntaje', 'resumen_ia'] as const;
+const zipsHoy = new Map<string, number>();                       // `${org}|${día en Caracas}` → resultados aceptados
+const diaCaracas = () => new Date(Date.now() - 4 * 3_600_000).toISOString().slice(0, 10);
+const camposMalos = (e: z.ZodError) => ({ field_errors: z.flattenError(e).fieldErrors });   // igual que cuerpo() del BACK
+const avance = (c: CorridaZip) => (c.empezo === null ? 0 : Math.min(1, (Date.now() - c.empezo) / DURACION_ZIP));
+const enCursoZip = (c: CorridaZip) => c.fallo === null && avance(c) < 1 && Date.now() - c.creado < EN_CURSO_MS;
+
+function iniciarZip(org: string, body: unknown) {
+  exigirAdmin();
+  const r = ScanCreate.safeParse(body);
+  if (!r.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(r.error));
+  const { filename } = r.data as Extract<ScanCreate, { kind: 'zip' }>;
+  const yo = me().user.id;
+  const enCurso = [...zips].filter(([, c]) => c.org === org && enCursoZip(c));
+  const otro = enCurso.find(([, c]) => c.empezo !== null || c.requested_by !== yo);
+  if (otro) falla(409, 'conflict', 'Ya hay una auditoría de este tipo en curso', { scan_run_id: otro[0] });
+  for (const [, c] of enCurso) { c.fallo = 'ZIP_RESULT_MISSING'; c.fin = Date.now(); }
+  const id = crypto.randomUUID();
+  zips.set(id, { org, creado: Date.now(), filename, requested_by: yo, empezo: null, fin: null, fallo: null, findings: [], volcado: false });
+  return { scan_run_id: id };
+}
+
+// El 413 lo da fixtureFetch (bodyLimit de app.ts, antes de orgMember).
+function recibirZip(org: string, id: string, body: unknown) {
+  exigirAdmin();
+  const c = zips.get(id);
+  if (c?.org !== org) {
+    const deEstaOrg = scans.get(id)?.org === org || (!scans.has(id) && !vacia(org) && id === fx.scanDone.id);
+    return deEstaOrg ? falla(409, 'conflict', 'Esta auditoría no es de un ZIP') : falla(404, 'not_found', 'Esa auditoría no existe');
+  }
+  if (c.empezo !== null || c.fallo !== null || c.requested_by !== me().user.id || Date.now() - c.creado > EN_CURSO_MS)
+    return falla(409, 'conflict', 'Esta auditoría ya no espera el resultado del ZIP: vuelve a elegirlo');
+  const r = ZipResult.safeParse(body);
+  if (!r.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(r.error));
+  const clave = `${org}|${diaCaracas()}`;
+  const hoy = zipsHoy.get(clave) ?? 0;
+  if (hoy >= TOPE_ZIPS_DIA) return falla(429, 'budget_exceeded', `Ya analizaste ${TOPE_ZIPS_DIA} ZIP hoy. Vuelve mañana.`);
+  zipsHoy.set(clave, hoy + 1);
+  c.empezo = Date.now();
+  c.findings = r.data.findings;
+  return { scan_run_id: id };
+}
+
+function verZip(id: string, c: CorridaZip): ScanRun {
+  volcarZip(id, c);
+  const { empezo } = c;
+  const t = avance(c);
+  const hecho = empezo !== null && t >= 1;
+  const fase = Math.min(PASOS_ZIP.length - 1, Math.floor(t * PASOS_ZIP.length));
+  const pasoZip: ScanRun['steps'][number] = empezo === null ? { name: 'zip', status: 'pending' }
+    : fase === 0 && !hecho ? { name: 'zip', status: 'running' } : { name: 'zip', status: 'done', findings: c.findings.length };
+  const fecha = (ms: number) => new Date(ms).toISOString();
+  return {
+    id, kind: 'zip', status: c.fallo ? 'failed' : empezo === null ? 'queued' : hecho ? 'succeeded' : 'running',
+    progress: Math.round(t * 100), step: empezo === null ? 'waiting_result' : hecho ? null : PASOS_ZIP[fase]!,   // el reemplazo no toca step, como el BACK
+    steps: [pasoZip, { name: 'resumen_ia', status: hecho ? 'done' : fase === 2 ? 'running' : 'pending' }],
+    score: null, coverage: null, summary: null, error: c.fallo,
+    created_at: fecha(c.creado), started_at: empezo === null ? null : fecha(empezo),
+    finished_at: c.fin !== null ? fecha(c.fin) : hecho ? fecha(empezo + DURACION_ZIP) : null,
+  };
+}
+
+// Al terminar, sus hallazgos pasan a la org con el prefijo zip:<filename>/ que pone el servidor (el FRONT no lo pone).
+// Como vg_upsert_findings: uno que ya estaba (misma regla y recurso) se actualiza y, si estaba corregido, reaparece.
+function volcarZip(id: string, c: CorridaZip) {
+  if (c.volcado || c.empezo === null || avance(c) < 1) return;
+  c.volcado = true;
+  const lista = delOrg(c.org);
+  const en = new Date(c.empezo + DURACION_ZIP).toISOString();
+  const prefijo = `zip:${c.filename}/`;
+  for (const f of c.findings) {
+    const resource = prefijo + f.resource.slice(-(300 - prefijo.length));       // Finding.resource ≤ 300, sin perder el prefijo
+    const datos = { scan_run_id: id, severity: f.severity, title: f.title, evidence: { ...f.evidence, fuente: 'zip' }, last_seen_at: en };
+    const previo = lista.find((x) => x.module === 'codebase' && x.rule_id === f.rule_id && x.resource === resource);
+    if (previo) Object.assign(previo, datos, previo.status === 'fixed' || previo.status === 'verified'
+      ? { status: 'open', status_reason: 'reapareció', verified_at: null } : {});
+    else lista.push({ ...datos, id: crypto.randomUUID(), module: 'codebase', rule_id: f.rule_id, resource, confirmed: false,   // id nuevo: no pisa los de fx
+      origin: 'rule', has_fix_prompt: false, fix_model: null, status: 'open', status_reason: null, suspected_injection: false,
+      connection_id: null, first_seen_at: en, verified_at: null });
+  }
 }
 
 // ── Incidentes (S14 §14.19) ──────────────────────────────────────────────────────────────────────────────────
@@ -491,7 +592,8 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/connections`),             (m, b) => conectarFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/connections\\/([^/]+)\\/test`), (m) => probarFalso(m[1]!, m[2]!)],
   ['DELETE', r(`${ORG}\\/connections\\/([^/]+)`), (m) => quitarFalso(m[1]!, m[2]!)],
-  ['POST', r(`${ORG}\\/scans`),                   (m) => iniciarScan(m[1]!)],
+  ['POST', r(`${ORG}\\/scans`),                   (m, b) => iniciarScan(m[1]!, b)],
+  ['POST', r(`${ORG}\\/scans\\/([^/]+)\\/zip-result`), (m, b) => recibirZip(m[1]!, m[2]!, b)],
   ['GET',  r(`${ORG}\\/findings`),                (m, _b, q) => listarHallazgos(m[1]!, q)],
   ['GET',  r(`${ORG}\\/findings\\/([^/]+)`),      (m) => structuredClone(hallazgo(m[1]!, m[2]!))],
   ['PATCH', r(`${ORG}\\/findings\\/([^/]+)`),     (m, b) => patchHallazgo(m[1]!, m[2]!, b)],
@@ -521,9 +623,13 @@ const rutas: [string, RegExp, H][] = [
 ];
 
 const MIEMBRO = /^\/api\/orgs\/([^/]+)(?:\/|$)/;
+const MAX_CUERPO = 1024 * 1024;
 
 export async function fixtureFetch<T>(ruta: string, o: { method?: string; body?: unknown }): Promise<T> {
   await espera(250);
+  // bodyLimit de app.ts: en todo /api/* y antes que orgMember.
+  if (o.body !== undefined && new TextEncoder().encode(JSON.stringify(o.body)).length > MAX_CUERPO)
+    falla(413, 'invalid_body', 'El cuerpo de la petición pasa de 1 MB');
   const [camino = '', consulta = ''] = ruta.split('?');
   const q = new URLSearchParams(consulta);
   // orgMember (§15.3): una org de la que no eres miembro da 404, sin confirmar que existe. POST /api/orgs no lleva org.

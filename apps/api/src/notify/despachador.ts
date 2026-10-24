@@ -105,9 +105,10 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     admin.from('contacts').select('id, phone_e164, whatsapp, voice, priority, verified_at')
       .eq('org_id', orgId).order('priority').limit(10),
     admin.from('orgs').select('is_demo').eq('id', orgId).maybeSingle(),
-    // used1h de 15.9: un aviso failed o skipped_cap no gasta tope.
+    // used1h de 15.9: un aviso failed o skipped_cap no gasta tope. Los de la revisión de código tampoco (tienen su cupo,
+    // TOPES_REVISION): unos pocos pushes no pueden dejar sin aviso un ataque real (revision-codigo.md §5).
     admin.from('notifications').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('channel', 'whatsapp')
-      .gte('created_at', new Date(ahora - 3600_000).toISOString()).in('status', ESTADOS_CUENTAN),
+      .gte('created_at', new Date(ahora - 3600_000).toISOString()).in('status', ESTADOS_CUENTAN).is('code_review_id', null),
     // Tormenta: incidentes high y critical de la org con started_at en los últimos 2 min (incidents no tiene created_at),
     // este incluido. Los low/medium del ruido de internet no degradan el aviso del ataque (decisión del ORQUESTADOR).
     admin.from('incidents').select('rule_ids', { count: 'exact' }).eq('org_id', orgId).gte('started_at', desde2m)

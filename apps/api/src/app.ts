@@ -12,6 +12,7 @@ import { requestId } from './mw/request-id.ts';
 import { securityHeaders } from './mw/security-headers.ts';
 import { demasiadoGrande, ingest, MAX_CUERPO } from './rutas/ingest.ts';
 import { rutas } from './rutas/index.ts';
+import { webhooksGithub } from './rutas/webhooks-github.ts';
 import { webhooksKapso } from './rutas/webhooks-kapso.ts';
 
 // Orden de middlewares de S15 15.3. /mcp entra con su hito.
@@ -33,6 +34,7 @@ app.route('/api', rutas);
 // Webhooks: sin sesión ni originGuard (los autentica su firma); RL_API con clave ip:<cf-connecting-ip> (no hay userId).
 app.use('/webhooks/*', rateLimit, limiteCuerpo);
 app.route('/webhooks', webhooksKapso);
+app.route('/webhooks', webhooksGithub);                  // E47: revisión de código en cada push (revision-codigo.md)
 // Ingesta (E30): sin sesión, originGuard ni RL_API (la víctima manda ~20 rps); la autentica su HMAC. Límite propio de
 // 64 KB, también sin Content-Length (bodyLimit cuenta el cuerpo al leerlo).
 app.use('/ingest/*', bodyLimit({ maxSize: MAX_CUERPO, onError: demasiadoGrande }));

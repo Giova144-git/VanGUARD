@@ -26,6 +26,8 @@ let contactos: Fila[];
 let org: Fila;
 let cfg: Fila | null;
 let usadas: number;
+// Filas whatsapp de la última hora que son avisos de revisión de código: solo cuentan si la consulta no las excluye.
+let deRevision: number;
 let recientes: Fila[];
 let storms: number;
 let errorQueued: { code: string } | null;
@@ -47,6 +49,7 @@ beforeEach(() => {
   org = { is_demo: false };
   cfg = null;
   usadas = 0;
+  deRevision = 0;
   recientes = [{ rule_ids: ['CF_UA_TOOL'] }];
   storms = 0;
   errorQueued = null;
@@ -62,7 +65,11 @@ beforeEach(() => {
       if (op.table === 'contacts') return { data: contactos };
       if (op.table === 'orgs') return { data: org };
       if (op.table === 'app_config') return { data: cfg };
-      if (op.table === 'notifications' && op.action === 'select') return { count: eqDe(op, 'template') === 'storm_v1' ? storms : usadas };
+      if (op.table === 'notifications' && op.action === 'select') {
+        if (eqDe(op, 'template') === 'storm_v1') return { count: storms };
+        const sinRevisiones = op.filters.some(([c, o, v]) => c === 'code_review_id' && o === 'is' && v === null);
+        return { count: usadas + (sinRevisiones ? 0 : deRevision) };
+      }
       if (op.table === 'notifications' && op.action === 'insert') {
         const f = op.payload as Fila;
         if (f.status !== 'queued') return {};
@@ -171,6 +178,15 @@ describe('despachador · envío de WhatsApp', () => {
     const uso = de('notifications', 'select').find((o) => eqDe(o, 'channel') === 'whatsapp')!;
     expect(uso.filters).toContainEqual(['status', 'in', ['queued', 'sent', 'delivered', 'read']]);
     expect(eqDe(uso, 'org_id')).toBe(ORG);
+  });
+
+  it('las filas de la revisión de código no cuentan en el used1h (revision-codigo.md §5): 10 de revisión → envía', async () => {
+    // 10 filas whatsapp de la última hora, todas de revisiones (code_review_id): sin el filtro llenarían el tope de 10.
+    deRevision = 10;
+    await avisar();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const uso = de('notifications', 'select').find((o) => eqDe(o, 'channel') === 'whatsapp')!;
+    expect(uso.filters).toContainEqual(['code_review_id', 'is', null]);
   });
 
   it('org de demo con la ventana cerrada → skipped_cap fuera_de_ventana_demo; abierta → envía (tope 30)', async () => {

@@ -128,7 +128,14 @@ describe('parsearDiff', () => {
       { archivos: 2, bytesAnadidos: 1000 });
     expect(r.cortado).toBe(true);
     expect(r.archivos.map((a) => a.path)).toEqual(['a.ts', 'b.ts']);
-    expect(LIM_DIFF).toEqual({ archivos: 300, bytesAnadidos: 512_000 });
+    expect(LIM_DIFF).toEqual({ archivos: 300, bytesAnadidos: 128_000 });
+  });
+  it('con los topes por defecto, más de 128 KB añadidos cortan (la revisión avisa como parcial)', () => {
+    const linea = 'x'.repeat(99);                                         // 100 caracteres con el salto
+    const r = parsearDiff(diff(...nuevo('grande.ts', Array.from({ length: 1300 }, () => linea))));
+    expect(r.cortado).toBe(true);
+    expect(r.archivos[0]!.lineas.length).toBe(1280);
+    expect(parsearDiff(diff(...nuevo('cabe.ts', Array.from({ length: 1270 }, () => linea)))).cortado).toBe(false);
   });
   it('tope de texto añadido: lo que no cabe no se guarda y corta', () => {
     const r = parsearDiff(diff(...nuevo('a.ts', ['123456789', 'abcdefghi', 'zzz']), ...nuevo('b.ts', ['x'])),

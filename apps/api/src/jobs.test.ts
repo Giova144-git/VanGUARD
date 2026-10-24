@@ -13,6 +13,9 @@ vi.mock('./lib/credentials.ts', () => ({
 // Pasos 'wiki': aquí solo el enrutado y los reintentos de la cola; el consumidor se prueba en wiki/pasos.test.ts.
 const wiki = vi.hoisted(() => ({ paso: vi.fn(), dlq: vi.fn() }));
 vi.mock('./wiki/pasos.ts', () => ({ pasoWiki: wiki.paso, cierreWikiDlq: wiki.dlq }));
+// Revisión de código: aquí solo el enrutado; los pasos diff y aviso se prueban en revision/pasos.test.ts y notify/revision.test.ts.
+const revision = vi.hoisted(() => ({ paso: vi.fn(), dlq: vi.fn() }));
+vi.mock('./revision/pasos.ts', () => ({ pasoRevision: revision.paso, cierreRevisionDlq: revision.dlq }));
 const { cierreDlq, colaEnSerie, conConexion, registrarPaso, runJob, siguientePaso, pasosDe, REINTENTOS } = await import('./jobs.ts');
 const { ProviderError } = await import('./lib/http.ts');
 const { pasoRepo } = await import('./scans/repo-paso.ts');
@@ -632,6 +635,65 @@ describe('kind wiki (DeepWiki)', () => {
     expect(m2.retry).toHaveBeenCalledWith({ delaySeconds: 30 });
     expect(wiki.paso).not.toHaveBeenCalled();
     expect(doble.ops).toEqual([]);
+  });
+});
+
+const REV = 'c4000000-0000-4000-8000-000000000011';
+describe('kind review (revisión de código)', () => {
+  const rmsg = (paso: 'diff' | 'aviso' = 'diff') => mensajeDoble({ v: 1, kind: 'review', org_id: ORG, review_id: REV, paso });
+  const lineasLog = () => (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join('\n');
+  beforeEach(() => { revision.paso.mockReset(); revision.dlq.mockReset(); });
+
+  it('runJob pasa el mensaje y attempts a pasoRevision (diff y aviso); ack → ack, sin tocar scan_runs ni la wiki', async () => {
+    revision.paso.mockResolvedValue('ack');
+    const d = envDoble();
+    for (const paso of ['diff', 'aviso'] as const) {
+      const m = Object.assign(rmsg(paso), { attempts: 2 });
+      await runJob(d.env, m);
+      expect(revision.paso).toHaveBeenLastCalledWith(d.env, m.body, 2);
+      expect(m.ack).toHaveBeenCalled(); expect(m.retry).not.toHaveBeenCalled();
+    }
+    expect(doble.ops).toEqual([]);
+    expect(wiki.paso).not.toHaveBeenCalled();
+    expect(lineasLog()).not.toContain('job.sin_manejador');
+  });
+
+  it('{ retry } → m.retry con ese delaySeconds; si pasoRevision lanza → retry a 10 s', async () => {
+    revision.paso.mockResolvedValueOnce({ retry: 20 });
+    const m1 = rmsg();
+    await runJob(envDoble().env, m1);
+    expect(m1.retry).toHaveBeenCalledWith({ delaySeconds: 20 }); expect(m1.ack).not.toHaveBeenCalled();
+    revision.paso.mockRejectedValueOnce(new TypeError('boom'));
+    const m2 = rmsg();
+    await runJob(envDoble().env, m2);
+    expect(m2.retry).toHaveBeenCalledWith({ delaySeconds: 10 }); expect(m2.ack).not.toHaveBeenCalled();
+  });
+
+  it('cierreDlq de un mensaje review → cierreRevisionDlq (DLQ → failed/dlq o not_sent/dlq), nunca el cierre de auditorías', async () => {
+    revision.dlq.mockResolvedValueOnce('ack').mockResolvedValueOnce({ retry: 10 });
+    const m1 = rmsg('diff');
+    await cierreDlq(envDoble().env, m1);
+    expect(revision.dlq).toHaveBeenCalledWith(expect.anything(), m1.body);
+    expect(m1.ack).toHaveBeenCalled();
+    const m2 = rmsg('aviso');
+    await cierreDlq(envDoble().env, m2);
+    expect(m2.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
+    expect(revision.paso).not.toHaveBeenCalled();
+    expect(doble.ops).toEqual([]);
+  });
+
+  it('colaEnSerie (dev-node): un diff que revienta 4 veces llega al cierre de la DLQ', async () => {
+    vi.useFakeTimers();
+    const { env } = envDoble();
+    const cola = colaEnSerie(env, () => {});
+    revision.paso.mockRejectedValue(new TypeError('cpu'));
+    revision.dlq.mockResolvedValue('ack');
+    await cola.send({ v: 1, kind: 'review', org_id: ORG, review_id: REV, paso: 'diff' });
+    const fin = cola.vacia();
+    await vi.advanceTimersByTimeAsync(120_000);
+    await fin;
+    expect(revision.paso).toHaveBeenCalledTimes(4);
+    expect(revision.dlq).toHaveBeenCalledTimes(1);
   });
 });
 

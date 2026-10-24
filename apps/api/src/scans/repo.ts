@@ -137,10 +137,16 @@ export function codigoGithub(r: Response): ProviderErrorCode {
 const deRed = (e: unknown): ProviderErrorCode => ((e as Error)?.name === 'TimeoutError' ? 'timeout' : 'unavailable');
 
 // Lee el cuerpo con un reader y para en `max` bytes (y en lo que quede de `bolsa`, compartida entre lecturas paralelas):
-// nunca carga más del tope, aunque Content-Length mienta o falte (respuesta comprimida, enlace simbólico).
-export async function leerAcotado(r: Response, max: number, bolsa?: { restante: number }): Promise<{ texto: string; cortado: boolean }> {
+// nunca carga más del tope, aunque Content-Length mienta o falte (respuesta comprimida, enlace simbólico). Por defecto,
+// un Content-Length mayor que el tope devuelve '' sin leer (la auditoría no quiere medio lockfile). ignorarLargo (diff de
+// la revisión de código, revision-codigo.md §2.2): lee igual hasta el tope y corta ahí; lo leído se escanea.
+export async function leerAcotado(r: Response, max: number, bolsa?: { restante: number },
+  o: { ignorarLargo?: boolean } = {}): Promise<{ texto: string; cortado: boolean }> {
   const largo = Number(r.headers.get('content-length') ?? '');
-  if (largo > Math.min(max, bolsa?.restante ?? Infinity)) { await r.body?.cancel(); return { texto: '', cortado: true }; }
+  if (!o.ignorarLargo && largo > Math.min(max, bolsa?.restante ?? Infinity)) {
+    await r.body?.cancel();
+    return { texto: '', cortado: true };
+  }
   if (!r.body) return { texto: '', cortado: false };
   const lector = r.body.getReader();
   const dec = new TextDecoder();

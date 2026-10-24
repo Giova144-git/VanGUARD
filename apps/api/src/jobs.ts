@@ -2,6 +2,7 @@ import type { ScanKind, ScanStep } from '@vanguard/contracts';
 import { db } from './lib/db.ts';
 import { ProviderError } from './lib/http.ts';
 import { log } from './lib/log.ts';
+import { cierreRevisionDlq, pasoRevision } from './revision/pasos.ts';
 import { conexionActiva } from './scans/comun.ts';
 import { cierreWikiDlq, pasoWiki, type RespuestaCola } from './wiki/pasos.ts';
 
@@ -11,15 +12,19 @@ export type Paso = 'supabase' | 'cloudflare' | 'repo' | 'zip' | 'psi' | 'puntaje
 export type DepCompacta = [string, string, string, 0 | 1];
 // DeepWiki (wiki/pasos.ts): un paso por mensaje; `area` solo con paso 'area' (nombre del área, no es un secreto).
 export type PasoWiki = 'arbol' | 'triage' | 'area' | 'sintesis';
+// Revisión de código en cada push (revision/pasos.ts, asignaciones/revision-codigo.md §2.1): diff → aviso. P1: 'osv'.
+export type PasoRevision = 'diff' | 'aviso';
 
 export type JobMsg =
   | { v: 1; kind: 'scan'; scan_run_id: string; org_id: string; paso: Paso; cursor?: string; deps?: DepCompacta[] }
   | { v: 1; kind: 'escalate'; org_id: string; incident_id: string; level: number }
   | { v: 1; kind: 'eval'; org_id: string }
-  | { v: 1; kind: 'wiki'; org_id: string; wiki_run_id: string; paso: PasoWiki; area?: string };
+  | { v: 1; kind: 'wiki'; org_id: string; wiki_run_id: string; paso: PasoWiki; area?: string }
+  | { v: 1; kind: 'review'; org_id: string; review_id: string; paso: PasoRevision };
 
 export type MsgScan = Extract<JobMsg, { kind: 'scan' }>;
 export type MsgWiki = Extract<JobMsg, { kind: 'wiki' }>;
+export type MsgRevision = Extract<JobMsg, { kind: 'review' }>;
 
 // Lo que devuelve cada paso. `continuar` re-encola el mismo paso con cursor, en una invocación nueva (regla 3).
 // connection_id: la conexión cuyo token usó el paso; con error_code 'unauthorized', guarded la marca revoked (§07.5). Si
@@ -271,10 +276,26 @@ async function correrWiki(env: CloudflareBindings, m: Message<JobMsg>, b: MsgWik
   else m.retry({ delaySeconds: r.retry });
 }
 
+// Revisión de código: revision/pasos.ts decide ack o retry igual que la wiki (sus transitorios se reintentan 2 veces y
+// después la revisión queda failed con su código; lo que revienta sin decidir llega a la DLQ, que la deja failed/dlq, o
+// not_sent/dlq si era el aviso). Si algo lanza fuera de lo previsto, retry: sin escritura no hay ack.
+async function correrRevision(env: CloudflareBindings, m: Message<JobMsg>, b: MsgRevision, dlq: boolean) {
+  let r: RespuestaCola;
+  try {
+    r = dlq ? await cierreRevisionDlq(env, b) : await pasoRevision(env, b, m.attempts);
+  } catch (e) {
+    log('error', 'revision.excepcion', { name: (e as Error)?.name, paso: b.paso, dlq });
+    r = { retry: 10 };
+  }
+  if (r === 'ack') m.ack();
+  else m.retry({ delaySeconds: r.retry });
+}
+
 export async function runJob(env: CloudflareBindings, m: Message<JobMsg>) {
   const b = m.body;
   if (b?.kind === 'scan') { await guarded(env, m, b); return; }
   if (b?.kind === 'wiki') { await correrWiki(env, m, b, false); return; }
+  if (b?.kind === 'review') { await correrRevision(env, m, b, false); return; }
   // escalate (P1) y eval (plan B de la ingesta) aún no tienen manejador: no se reintentan.
   log('warn', 'job.sin_manejador', { kind: b?.kind ?? null });
   m.ack();
@@ -287,6 +308,7 @@ export async function cierreDlq(env: CloudflareBindings, m: Message<JobMsg>) {
   const b = m.body;
   log('warn', 'job.dlq', { kind: b?.kind ?? null, intentos: m.attempts });
   if (b?.kind === 'wiki') { await correrWiki(env, m, b, true); return; }
+  if (b?.kind === 'review') { await correrRevision(env, m, b, true); return; }
   if (b?.kind === 'scan') {
     try {
       const scan = await leerScan(env, b);

@@ -12,9 +12,11 @@ export type LineaDiff = { t: '+' | ' ' | '-'; texto: string; linea: number | nul
 export type ArchivoDiff = { path: string; estado: 'added' | 'modified' | 'deleted' | 'renamed'; binario: boolean;
   lineas: LineaDiff[] };
 /** Topes del diff (§2.2): archivos que se miran y texto añadido que se escanea (en caracteres, con el salto que los
- *  junta). Pasado cualquiera de los dos, el resto no se mira y el resultado sale `cortado`. */
+ *  junta). Pasado cualquiera de los dos, el resto no se mira y el resultado sale `cortado` (y la revisión avisa como
+ *  parcial). 128 KB y no 512 (decisión del ORQUESTADOR, sáb 24-oct): con 512 KB de texto hostil el escaneo gastaba
+ *  ~60–90 ms en node; con 128 queda en la zona de un push normal (~20 ms) sin depender de la DLQ. */
 export const LIM_DIFF: Readonly<{ archivos: number; bytesAnadidos: number }> =
-  Object.freeze({ archivos: 300, bytesAnadidos: 512_000 });
+  Object.freeze({ archivos: 300, bytesAnadidos: 128_000 });
 
 // Copia de apps/api/src/scans/repo.ts: allí es const sin exportar y core no puede importar de apps/api.
 const FUERA = /(^|\/)(node_modules|vendor|dist|build|\.git)\//;

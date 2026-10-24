@@ -1,6 +1,6 @@
 // Doble mínimo del cliente de supabase-js para probar rutas sin red: registra cada consulta y responde con el
 // manejador que da la prueba. Solo cubre los métodos que usa apps/api.
-export type Filtro = [columna: string, op: 'eq' | 'in' | 'gt' | 'gte', valor: unknown];
+export type Filtro = [columna: string, op: 'eq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'is', valor: unknown];
 export type Op = {
   table: string;
   action: 'select' | 'insert' | 'upsert' | 'update' | 'delete';
@@ -38,6 +38,9 @@ export function dbDoble(h: Manejadores = {}) {
       in(col: string, v: unknown) { op.filters.push([col, 'in', v]); return b; },
       gt(col: string, v: unknown) { op.filters.push([col, 'gt', v]); return b; },
       gte(col: string, v: unknown) { op.filters.push([col, 'gte', v]); return b; },
+      lt(col: string, v: unknown) { op.filters.push([col, 'lt', v]); return b; },
+      lte(col: string, v: unknown) { op.filters.push([col, 'lte', v]); return b; },
+      is(col: string, v: unknown) { op.filters.push([col, 'is', v]); return b; },
       order() { return b; },
       limit() { return b; },
       maybeSingle() { op.single = 'maybe'; return b; },

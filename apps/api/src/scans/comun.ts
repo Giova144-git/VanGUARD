@@ -26,8 +26,9 @@ export async function conexionActiva(env: CloudflareBindings, m: MsgScan, provid
   return (data as Conexion | null) ?? null;
 }
 
-// Toda la evidencia pasa por redact() antes de salir del paso; dedupe_key = sha256hex(org|regla|recurso) (§05).
-async function aFila(orgId: string, b: Borrador) {
+// Toda la evidencia pasa por redact() antes de salir del paso; dedupe_key = sha256hex(org|regla|recurso) (§05). La usa
+// también la revisión de código (revision/pasos.ts), que en vez de prefiltrar pasa sus filas por ocultarRutas.
+export async function aFila(orgId: string, b: Borrador) {
   const limpio = redact({ title: b.title, resource: b.resource, evidence: b.evidence ?? {}, clave: b.dedupe_input ?? b.resource });
   return { rule_id: b.rule_id, severity: b.severity, confirmed: b.confirmed ?? false, origin: b.origin ?? 'rule',
     title: limpio.title.slice(0, 200), resource: limpio.resource.slice(0, 300), evidence: limpio.evidence,

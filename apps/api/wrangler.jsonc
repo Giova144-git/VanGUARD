@@ -1,0 +1,24 @@
+// Worker principal de VanGUARD. Base del orquestador; el BACK agrega main, bindings y crons.
+// Por ahora solo sirve la página provisional de /site. Cuando exista apps/web,
+// "assets.directory" pasa a "../web/dist".
+{
+  "name": "vanguard",
+  "compatibility_date": "2026-10-20",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Explícito: al declarar routes, Wrangler inferiría false y se perdería la URL de respaldo
+  // https://vanguard.giovannizm14.workers.dev
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "officialvanguard.com", "custom_domain": true },
+    { "pattern": "www.officialvanguard.com", "custom_domain": true }
+  ],
+
+  "assets": {
+    "directory": "../../site"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

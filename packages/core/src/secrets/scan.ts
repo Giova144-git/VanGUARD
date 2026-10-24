@@ -5,7 +5,8 @@ import type { CodebaseEvidence, Severity } from '@vanguard/contracts';
 import { redactString } from '../redact.ts';
 import { porSeveridad } from '../severity.ts';
 import { entropia } from './entropy.ts';
-import { REGLAS_SECRETO, PERMITIDOS, MARCADORES, HOSTS_PG_LOCALES, RUTA_PRUEBAS, type ReglaSecreto, type ReglaSecretoId } from './rules.ts';
+import { REGLAS_SECRETO, PERMITIDOS, MARCADORES, HOSTS_PG_LOCALES, RUTA_PRUEBAS, valorGenerico, finColaGenerica, finComillas,
+  type ReglaSecreto, type ReglaSecretoId } from './rules.ts';
 
 export type ArchivoTexto = { path: string; content: string };
 /** FindingDraft de S15 15.9 para el módulo codebase; `evidence` ya enmascarada y redactada. */
@@ -38,7 +39,7 @@ const nombre = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 export const esLockfile = (path: string) => LOCKFILES.has(nombre(path)) || nombre(path).endsWith('.lock');
 /** Binario por extensión o por un NUL en los primeros 8000 caracteres. */
 export const esBinario = (path: string, texto: string) => EXT_BINARIA.test(path) || texto.slice(0, 8000).includes('\u0000');
-const SNIPPET_MAX = 160;
+const SNIPPET_MAX = 160, ANTES = 60, MARGEN = 400, MAX_REPETIDOS = 32, MAX_LARGO_REPETIDO = 512;
 
 function hostPostgres(url: string): string {
   return (/^postgres(?:ql)?:\/\/[^:\s\/]+:[^@\s\/]+@([^:\/\s?#'"\x60]+)/.exec(url)?.[1] ?? '').toLowerCase();
@@ -55,52 +56,108 @@ function validar(r: ReglaSecreto, valor: string, m: RegExpMatchArray): Severity 
   if (r.rule_id === 'CB_SECRET_SUPABASE_SERVICE_ROLE') return rolJwt(valor) === 'service_role' ? r.severity : null;   // anon: pública por diseño
   return r.severity;
 }
-/** Línea con el valor cambiado por [SECRET:<regla>], recortada a 160 car. alrededor del marcador y pasada por redact(). */
-function snippetDe(t: string, idx: number, valor: string, rule: string): string {
-  const ini = t.lastIndexOf('\n', idx - 1) + 1;
-  const finLinea = t.indexOf('\n', idx);
-  const linea = t.slice(ini, finLinea < 0 ? t.length : finLinea).replace(/\r$/, '');
-  const col = idx - ini;
-  const enLinea = (valor.split('\n')[0] ?? '').replace(/\r$/, '');      // la clave privada ocupa varias líneas
-  let s = linea.slice(0, col) + `[SECRET:${rule}]` + linea.slice(col + enLinea.length);
-  if (s.length > SNIPPET_MAX) { const d = Math.max(0, Math.min(col - 60, s.length - SNIPPET_MAX)); s = s.slice(d, d + SNIPPET_MAX); }
-  return redactString(s.trim()).slice(0, 200);
+/** Coincidencia antes del snippet: [idx, fin) es el tramo que tapa el marcador, dentro de la línea del valor (la clave
+ *  privada ocupa varias: solo su primera línea). En la genérica sigue por la cola del valor, como en redactString. */
+type Cruda = { rule_id: ReglaSecretoId; valor: string; idx: number; fin: number; severity: Severity };
+const primeraLinea = (v: string) => (v.split('\n')[0] ?? '').replace(/\r$/, '');
+/** Cuántos saltos de línea (posiciones ordenadas) hay antes de idx: búsqueda binaria. */
+function saltosAntes(saltos: readonly number[], idx: number): number {
+  let lo = 0, hi = saltos.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if ((saltos[mid] ?? 0) < idx) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+/** Snippet de cada coincidencia, en su orden. Los valores del archivo se funden en bloques donde se solapan (la cola de
+ *  un secreto largo puede llevar otros dentro). Se toma la línea del bloque (si es larga, MARGEN car. a cada lado), se
+ *  cambia el bloque entero por [SECRET:<regla>] y todo otro bloque por [REDACTADO] (por posición y, hasta MAX_REPETIDOS
+ *  valores, también donde se repitan), se pasa por redactString y se recorta DESPUÉS a 160 car. alrededor del marcador, o
+ *  desde la columna 0 si redact se lo comió. Recortar antes podía separar la clave de otro secreto de su valor y dejarlo
+ *  en claro. Lineal: cada bloque solo mira los bloques de su ventana, y los valores de un mismo bloque comparten snippet. */
+function snippets(t: string, cs: readonly Cruda[], saltos: readonly number[]): string[] {
+  const orden = cs.map((_, i) => i).sort((a, b) => cs[a]!.idx - cs[b]!.idx);
+  const bloques: Array<{ ini: number; fin: number }> = [];                 // ordenados y disjuntos; nunca cruzan un salto
+  const bloque: number[] = [];
+  for (const i of orden) {
+    const c = cs[i]!, b = bloques[bloques.length - 1];
+    if (b && c.idx < b.fin) b.fin = Math.max(b.fin, c.fin); else bloques.push({ ini: c.idx, fin: c.fin });
+    bloque[i] = bloques.length - 1;
+  }
+  // Tope de largo para los repetidos: así un valor enorme no se copia ni se busca entero (de uno así se busca el principio).
+  const repetidos = [...new Set(cs.map((c) => t.slice(c.idx, Math.min(c.fin, c.idx + MAX_LARGO_REPETIDO))))]
+    .filter((v) => v.length >= 8).sort((a, b) => b.length - a.length).slice(0, MAX_REPETIDOS);
+  const sinRepetidos = (s: string) => { for (const v of repetidos) if (s.includes(v)) s = s.split(v).join('[REDACTADO]'); return s; };
+  const hechos = new Map<string, string>();
+  return cs.map((c, i) => {
+    const nb = bloque[i]!, b = bloques[nb]!, marca = `[SECRET:${c.rule_id}]`, clave = `${nb}${marca}`;
+    const hecho = hechos.get(clave);
+    if (hecho !== undefined) return hecho;
+    const n = saltosAntes(saltos, b.ini);                                   // límites de la línea sin recorrerla (minificado)
+    const il = n === 0 ? 0 : saltos[n - 1]! + 1;
+    let fl = n < saltos.length ? saltos[n]! : t.length;
+    if (fl > b.fin && t[fl - 1] === '\r') fl--;
+    const w0 = Math.max(il, b.ini - MARGEN), w1 = Math.min(fl, b.fin + MARGEN);
+    let a = nb, z = nb;                                                     // bloques que pisan la ventana
+    while (a > 0 && bloques[a - 1]!.fin > w0) a--;
+    while (z + 1 < bloques.length && bloques[z + 1]!.ini < w1) z++;
+    const partes: string[] = [];
+    let pos = w0;
+    for (let q = a; q <= z; q++) {
+      const o = bloques[q]!;
+      partes.push(sinRepetidos(t.slice(pos, Math.max(o.ini, w0))), q === nb ? marca : '[REDACTADO]');
+      pos = Math.min(o.fin, w1);
+    }
+    partes.push(sinRepetidos(t.slice(pos, w1)));
+    const propio = 2 * (nb - a) + 1;                                        // índice del marcador en partes
+    const r = redactString(partes.join('')).trim();
+    let k = r.indexOf(marca);
+    // Si redact se comió el marcador (`token=`, Authorization, postgres://u:…@ lo tapan enteros), su sitio aproximado es
+    // lo que mide lo de antes ya redactado; sin eso, la columna 0 de una ventana larga caería lejos del valor.
+    if (k < 0) k = Math.min(r.length, redactString(partes.slice(0, propio).join('')).trimStart().length);
+    const d = Math.max(0, Math.min(k - ANTES, r.length - SNIPPET_MAX));
+    const sn = r.slice(d, d + SNIPPET_MAX).replace(/\0/g, ' ').trim();     // ni un NUL en la evidencia (jsonb no lo admite)
+    hechos.set(clave, sn);
+    return sn;
+  });
 }
 
-/** (1) salta lockfiles y binarios; (2) cambia nuestros marcadores por un espacio; (3) prefiltro por clave; (4) matchAll;
+/** (1) salta lockfiles y binarios; (2) cambia nuestros marcadores por un NUL; (3) prefiltro por clave; (4) matchAll;
  *  (5) validación. Línea = saltos de línea antes del valor + 1. */
 export function scanArchivo(path: string, texto: string): Coincidencia[] {
   if (esLockfile(path) || esBinario(path, texto)) return [];
-  const t = texto.replace(MARCADORES, ' ');                               // un espacio: no pega dos trozos ni mueve líneas
+  // Un NUL: no mueve líneas ni casa en ninguna clave ni valor, igual que el relleno con el que redactString ve los
+  // marcadores (con un espacio, `TOKEN=[REDACTADO] x…` daba `x…` como valor de TOKEN y redact no lo tapaba). El snippet
+  // lo vuelve a dejar en un espacio.
+  const t = texto.replace(MARCADORES, '\0');
   let minus: string | undefined;
-  const out: Coincidencia[] = [];
+  const crudas: Cruda[] = [];
   const especificos: string[] = [];
-  let saltos: number[] | undefined;
-  const lineaDe = (idx: number) => {
-    saltos ??= [...t.matchAll(/\n/g)].map((m) => m.index ?? 0);
-    let lo = 0, hi = saltos.length;                                       // cuántos saltos hay antes de idx
-    while (lo < hi) { const mid = (lo + hi) >> 1; if ((saltos[mid] ?? 0) < idx) lo = mid + 1; else hi = mid; }
-    return lo + 1;
-  };
   for (const r of REGLAS_SECRETO) {
-    const ci = r.re.flags.includes('i');
-    const base = ci ? (minus ??= t.toLowerCase()) : t;
-    if (!r.claves.some((k) => base.includes(ci ? k.toLowerCase() : k))) continue;
+    // Prefiltro siempre en minúsculas: es solo un atajo, y la genérica no lleva la `i` (distingue mayúsculas por clases).
+    const base = (minus ??= t.toLowerCase());
+    if (!r.claves.some((k) => base.includes(k.toLowerCase()))) continue;
+    let hasta = 0;
     for (const m of t.matchAll(r.re)) {
       const valor = m[r.grupo];
       if (!valor) continue;
-      // Genérica: fuera los JWT (anon incluido), lo que ya dio una específica y los identificadores sin dígitos
+      // Genérica: el filtro compartido con redact (dígito, no JWT…) y fuera lo que ya dio una específica
       // (`env.SUPABASE_SECRET_KEY`, `body.read_token.trim`, `actions_org_id_fkey`: falsos positivos de nuestro repo).
-      if (r.rule_id === 'CB_SECRET_GENERIC' && (/^ey[A-Za-z0-9_-]*\./.test(valor) || !/\d/.test(valor)
-        || especificos.some((e) => e.includes(valor) || valor.includes(e)))) continue;
+      if (r.rule_id === 'CB_SECRET_GENERIC' && (!valorGenerico(valor) || especificos.some((e) => e.includes(valor) || valor.includes(e)))) continue;
       const severity = validar(r, valor, m);
       if (!severity) continue;
       const idx = (m.index ?? 0) + m[0].lastIndexOf(valor);
-      out.push({ rule_id: r.rule_id, valor, path, line: lineaDe(idx), snippet: snippetDe(t, idx, valor, r.rule_id), severity });
+      let fin = idx + primeraLinea(valor).length;
+      // La cola entera del valor (más de 150 car., contraseña con símbolos, hasta la comilla de cierre si va entre
+      // comillas): el marcador no deja en claro el resto. hasta crece en cada coincidencia, así que cada carácter de cola
+      // se mira una vez; las comillas, como mucho 256 car. por valor.
+      if (r.rule_id === 'CB_SECRET_GENERIC') fin = hasta = Math.max(finColaGenerica(t, Math.max(fin, hasta)), finComillas(t, idx, fin));
+      crudas.push({ rule_id: r.rule_id, valor, idx, fin, severity });
       if (r.rule_id !== 'CB_SECRET_GENERIC') especificos.push(valor);
     }
   }
-  return out;
+  if (!crudas.length) return [];
+  const saltos = [...t.matchAll(/\n/g)].map((m) => m.index ?? 0);
+  const sn = snippets(t, crudas, saltos);                                 // con todos los valores del archivo a la vista
+  return crudas.map((c, i) => ({ rule_id: c.rule_id, valor: c.valor, path, line: saltosAntes(saltos, c.idx) + 1, snippet: sn[i] ?? '',
+    severity: c.severity }));
 }
 
 // ── Agrupado: un hallazgo por secreto con hasta 20 ubicaciones (09.9 paso 6, 09.11) ──────────────────────────────

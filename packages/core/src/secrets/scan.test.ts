@@ -192,9 +192,263 @@ describe('agrupado, huella y forma del borrador (09.9 paso 6, 09.11)', () => {
     const h = (await uno('a.ts', `k = "${T.sbSecret}" // y ${'gh' + 'o_' + R(36)}`))[0]!;
     expect(h.evidence.snippet).toBe('k = "[SECRET:CB_SECRET_SB_SECRET]" // y [REDACTADO:github]');
   });
+  it('dos tokens sin prefijo en una línea (Cloudflare de 40 car.): ninguna evidencia lleva ninguno de los dos', async () => {
+    const a = R(40), b = R(40, 'Uv0St9Qr8Op7Mn6Kl5Ij4Gh3Ef2Cd1Ab');        // distintos: dos hallazgos, no uno
+    const hs = await uno('deploy.sh', `#!/bin/sh\nexport CF_API_TOKEN=${a} CF_OTHER_TOKEN=${b}\nwrangler deploy\n`);
+    expect(hs.map((h) => [h.rule_id, h.resource])).toEqual([['CB_SECRET_GENERIC', 'deploy.sh:2'], ['CB_SECRET_GENERIC', 'deploy.sh:2']]);
+    for (const h of hs) {
+      const ev = JSON.stringify(h.evidence);
+      expect(ev).not.toContain(a.slice(4, -4));
+      expect(ev).not.toContain(b.slice(4, -4));
+    }
+    expect(hs.map((h) => h.evidence.snippet).sort()).toEqual([
+      'export CF_API_TOKEN=[REDACTADO] CF_OTHER_TOKEN=[SECRET:CB_SECRET_GENERIC]',
+      'export CF_API_TOKEN=[SECRET:CB_SECRET_GENERIC] CF_OTHER_TOKEN=[REDACTADO]',
+    ]);
+  });
+  it('dos tokens sin prefijo con claves con sufijo o en camelCase: tampoco se cuelan en la evidencia del otro', async () => {
+    const a = R(40), b = R(40, 'Uv0St9Qr8Op7Mn6Kl5Ij4Gh3Ef2Cd1Ab');
+    for (const linea of [
+      `export CF_API_TOKEN=${a} SECRET_KEY=${b}`,
+      `export CF_API_TOKEN_PROD=${a} CF_API_TOKEN=${b}`,
+      `export ENCRYPTION_KEY=${a} API_KEY=${b}`,
+      `export CLOUDFLARE_API_TOKEN_PROD=${a} CLOUDFLARE_API_TOKEN_STAGING=${b}`,
+      `GITHUB_TOKEN_2=${a} JWT_SECRET_KEY=${b}`,
+      `const cfg = { secretKey: "${a}", encryptionKey: "${b}" };`,
+    ]) {
+      const hs = await uno('deploy.sh', `#!/bin/sh\n${linea}\n`);
+      expect(hs.map((h) => h.rule_id), linea).toEqual(['CB_SECRET_GENERIC', 'CB_SECRET_GENERIC']);
+      for (const h of hs) {
+        const ev = JSON.stringify(h.evidence);
+        expect(ev, linea).not.toContain(a.slice(4, -4));
+        expect(ev, linea).not.toContain(b.slice(4, -4));
+      }
+    }
+  });
+  // El snippet se redacta con la línea entera y se recorta DESPUÉS: antes, el recorte a 160 car. partía la clave del otro
+  // secreto (CF_OTHER_TOKEN= → OKEN= o nada) y su valor salía entero.
+  it('línea de más de 160 car. con dos tokens: el recorte del snippet no deja el otro valor en claro', async () => {
+    const a = R(40), b = R(40, 'Uv0St9Qr8Op7Mn6Kl5Ij4Gh3Ef2Cd1Ab');
+    const pad = ' && wrangler deploy --env production --name ' + 'w'.repeat(120);
+    const hs = await uno('deploy.sh', `export CF_OTHER_TOKEN=${b}${' '.repeat(7)}CF_API_TOKEN=${a}${pad}\n`);
+    expect(hs).toHaveLength(2);
+    for (const h of hs) {
+      const ev = JSON.stringify(h.evidence);
+      expect(ev).not.toContain(a.slice(4, -4));
+      expect(ev).not.toContain(b.slice(4, -4));
+      expect(h.evidence.snippet).toContain('[SECRET:CB_SECRET_GENERIC]');
+      expect(h.evidence.snippet!.length).toBeLessThanOrEqual(160);
+    }
+  });
+  it('pares del fallo (Pusher, KEY suelto o compuesto, sufijo numérico, plural, OAUTH, ACCESS): ninguna evidencia lleva el otro', async () => {
+    const a = R(40), b = R(40, 'Uv0St9Qr8Op7Mn6Kl5Ij4Gh3Ef2Cd1Ab');
+    const h1 = R(20, '9f8e7d6c5b4a3210fedcba'), h2 = R(20, '1a2b3c4d5e6f7a8b9c0d1e');
+    const pares: Array<[string, string, string]> = [
+      [`new Pusher({ appId: "1234567", key: "${h1}", secret: "${h2}", cluster: "us2" });`, h1, h2],
+      ...[`export SECRETKEY=${a} CF_API_TOKEN=${b}`, `export MASTERKEY=${a} SECRET=${b}`, `export SIGNINGKEY=${a} CF_API_TOKEN=${b}`,
+        `export secretkey=${a} token=${b}`, `KEY: ${a} TOKEN: ${b}`, `export GITHUB_OAUTH=${a} CF_API_TOKEN=${b}`,
+        `export ACCESS=${a} CF_API_TOKEN=${b}`, `export API_TOKENS=${a} CF_API_TOKEN=${b}`, `export TOKEN1=${a} TOKEN2=${b}`,
+        `export API_KEY2=${a} CF_API_TOKEN=${b}`, `DB_PASSWORD2=${a} CF_API_TOKEN=${b}`, `JWT_SECRET2=${a} PASSWORDS=${b}`,
+        `export ENCRYPTIONKEY=${a} API_KEY=${b}`, `SECRETS=${a} TOKEN=${b}`, `const cfg = { key: "${a}", secret: "${b}" };`]
+        .map((l): [string, string, string] => [l, a, b]),
+    ];
+    for (const [linea, x, y] of pares) {
+      const hs = await uno('deploy.js', `${linea}\n`);
+      expect(hs.map((h) => h.rule_id), linea).toEqual(['CB_SECRET_GENERIC', 'CB_SECRET_GENERIC']);
+      for (const h of hs) {
+        const ev = JSON.stringify(h.evidence);
+        expect(ev, linea).not.toContain(x.slice(4, -4));
+        expect(ev, linea).not.toContain(y.slice(4, -4));
+      }
+    }
+  });
+  it('el valor de un hallazgo repetido sin clave en la línea de otro tampoco sale en su evidencia', async () => {
+    const a = R(40), b = R(40, 'Uv0St9Qr8Op7Mn6Kl5Ij4Gh3Ef2Cd1Ab');
+    const hs = await uno('deploy.sh', `TOKEN=${a}\ncurl -H "X-Key ${a}" --data secret=${b}\n`);
+    expect(hs).toHaveLength(2);
+    for (const h of hs) expect(JSON.stringify(h.evidence)).not.toContain(a.slice(4, -4));
+  });
+  it('si redact se come el marcador (`TOKEN=` suelto), el snippet de una línea larga sigue alrededor del valor', async () => {
+    const hs = await uno('deploy.sh', `${'x'.repeat(600)} TOKEN=${R(40)} ${'y'.repeat(600)}\n`);
+    expect(hs).toHaveLength(1);
+    expect(hs[0]!.evidence.snippet).toContain('TOKEN=[REDACTADO]');
+    expect(hs[0]!.evidence.snippet!.length).toBeLessThanOrEqual(160);
+  });
   it('orden: la más grave primero', async () => {
     const hs = await uno('a.ts', `const apiKey = "${T.generico}";\nconst k = '${T.sbSecret}'\nconst u = "${pgUrl('db-prod.interno.net')}"`);
     expect(hs.map((h) => h.severity)).toEqual(['critical', 'high', 'medium']);
+  });
+});
+
+describe('genérica compartida con redact (ronda 2)', () => {
+  it('la palabra clave pegada a otra minúscula no es clave; KEY compuesto, plural, sufijo, OAUTH, ACCESS y creds sí', async () => {
+    // Partidos para que ningún escáner los tome por secretos del repo.
+    for (const l of ['tokenizer: "cl100k_' + 'base_tokenizer_v2"', 'keyboardLayout: "us-intl-' + '2024-v3-extended"',
+      'authorId: "user2' + 'abcdef1234567890"', 'accessibilityLabel: "boton-guardar-' + '2024-v2-final"', 'secretary_name: "Ana-2024-' + 'oficina-3B-norte"'])
+      expect(await reglas('src/a.ts', `${l}\n`), l).toEqual([]);
+    for (const n of ['MASTERKEY', 'secretkey', 'TOKENS', 'API_KEY2', 'GITHUB_OAUTH', 'ACCESS', 'GH_CREDS', 'API_HASH', 'githubTokenStaging', 'key'])
+      expect(await reglas('src/a.ts', `${n}=${T.generico}\n`), n).toEqual(['CB_SECRET_GENERIC']);
+  });
+  it('nuestro marcador delante de un valor no lo convierte en el valor de la clave (como en redactString)', async () => {
+    expect(await uno('docs/x.md', `TOKEN=[REDACTADO] ${T.generico}\nsecret: "[SECRET:CB_SECRET_GENERIC]" ${T.generico}\n`)).toEqual([]);
+  });
+  it('ni un NUL en el snippet aunque la línea traiga un marcador nuestro', async () => {
+    const h = (await uno('a.ts', `x = "[SECRET:CB_SECRET_AWS]"; const k = '${T.sbSecret}'`))[0]!;
+    expect(h.evidence.snippet).toBe(`x = " "; const k = '[SECRET:CB_SECRET_SB_SECRET]'`);
+  });
+  it('propiedad: 400 líneas con 2 o 3 secretos y nombres y formas de todo tipo: ninguna evidencia lleva un valor detectado', () => {
+    let x = 20261024, total = 0;
+    const azar = (n: number) => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) % n; };
+    const ALFA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const valor = () => Array.from({ length: 20 + azar(30) }, () => ALFA[azar(ALFA.length)]).join('');
+    const NOMBRES = ['key', 'KEY', 'SECRETKEY', 'secretkey', 'GITHUB_OAUTH', 'ACCESS', 'TOKEN1', 'API_KEY2', 'SECRETS', 'API_TOKENS',
+      'apiKeyLive', 'X-Auth-Key', 'CF_API_TOKEN_PROD', 'secretKey', 'password', 'creds', 'cf.api.token', 'Authorization'];
+    const FORMAS: Array<(n: string, v: string) => string> = [(n, v) => `${n}=${v}`, (n, v) => `${n}: ${v}`, (n, v) => `${n} = "${v}"`,
+      (n, v) => `{ ${n}: '${v}' }`, (n, v) => `--${n}=${v}`];
+    const RELLENO = [' ', ' && ', '; ', ', ', ' | ', ' '.repeat(200), ` wrangler deploy --name ${'w'.repeat(150)} `, ` ${'z'.repeat(500)} `];
+    for (let i = 0; i < 400; i++) {
+      const vs = Array.from({ length: 2 + azar(2) }, valor);
+      if (azar(3) === 0) vs.push(vs[0]!);                                    // a veces repetido con otra clave
+      const linea = vs.map((v) => FORMAS[azar(FORMAS.length)]!(NOMBRES[azar(NOMBRES.length)]!, v)).join(RELLENO[azar(RELLENO.length)]!);
+      const cs = scanArchivo('deploy.sh', `#!/bin/sh\n${linea}\n`);
+      const det = [...new Set(cs.map((c) => c.valor))];
+      total += cs.length;
+      for (const c of cs) {
+        expect(c.snippet.length).toBeLessThanOrEqual(160);
+        for (const v of det) expect(c.snippet.includes(v.slice(4, -4)), `${linea}\n→ ${c.snippet}`).toBe(false);
+      }
+    }
+    expect(total).toBeGreaterThan(800);                                      // casi todos los valores dan hallazgo
+  });
+  it('lineal: una línea minificada de 80 KB llena de asignaciones y entradas adversas de 60 KB', () => {
+    const t0 = performance.now();
+    const denso = Array.from({ length: 2400 }, (_, i) => `k${i}_TOKEN=${R(20, RICO.slice(i % 7) + RICO)} `).join('');
+    expect(scanArchivo('dist/app.min.js', denso).length).toBeGreaterThan(2000);
+    for (const s of ['SECRETKEY_token: '.repeat(3600), 'KEY=KEY='.repeat(7680), `token=[REDACTADO] ${R(20)} `.repeat(1600),
+      'token' + ' '.repeat(61440) + ':' + ' '.repeat(61440), 'aUtHoRiZaTiOn'.repeat(4800)])
+      scanArchivo('a.js', s);
+    expect(performance.now() - t0).toBeLessThan(3000);
+  });
+});
+
+// Ronda 3: el marcador cubría solo el valor de la regla (cortado a 150 car. y en el primer símbolo), y el resto del secreto
+// quedaba en claro detrás de [SECRET:…]. Ahora el marcador sustituye el valor entero, cola incluida, como lo tapa redact.
+describe('el marcador del snippet cubre el valor entero (ronda 3)', () => {
+  const ventanas = (v: string, n: number) => Array.from({ length: Math.max(0, v.length - n + 1) }, (_, i) => v.slice(i, i + n));
+  const sinTrozos = (snippet: string, v: string, n = 12) => ventanas(v, n).every((w) => !snippet.includes(w));
+  let x = 0x51ed270b;
+  const azar = (n: number) => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) % n; };
+  const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const largo = (n: number) => Array.from({ length: n }, () => B64[azar(64)]).join('');
+  it('un secreto de más de 150 car. no deja ni 12 car. seguidos detrás del marcador', () => {
+    const v = largo(256), tok = largo(192);
+    for (const linea of [`API_TOKEN=${v}`, `const cfg = { apiToken: "${v}" }`, `GCP_SA_KEY_B64=${v}==`, `ATLASSIAN_TOKEN: ${tok}`,
+      `export SA_KEY=${v} && deploy --name ${'w'.repeat(300)}`]) {
+      const cs = scanArchivo('a.ts', linea);
+      expect(cs.map((c) => c.rule_id), linea).toEqual(['CB_SECRET_GENERIC']);
+      expect(cs[0]!.snippet, linea).toContain('[SECRET:CB_SECRET_GENERIC]');
+      expect(sinTrozos(cs[0]!.snippet, linea.includes(tok) ? tok : v), cs[0]!.snippet).toBe(true);
+    }
+  });
+  it('una contraseña con símbolos tras 16 car. de la clase: el marcador se lleva la cola', () => {
+    const base = 'Xk9mP2vL' + '8qR4wZ7t';
+    const casos: Array<[string, string]> = [
+      [`DB_PASSWORD=${base}#rest_of_PW99`, 'DB_PASSWORD=[SECRET:CB_SECRET_GENERIC]'],
+      [`SMTP_PASSWORD=${base}${'$Hq3!x9@Yb'}`, 'SMTP_PASSWORD=[SECRET:CB_SECRET_GENERIC]'],
+      [`encryptionKey: "${base}#tail99"`, 'encryptionKey: "[SECRET:CB_SECRET_GENERIC]"'],
+      [`export STRIPE_API_KEY=${base}~a:b%c^d*e{f}g|h?i OTRA=1`, 'export STRIPE_API_KEY=[SECRET:CB_SECRET_GENERIC] OTRA=1'],
+      [`export API_KEY=${base}~a:b%c^d*e{f}g|h?i OTRA=1`, 'export API_KEY=[REDACTADO] OTRA=1'],   // ` api_key=` lo tapa entero
+    ];
+    for (const [linea, esperado] of casos) {
+      const cs = scanArchivo('a.env', linea);
+      expect(cs.map((c) => c.snippet), linea).toEqual([esperado]);
+    }
+  });
+  it('propiedad: 300 líneas con valores largos o con símbolos: ningún snippet lleva 8 car. seguidos de un valor', () => {
+    const ALFA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', SIM = '#!$@~:%^*({}|?\\+/=._-';
+    const tramo = (n: number, abc: string) => Array.from({ length: n }, () => abc[azar(abc.length)]).join('');
+    const valor = () => {
+      if (azar(3) === 0) return largo(151 + azar(200));
+      let v = tramo(16 + azar(14), ALFA) + String(azar(10));
+      for (let j = 1 + azar(3); j > 0; j--) v += tramo(1 + azar(3), SIM) + tramo(1 + azar(10), ALFA);
+      return v;
+    };
+    const NOMBRES = ['DB_PASSWORD', 'API_TOKEN', 'secretKey', 'CF_API_TOKEN_PROD', 'X-Auth-Key', 'credentials', 'key', 'TOKEN1'];
+    const FORMAS: Array<(n: string, v: string) => string> = [(n, v) => `${n}=${v}`, (n, v) => `${n}: ${v}`, (n, v) => `${n} = "${v}"`,
+      (n, v) => `{ ${n}: '${v}' }`];
+    const RELLENO = [' ', ' && ', '; ', ` ${'z'.repeat(500)} `];
+    let total = 0;
+    for (let i = 0; i < 300; i++) {
+      const vs = Array.from({ length: 1 + azar(3) }, valor);
+      const linea = vs.map((v) => FORMAS[azar(FORMAS.length)]!(NOMBRES[azar(NOMBRES.length)]!, v)).join(RELLENO[azar(RELLENO.length)]!);
+      const cs = scanArchivo('deploy.sh', `#!/bin/sh\n${linea}\n`);
+      total += cs.length;
+      const detectados = vs.filter((v) => cs.some((c) => v.startsWith(c.valor)));     // la regla da el principio del valor
+      for (const c of cs) {
+        expect(c.snippet.length).toBeLessThanOrEqual(160);
+        for (const v of detectados) expect(sinTrozos(c.snippet, v, 8), `${linea}\n→ ${c.snippet}`).toBe(true);
+      }
+    }
+    expect(total).toBeGreaterThan(400);
+  });
+  it('nuestro marcador dentro de una URL de Postgres no hace de contraseña (como en HEAD)', async () => {
+    expect(await uno('docs/x.md', 'postgres://app:abc[REDACTADO]def@db.prod.example.com/app\n')).toEqual([]);
+  });
+  it('lineal: colas largas y anidadas en una línea de ≥ 100 KB y 400 secretos de 300 car.', () => {
+    const t0 = performance.now();
+    const base = 'Xk9mP2vL' + '8qR4wZ7t';
+    for (const s of [`key=${base}#`.repeat(5000), 'DB_PASSWORD=' + `${base}!token=`.repeat(4500), `token=${base}!Bearer `.repeat(4000),
+      Array.from({ length: 400 }, () => `API_TOKEN=${largo(300)}`).join('\n'), `password=${base}#` + 'a'.repeat(200000)])
+      scanArchivo('a.js', s);
+    expect(performance.now() - t0).toBeLessThan(3000);
+  });
+});
+
+// Ronda 4: entre comillas, la cola se paraba en `; , ) [ <` o en un blanco y lo de detrás (la misma contraseña) salía en
+// claro detrás del marcador. Ahora llega a la comilla de cierre, como en redactString. Y la redacción del snippet tapa al
+// menos lo que tapaba HEAD: una URL con query en la línea de un hallazgo no deja ningún parámetro.
+describe('comillas y queries en el snippet (ronda 4)', () => {
+  const base = 'Xk9mP2vL' + '8qR4wZ7t';
+  let x = 0x6a09e667;
+  const azar = (n: number) => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) % n; };
+  it('el marcador llega a la comilla de cierre aunque dentro haya delimitadores o blancos', () => {
+    const casos: Array<[string, string]> = [
+      [`api_key: "${base};abcSECRET9"`, 'api_key: "[SECRET:CB_SECRET_GENERIC]"'],
+      [`export ACCESS_KEY: '${base}[abc<SECRET>'`, "export ACCESS_KEY: '[SECRET:CB_SECRET_GENERIC]'"],
+      [`const cfg = { secretKey: "${base}) tail 99" };`, 'const cfg = { secretKey: "[SECRET:CB_SECRET_GENERIC]" };'],
+      [`DB_PASSWORD="${base}&q=1,x y"`, 'DB_PASSWORD="[SECRET:CB_SECRET_GENERIC]"'],
+    ];
+    for (const [linea, esperado] of casos) expect(scanArchivo('a.ts', linea).map((c) => c.snippet), linea).toEqual([esperado]);
+  });
+  it('sin cierre en la línea (o a más de 256 car.), la cola se para donde siempre', () => {
+    expect(scanArchivo('a.ts', `api_key: "${base};abc\nx"`).map((c) => c.snippet)).toEqual(['api_key: "[SECRET:CB_SECRET_GENERIC];abc']);
+    const lejos = scanArchivo('a.ts', `api_key: "${base};${'y'.repeat(300)}"`)[0]!.snippet;
+    expect(lejos.startsWith('api_key: "[SECRET:CB_SECRET_GENERIC];yyy')).toBe(true);
+  });
+  it('propiedad: 300 valores entre comillas con delimitadores dentro: ningún snippet lleva 8 car. seguidos del valor', () => {
+    const ALFA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', DELIM = ';,)[]<>& `';
+    const tramo = (n: number, abc: string) => Array.from({ length: n }, () => abc[azar(abc.length)]).join('');
+    const NOMBRES = ['DB_PASSWORD', 'API_TOKEN', 'secretKey', 'CF_API_TOKEN_PROD', 'X-Auth-Key', 'credentials', 'key', 'TOKEN1'];
+    const FORMAS: Array<(n: string, v: string) => string> = [(n, v) => `${n}: "${v}"`, (n, v) => `{ ${n}: '${v}' }`, (n, v) => `${n} = "${v}";`];
+    let total = 0;
+    for (let i = 0; i < 300; i++) {
+      let v = tramo(16 + azar(14), ALFA) + String(azar(10));
+      for (let j = 1 + azar(3); j > 0; j--) v += tramo(1 + azar(2), DELIM) + tramo(1 + azar(10), ALFA);
+      const linea = FORMAS[azar(FORMAS.length)]!(NOMBRES[azar(NOMBRES.length)]!, v);
+      const cs = scanArchivo('a.ts', `${linea}\n`);
+      total += cs.length;
+      for (const c of cs) for (let p = 0; p + 8 <= v.length; p++) expect(c.snippet.includes(v.slice(p, p + 8)), `${linea}\n→ ${c.snippet}`).toBe(false);
+    }
+    expect(total).toBeGreaterThan(250);
+  });
+  it('una URL con query en la línea de un hallazgo: ningún parámetro sale en el snippet', () => {
+    const hex = R(64, '9f8e7d6c5b4a3210'), estado = 'st' + R(14, 'Qw3Er5Ty');
+    for (const linea of [`API_KEY=${base} CALLBACK=https://app.acme.io/cb?state=${estado}&code=${hex}`,
+      `UPLOAD_TOKEN_URL=https://b.s3.amazonaws.com/k?X-Amz-Date=1&X-Amz-Signature=${hex} SECRET_KEY=${base}`]) {
+      const cs = scanArchivo('a.sh', `${linea}\n`);
+      expect(cs.length, linea).toBeGreaterThan(0);
+      for (const c of cs) { expect(c.snippet, linea).not.toContain(hex.slice(0, 12)); expect(c.snippet, linea).not.toContain(estado); }
+    }
   });
 });
 

@@ -167,6 +167,23 @@ Las alertas de un incidente van a los **contactos de la org** donde pasó; en la
 4. **Verificación:** escríbeme «verifica mi contacto». Yo marco `verified_at` en la base, sin escribir tu teléfono en ningún archivo, y la chapa pasa a «Verificado». Es la defensa contra que alguien use VanGUARD para escribirle a terceros.
 5. **Prueba:** Ajustes → **Probar WhatsApp**, cuando el BACK haya desplegado Kapso y el webhook esté creado (7E). Cada prueba gasta crédito del sandbox.
 
+**7G · WhatsApp REAL: número de EE. UU. de Kapso, gratis** (decidido por Giovanni: opción 1)
+El plan Free trae **un número gestionado por Kapso sin depósito**: vale una vez por usuario, en tu primer proyecto, y se libera solo si pasa **30 días sin mensajes de producción**. Necesitas una cuenta de **Facebook**; la cuenta de Meta Business (portfolio) se crea en el mismo flujo si no la tienes.
+1. Kapso → **Connected numbers** → **Connect new number** → **Instant setup**. Confirma el aviso de elegir un número preverificado y pulsa para abrir el alta de Meta.
+2. Entra con tu Facebook. En **Seamlessly connect your account to Kapso** → **Continue**.
+3. En **Add your WhatsApp phone number**, abre el desplegable **Phone number** (empieza en «Enter a new phone number») y elige un número con el maletín y la chapa **Verified**. **No** elijas «Use a display name with a virtual number instead» ni «Enter a new phone number» → **Next**.
+4. **Business portfolio**: elige el tuyo o créalo. **WhatsApp Business account**: **Create a WhatsApp Business account** (nombre: VanGUARD) → **Next** → **Confirm**.
+5. Cuando Meta diga **Your account is connected to Kapso** → **Finish**. Tarda unos 5 min; si Meta revisa la cuenta, el número queda pendiente un rato y Kapso reintenta solo.
+6. En tu PC:
+   ```bash
+   node scripts/kapso-config.mjs --real --webhook
+   ```
+   Cambia `KAPSO_PHONE_NUMBER_ID` al número real, escribe `KAPSO_WABA_ID` y crea el webhook de ese número.
+7. Al Worker: `node scripts/subir-secretos-worker.mjs KAPSO_PHONE_NUMBER_ID KAPSO_WABA_ID`.
+8. Escríbeme «listo, número real». Después viene la plantilla de Meta (te paso el texto exacto) y el BACK cambia el envío.
+
+**Ojo:** aunque el número quede conectado, Meta todavía puede frenar los envíos por la revisión del nombre visible, de la cuenta o de la plantilla. Hasta que la plantilla esté aprobada, solo se le puede escribir a quien te haya escrito primero en las últimas 24 h.
+
 **Saldo:** el plan Free de Kapso trae **2 USD de crédito** y cada mensaje del sandbox lo gasta. Con saldo en 0, Kapso pausa los envíos. Antes de cada ensayo, mira el saldo en el panel.
 
 ### Paso 8 · Las dos pimientas del cifrado · 3 min (el BACK ya pasó el hito 2)

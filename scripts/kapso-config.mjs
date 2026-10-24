@@ -3,6 +3,8 @@
 //                                              KAPSO_WEBHOOK_SECRET (solo si esas líneas están vacías)
 //   node scripts/kapso-config.mjs --webhook  → además crea el webhook hacia /webhooks/kapso (solo cuando el BACK
 //                                              ya tenga esa ruta en producción; si no, Kapso pausa el webhook)
+//   node scripts/kapso-config.mjs --real --webhook → cambia al número real (no sandbox), escribe KAPSO_WABA_ID y
+//                                              crea el webhook de ese número
 // API verificada: GET /platform/v1/whatsapp/phone_numbers (meta_app_id es null en los números sandbox) y
 // POST /platform/v1/whatsapp/phone_numbers/{id}/webhooks con { whatsapp_webhook: { kind, url, events, secret_key } }.
 import { randomBytes } from 'node:crypto';
@@ -49,8 +51,25 @@ const sandbox = numeros.filter((n) => n.meta_app_id == null);
 console.log(`Números en el proyecto: ${numeros.length} (sandbox: ${sandbox.length})`);
 for (const n of numeros) console.log(`  · ${n.display_phone_number ?? '?'} ${n.name ? `«${n.name}»` : ''}${n.meta_app_id == null ? ' [sandbox]' : ''}`);
 
+// --real: pasa al número de producción (el que no es sandbox) y escribe también KAPSO_WABA_ID. Pisa el id del
+// sandbox a propósito: desde ahí el Worker envía por el número real.
+const reales = numeros.filter((n) => n.meta_app_id != null);
 let idNumero = leer('KAPSO_PHONE_NUMBER_ID');
-if (idNumero) {
+if (process.argv.includes('--real')) {
+  if (reales.length !== 1) {
+    console.error(reales.length === 0
+      ? '✗ No hay número real conectado: termina «Connected numbers → Connect new number → Instant setup» en Kapso.'
+      : '✗ Hay más de un número real: pega a mano en el .env el id del que corresponda.');
+    process.exit(1);
+  }
+  const n = reales[0];
+  idNumero = n.phone_number_id ?? n.id;
+  escribir('KAPSO_PHONE_NUMBER_ID', idNumero);
+  console.log(`✓ KAPSO_PHONE_NUMBER_ID: escrito (número real ${n.display_phone_number ?? '?'})`);
+  const waba = n.business_account_id ?? n.waba_id ?? '';
+  if (waba) { escribir('KAPSO_WABA_ID', waba); console.log('✓ KAPSO_WABA_ID: escrito'); }
+  else console.log('· KAPSO_WABA_ID: Kapso no lo devolvió; cópialo del panel si hace falta para las plantillas');
+} else if (idNumero) {
   console.log(numeros.some((n) => (n.phone_number_id ?? n.id) === idNumero)
     ? '· KAPSO_PHONE_NUMBER_ID ya tenía valor y existe en el proyecto'
     : '✗ KAPSO_PHONE_NUMBER_ID ya tenía valor pero NO está en este proyecto: bórralo del .env y vuelve a correr');

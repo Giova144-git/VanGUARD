@@ -2,7 +2,8 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Me, Overview, ScanRun, type Module, type Severity,
+  ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, ScanRun, Traffic,
+  type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -87,4 +88,28 @@ export const useScan = (org: string, id: string | undefined) => useQuery({
   queryKey: ['org', org, 'scan', id], enabled: !!id, refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/scans/${id}`, { esquema: ScanRun }),
   refetchInterval: (q) => ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? (USA_FIXTURES ? 1_000 : 10_000) : false,
+});
+
+// Incidentes (E16–E17). `estado = 'all'` no manda status: el BACK devuelve las últimas 24 h.
+export function useIncidentes(org: string, estado: 'open' | 'all') {
+  const vivo = useVivo();
+  return useQuery({
+    ...base, queryKey: ['org', org, 'incidents', estado],
+    queryFn: () => api(`/api/orgs/${org}/incidents${estado === 'open' ? '?status=open' : ''}`, { esquema: z.array(Incident) }),
+    refetchInterval: intervalo(vivo, 10_000, 60_000),
+  });
+}
+
+export function useIncidente(org: string, id: string) {
+  const vivo = useVivo();
+  return useQuery({
+    ...base, queryKey: ['org', org, 'incident', id], queryFn: () => api(`/api/orgs/${org}/incidents/${id}`, { esquema: IncidentDetail }),
+    refetchInterval: USA_FIXTURES ? 2_000 : intervalo(vivo, 10_000, 60_000),   // fixtures: sin cupo, para ver llenarse los hitos
+  });
+}
+
+// Cubetas de 10 s: consultar más seguido no trae dato nuevo; edge_hits no emite Realtime (§15.6). Solo montado donde se ve.
+export const useTrafico = (org: string) => useQuery({
+  ...base, queryKey: ['org', org, 'traffic'], queryFn: () => api(`/api/orgs/${org}/traffic?seconds=300`, { esquema: Traffic }),
+  refetchInterval: 10_000,
 });

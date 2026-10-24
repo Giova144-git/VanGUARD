@@ -1,7 +1,7 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, ScanAccepted, type ConnectionCreate, type FindingPatch, type ScanCreate,
+  ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, ProposeResponse, RespuestaEscritura, ScanAccepted, type ConnectionCreate, type FindingPatch, type ScanCreate,
 } from '@vanguard/contracts';
 import { api } from './api';
 
@@ -67,4 +67,35 @@ export function useLanzarScan(org: string) {
   return useMutation({
     mutationFn: (body: ScanCreate) => api(`/api/orgs/${org}/scans`, { method: 'POST', body, esquema: ScanAccepted }),
   });
+}
+
+// Incidentes: «Lo estoy viendo» y «Silenciar 1 h». Cuerpo {} explícito: un POST sin cuerpo haría fallar c.req.json() del BACK.
+export function useAccionIncidente(org: string) {
+  const invalidar = useInvalidar(org);
+  return useMutation({
+    mutationFn: ({ id, que }: { id: string; que: 'ack' | 'mute' }) =>
+      api(`/api/orgs/${org}/incidents/${id}/${que}`, { method: 'POST', body: que === 'mute' ? { minutes: 60 } : {}, esquema: RespuestaEscritura }),
+    onSettled: () => invalidar('incident', 'incidents', 'overview'),
+  });
+}
+
+// «Bloquear esta IP» (E20–E22): simular → confirmar con el código de un solo uso → deshacer. Sin useMutation para el código.
+export function useBloqueo(org: string) {
+  const invalidar = useInvalidar(org);
+  const fin = () => invalidar('incident', 'incidents', 'overview', 'module');
+  return {
+    proponer: (body: { incident_id: string; target: string }) =>
+      api(`/api/orgs/${org}/actions/propose`, { method: 'POST', body: { ...body, kind: 'block_ip' }, esquema: ProposeResponse }),
+    confirmar: async (approvalId: string, code: string) => {
+      const r = await api(`/api/orgs/${org}/actions/${approvalId}/confirm`, { method: 'POST', body: { code }, esquema: RespuestaEscritura });
+      await fin();
+      return r;
+    },
+    deshacer: async (actionId: string) => {
+      const r = await api(`/api/orgs/${org}/actions/${actionId}/undo`, { method: 'POST', body: {}, esquema: RespuestaEscritura });
+      await fin();
+      return r;
+    },
+    refrescar: fin,
+  };
 }

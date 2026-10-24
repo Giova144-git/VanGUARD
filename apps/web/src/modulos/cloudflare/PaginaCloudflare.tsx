@@ -1,6 +1,9 @@
-// Módulo Cloudflare (S14 §14.12). «Tráfico en vivo» con la gráfica llega con Incidentes (hito 5), que la comparte.
-import { useNavigate } from 'react-router';
-import { ShieldHalf } from 'lucide-react';
+// Módulo Cloudflare (S14 §14.12): tráfico en vivo (la misma gráfica que Incidentes), Modo blindaje y tu zona.
+import { Link, useNavigate } from 'react-router';
+import { ChevronRight, ShieldHalf } from 'lucide-react';
+import { GraficaTrafico, TablaTopIps } from '@/componentes/vg/GraficaTrafico';
+import { ErrorBloque } from '@/componentes/vg/Vacio';
+import { useIncidentes, useTrafico } from '@/lib/consultas';
 import { BotonGrande } from '@/componentes/vg/BotonGrande';
 import { BotonRevisar } from '@/componentes/vg/BotonRevisar';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
@@ -17,12 +20,27 @@ export default function PaginaCloudflare() {
   const ingesta = lista.some((c) => c.provider === 'ingest' && c.status === 'active');
   const zona = typeof lectura?.meta.zone_name === 'string' ? lectura.meta.zone_name : null;
   const plan = typeof lectura?.meta.plan === 'string' ? lectura.meta.plan : null;
+  const trafico = useTrafico(org.id);
+  const abiertos = useIncidentes(org.id, 'open').data ?? [];
+  // «Ver incidente» solo si hay un incidente abierto con resource = 'ip:'+ip; si no, sin acción ni color.
+  const verIncidente = (ip: string) => {
+    const i = abiertos.find((x) => x.resource === `ip:${ip}`);
+    return i ? <Link to={`/o/${org.id}/incidents/${i.id}`} className="inline-flex h-9 items-center gap-1 rounded-lg border border-info bg-info-relleno px-3 text-sm font-medium text-info">
+      Ver incidente<ChevronRight className="size-4" /></Link> : null;
+  };
   return (
     <PantallaModulo modulo="cloudflare" proveedor="cloudflare">
-      {ingesta ? null : (
-        <Etiqueta className="h-auto w-fit py-1.5 whitespace-normal"
-          texto="La detección en vivo necesita el sensor de ingesta de tu app; con solo el token de Cloudflare ves cifras cada 5 min" />
-      )}
+      <section className="flex flex-col gap-3" aria-label="Tráfico en vivo">
+        <h3 className="text-[17px] font-semibold">Tráfico en vivo (5 min)</h3>
+        {ingesta ? null : (
+          <Etiqueta className="h-auto w-fit py-1.5 whitespace-normal"
+            texto="La detección en vivo necesita el sensor de ingesta de tu app; con solo el token de Cloudflare ves cifras cada 5 min" />
+        )}
+        {trafico.data ? <>
+          <GraficaTrafico buckets={trafico.data.buckets} />
+          <TablaTopIps ips={trafico.data.top_ips} accion={verIncidente} />
+        </> : trafico.isError ? <ErrorBloque error={trafico.error} onReintentar={() => trafico.refetch()} /> : <div className="h-52 rounded-xl border bg-card" />}
+      </section>
       <section className="flex flex-col gap-3" aria-label="Modo blindaje">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-[17px] font-semibold">Modo blindaje</h3>

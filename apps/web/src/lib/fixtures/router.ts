@@ -1,7 +1,8 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, type ConnectionCreated, type ConnectionPublic, type Finding, type Me, type Org, type PermCheck, type ScanRun,
+  fixtures as fx, type ActionPublic, type ConnectionCreated, type ConnectionPublic, type Finding, type Incident, type IncidentDetail, type Me,
+  type Org, type PermCheck, type ScanRun, type TimelineItem,
 } from '@vanguard/contracts';
 import { ApiError } from '../errores';
 import { tipoSesionFalsa } from '../supabase-doble';
@@ -193,6 +194,153 @@ function verScan(id: string): ScanRun {
   };
 }
 
+// ── Incidentes (S14 §14.19) ──────────────────────────────────────────────────────────────────────────────────
+// Cada incidente vive como IncidentDetail. Los simulados guardan su inicio y sus hitos se van llenando con el reloj.
+type Simulado = { inicio: number };
+const incidentes = new Map<string, IncidentDetail[]>();
+const simulados = new Map<string, Simulado>();
+const iso = (ms: number) => new Date(ms).toISOString();
+const incidentesDe = (org: string) => {
+  if (!incidentes.has(org)) incidentes.set(org, vacia(org) ? [] : (fx.incidents as unknown as Incident[]).map((i) =>
+    i.id === fx.incidentDetail.id ? structuredClone(fx.incidentDetail as unknown as IncidentDetail)
+      : { ...structuredClone(i), notifications: [], actions: [], timeline: [] }));
+  return incidentes.get(org)!;
+};
+
+// Hitos de la historia de la demo (A9): detectado +6,1 s, WhatsApp +8,4 s, crítica +26,1 s, llamada +27,5 s (P1).
+const GUION: { ms: number; kind: TimelineItem['kind']; label: string }[] = [
+  { ms: 6_100, kind: 'detected', label: 'Reglas CF_UA_TOOL y CF_PATH_SCAN' },
+  { ms: 8_400, kind: 'whatsapp_sent', label: 'WhatsApp a +58 ••• ••43' },
+  { ms: 9_600, kind: 'whatsapp_delivered', label: 'WhatsApp entregado' },
+  { ms: 26_100, kind: 'severity_up', label: 'Sube a crítica: CF_ADMIN_EXPOSED' },
+  { ms: 27_500, kind: 'call_started', label: 'Llamada a +58 ••• ••43' },
+];
+function avanzar(i: IncidentDetail) {
+  const s = simulados.get(i.id);
+  if (!s) return i;
+  const ms = Date.now() - s.inicio;
+  const vistos = new Set(i.timeline.map((t) => t.kind));
+  for (const g of GUION) if (ms >= g.ms && !vistos.has(g.kind)) {
+    i.timeline.push({ t: iso(s.inicio + g.ms), ms: g.ms, kind: g.kind, label: g.label });
+    if (g.kind === 'whatsapp_sent' || g.kind === 'call_started') {
+      i.notifications.push({ id: crypto.randomUUID(), channel: g.kind === 'call_started' ? 'voice' : 'whatsapp', recipient_masked: '+58 ••• ••43',
+        template: 'incident_v1', status: 'sent', error: null, created_at: iso(s.inicio + g.ms), sent_at: iso(s.inicio + g.ms), delivered_at: null, read_at: null });
+      i.notified_at ??= iso(s.inicio + g.ms);
+    }
+    if (g.kind === 'severity_up') { i.severity = 'critical'; i.rule_ids = [...new Set([...i.rule_ids, 'CF_ADMIN_EXPOSED'])]; }
+  }
+  i.timeline.sort((a, b) => a.ms - b.ms);
+  i.event_count = Math.min(1146, Math.round(ms / 40_000 * 1146));
+  i.last_event_at = iso(Date.now());
+  return i;
+}
+const incidente = (org: string, id: string) => {
+  const i = incidentesDe(org).find((x) => x.id === id) ?? falla(404, 'not_found', 'Este incidente no existe');
+  return avanzar(i);
+};
+const marca = (i: IncidentDetail, kind: TimelineItem['kind'], label?: string) => {
+  const ahora = Date.now();
+  i.timeline.push({ t: iso(ahora), ms: ahora - Date.parse(i.timeline.find((t) => t.kind === 'attack_start')?.t ?? i.started_at), kind, ...(label ? { label } : {}) });
+};
+const sinDetalle = ({ notifications: _n, actions: _a, timeline: _t, ...i }: IncidentDetail): Incident => i;
+
+function listarIncidentes(org: string, q: URLSearchParams) {
+  const todos = incidentesDe(org).map(avanzar);
+  const abiertos = q.get('status') === 'open';
+  return structuredClone(todos.filter((i) => !abiertos || i.status === 'open' || i.status === 'ack').map(sinDetalle))
+    .sort((a, b) => b.started_at.localeCompare(a.started_at));
+}
+
+function ackFalso(org: string, id: string) {
+  const i = incidente(org, id);
+  if (i.status !== 'open') falla(409, 'conflict', 'Este incidente ya no está abierto');
+  i.status = 'ack'; i.acked_at = iso(Date.now()); i.acked_via = 'in_app';
+  marca(i, 'ack', 'Confirmado desde la app');
+  return { ok: true, resultado: 'Lo estás viendo', en: i.acked_at };
+}
+function muteFalso(org: string, id: string) {
+  const i = incidente(org, id);
+  if (i.status === 'resolved') falla(409, 'conflict', 'El incidente ya está resuelto');
+  i.muted_until = iso(Date.now() + 3_600_000);
+  marca(i, 'muted', 'Silenciado 1 h');
+  return { ok: true, resultado: 'Silenciado 1 h', en: iso(Date.now()) };
+}
+
+// Aprobaciones pendientes: approval_id → incidente, IP e intentos. Código válido en fixtures: 123456.
+const aprobaciones = new Map<string, { org: string; incident_id: string; target: string; intentos: number; vence: number; usada: boolean }>();
+function proponerFalso(org: string, body: unknown) {
+  const b = (body ?? {}) as { incident_id?: string; target?: string };
+  const i = incidente(org, b.incident_id ?? '');
+  const ip = b.target ?? i.resource.replace(/^ip:/, '');
+  if (!/^[\d.]+$|^[\da-f:]+$/i.test(ip)) falla(422, 'invalid_body', 'Solo bloqueamos una IP suelta (/32 o /128)', { reason: 'not_an_ip' });
+  const approval_id = crypto.randomUUID();
+  const vence = Date.now() + 600_000;          // el fixture trae una expires_at fija (sábado): se recalcula aquí (A9)
+  aprobaciones.set(approval_id, { org, incident_id: i.id, target: ip, intentos: 3, vence, usada: false });
+  marca(i, 'action_proposed', `Propuesto bloquear ${ip}`);
+  return { ...fx.actionProposal, approval_id, efecto: `Bloquear ${ip} (/32) en la zona officialvanguard.com durante 1 h`, expires_at: iso(vence) };
+}
+function ejecutarBloqueo(org: string, incident_id: string, target: string, approval_id: string) {
+  const i = incidente(org, incident_id);
+  const ahora = Date.now();
+  const accion: ActionPublic = { id: crypto.randomUUID(), kind: 'block_ip', target, status: 'executed', created_at: iso(ahora),
+    undone_at: null, expires_at: iso(ahora + 3_600_000), approval_id };
+  i.actions.push(accion);
+  i.status = 'mitigated'; i.mitigated_at = iso(ahora);
+  marca(i, 'action_executed', `IP ${target} bloqueada en el borde`);
+  return accion;
+}
+function confirmarFalso(org: string, approvalId: string, body: unknown) {
+  const a = aprobaciones.get(approvalId);
+  if (!a || a.org !== org) return falla(404, 'not_found', 'Esa aprobación no existe');
+  if (a.usada) return falla(409, 'conflict', 'Esa aprobación ya se usó', { reason: 'used' });
+  if (Date.now() > a.vence) return falla(409, 'conflict', 'El código venció, pídelo de nuevo', { reason: 'expired' });
+  if (a.intentos <= 0) return falla(409, 'conflict', 'Demasiados intentos: pide un código nuevo', { reason: 'locked' });
+  const code = String((body as { code?: unknown } | null)?.code ?? '');
+  if (code !== '123456') {
+    a.intentos -= 1;
+    return falla(422, 'invalid_body', 'Código incorrecto', { reason: 'wrong_code', attempts_left: a.intentos });   // misma forma que E21 (H9)
+  }
+  a.usada = true;
+  const accion = ejecutarBloqueo(org, a.incident_id, a.target, approvalId);
+  return { ok: true, resultado: 'IP bloqueada 1 h', en: accion.created_at, action_id: accion.id };
+}
+function deshacerFalso(org: string, actionId: string) {
+  for (const i of incidentesDe(org)) {
+    const a = i.actions.find((x) => x.id === actionId);
+    if (!a) continue;
+    if (a.status === 'undone') falla(409, 'conflict', 'Ese bloqueo ya se deshizo', { reason: 'already_undone' });
+    a.status = 'undone'; a.undone_at = iso(Date.now());
+    i.status = i.acked_at ? 'ack' : 'open'; i.mitigated_at = null;
+    marca(i, 'action_undone', `IP ${a.target} desbloqueada`);
+    return { ok: true, resultado: 'Desbloqueada', en: a.undone_at };
+  }
+  return falla(404, 'not_found', 'Esa acción no existe');
+}
+
+// Botones que solo existen en modo fixtures (S14 §14.19): ensayar el tramo de incidentes del guion sin BACK.
+export function simularAtaque(org: string): string {
+  const inicio = Date.now();
+  const id = crypto.randomUUID();
+  const code = Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, 'X');
+  const i: IncidentDetail = {
+    id, code, module: 'cloudflare', rule_ids: ['CF_UA_TOOL', 'CF_PATH_SCAN'], severity: 'high',
+    title: 'Escaneo con herramienta y /admin abierto desde 203.0.x.x', resource: 'ip:203.0.113.7', status: 'open', event_count: 0,
+    details: { ua: 'sqlmap/1.8#stable (https://sqlmap.org)', paths: ['/admin', '/.env', '/wp-login.php'] }, started_at: iso(inicio),
+    last_event_at: iso(inicio), notified_at: null, acked_at: null, acked_via: null, muted_until: null, mitigated_at: null, resolved_at: null,
+    suspected_injection: false, notifications: [], actions: [],
+    timeline: [{ t: iso(inicio), ms: 0, kind: 'attack_start', label: 'Primera petición del atacante' }],
+  };
+  incidentesDe(org).unshift(i);
+  simulados.set(id, { inicio });
+  return id;
+}
+export function simularAprobacionWhatsApp(org: string, incidentId: string) {
+  const i = incidente(org, incidentId);
+  if (i.actions.some((a) => a.kind === 'block_ip' && a.status === 'executed')) return;
+  ejecutarBloqueo(org, i.id, i.resource.replace(/^ip:/, ''), crypto.randomUUID());
+  i.acked_at ??= iso(Date.now()); i.acked_via ??= 'whatsapp';
+}
+
 const ORG = '\\/api\\/orgs\\/([^/]+)';
 const r = (s: string) => new RegExp(`^${s}$`);
 const rutas: [string, RegExp, H][] = [
@@ -210,8 +358,13 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r(`${ORG}\\/findings\\/([^/]+)`),      (m) => structuredClone(hallazgo(m[1]!, m[2]!))],
   ['PATCH', r(`${ORG}\\/findings\\/([^/]+)`),     (m, b) => patchHallazgo(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/findings\\/([^/]+)\\/fix-prompt`), (m) => promptFalso(m[1]!, m[2]!)],
-  ['GET',  r(`${ORG}\\/incidents`),               (m) => vacia(m[1]!) ? [] : fx.incidents],
-  ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     () => fx.incidentDetail],
+  ['GET',  r(`${ORG}\\/incidents`),               (m, _b, q) => listarIncidentes(m[1]!, q)],
+  ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     (m) => structuredClone(incidente(m[1]!, m[2]!))],
+  ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/ack`),  (m) => ackFalso(m[1]!, m[2]!)],
+  ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/mute`), (m) => muteFalso(m[1]!, m[2]!)],
+  ['POST', r(`${ORG}\\/actions\\/propose`),       (m, b) => proponerFalso(m[1]!, b)],
+  ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/confirm`), (m, b) => confirmarFalso(m[1]!, m[2]!, b)],
+  ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/traffic`),                 () => fx.traffic],
   ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                () => fx.contacts],

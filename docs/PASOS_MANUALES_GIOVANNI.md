@@ -133,11 +133,62 @@ Supabase marca un aviso porque la función `join_demo_org()` (el plan B del bot�
 3. **Guárdalas también en tu gestor de contraseñas.** Si se pierden, las credenciales que guarden los clientes no se pueden descifrar.
 4. **Nunca las cambies** después de que alguien guarde una conexión: las credenciales ya cifradas dejarían de abrirse.
 
-### Paso 9 · Proyecto víctima de la demo (lo puede hacer Gabriel) · 20 min
-1. En **otra cuenta** de Supabase (la de Gabriel), crea el proyecto **`vanguard-demo`** en plan Free.
-2. El BACK entrega el SQL de siembra (`demo/seed-victima.sql`): se pega en el SQL Editor de ese proyecto.
-3. Crea un **token de acceso personal con alcance solo a ese proyecto y de solo lectura** (empieza por `sbp_`), con caducidad de **30 días**.
-4. Ese token va en `apps/api/.dev.vars` como **`SUPABASE_HUMO_PAT`**. No va al Worker ni al chat.
+### Paso 9 · Proyecto víctima de la demo (lo hace Gabriel, en SU cuenta) · 40 min
+**Decidido por Giovanni:** la víctima va en un proyecto Supabase aparte, en otra cuenta.
+
+**Quién y por qué.** Lo hace **Gabriel**, en su propia cuenta de Supabase y en su propio GitHub. El plan le asigna el proyecto `vanguard-demo`, su token y el repo `vanguard-demo-victima`. Va aparte porque la víctima está rota a propósito y nuestro único proyecto (`accshmgmfrqrxubpuxcl`) es dev y prod a la vez. Si se siembran fallas ahí, quedan datos abiertos en producción.
+
+**No es de este paso:** la app víctima (`demo.officialvanguard.com`) y el script del atacante son del ORQUESTADOR y de Giovanni. La clave PSI también la crea Gabriel, pero es el paso 10.
+
+**Antes de empezar**
+1. Gabriel necesita un hueco libre en su cuenta: Free permite **2 proyectos activos** contando todas las organizaciones donde es Owner/Admin (los pausados no cuentan). Si ya tiene 2, pausa uno o usa otra organización Free suya.
+2. El ORQUESTADOR le pasa por canal privado `demo/seed-victima.sql`, el SQL de siembra.
+
+**9A · Crear el proyecto (lo antes posible)**
+1. Supabase → **New project**, en una organización Free suya. Nombre exacto **`vanguard-demo`**, plan **Free**, región Americas.
+2. La **contraseña de la base**, fuerte y guardada en **su gestor de contraseñas**. Nunca en un chat.
+3. Copia el **Project ref**: las 20 letras de la URL del proyecto. **No es secreto.** Pásaselo al ORQUESTADOR; hace falta para el repo víctima y la app víctima.
+
+**9B · Sembrar las fallas**
+1. Abre el **SQL Editor** de `vanguard-demo`. **Antes de ejecutar, mira que la URL tenga el ref de `vanguard-demo` y no `accshmgmfrqrxubpuxcl`.**
+2. Pega `demo/seed-victima.sql` tal cual y ejecútalo. El SQL trae una guarda que aborta si por error se pega en la base del producto.
+3. Authentication de `vanguard-demo` → **longitud mínima de contraseña 6** y **captcha apagado** (son fallas sembradas a propósito).
+
+**9C · Token de solo lectura del proyecto**
+Supabase permite hoy un token limitado a un proyecto y a solo lectura: el **scoped PAT**, que empieza por **`sbp_fc`**.
+1. Abre `https://supabase.com/dashboard/account/tokens` → **Generate new token**.
+2. **Resources:** «selected projects in one organization» → marca **solo `vanguard-demo`**.
+3. **Permissions**, estos cinco en **Read** (los nombres del panel pueden variar un poco): **Project Settings**, **Advisors**, **Database**, **Logs** y **Auth Config**. El acceso del token no se puede editar después: si falta uno, hay que borrarlo y crear otro.
+4. **Expiry:** fecha personalizada **2026-11-23**, para que dure hasta la revisión del jurado. No elijas «never».
+5. Copia el valor `sbp_fc…`. **Solo se ve una vez.**
+6. **Prohibido:**
+   - un token **Legacy** o de cuenta completa;
+   - marcar **API Key Secrets**, **Data API**, **Edge Function Secrets**, **Database JIT** o cualquier permiso **Read-write**.
+
+   VanGUARD rechaza esos tokens al conectarlos.
+
+**9D · Repo privado de la víctima**
+1. En el GitHub de Gabriel, crea el repo **privado** vacío **`vanguard-demo-victima`**. Es privado porque lleva secretos **falsos** con forma real, y Supabase revoca las claves que aparecen en repos públicos.
+2. El ORQUESTADOR lo llena con `demo/sembrar-repo.mjs`, usando el ref de 9A. Los secretos falsos se arman por concatenación y el script no imprime nada.
+3. Crea un **PAT fine-grained solo de ese repo**, con **Contents: Read-only** y **Metadata: Read-only**, por 30 días. Nunca un token clásico `ghp_`.
+
+**A dónde va cada valor (nunca por chat ni git)**
+- **Token `sbp_fc…` de Supabase:**
+  1. Gabriel se lo pasa a Giovanni compartiéndolo desde el gestor de contraseñas.
+  2. Giovanni lo pega en el `.env` de la raíz, en la línea **`SUPABASE_HUMO_PAT`**. El paso 3b lo copia después a `apps/api/.dev.vars`.
+  3. **No va al Worker.**
+  4. En la demo, Gabriel lo pega en **Conexiones** de VanGUARD, en la org de demo.
+- **PAT de GitHub:** Gabriel lo pega directamente en **Conexiones** de VanGUARD. No pasa por ningún `.env`.
+- **Project ref:** no es secreto; puede ir al ORQUESTADOR por mensaje privado.
+
+**Qué NO hacer**
+- No invitar a nadie de nuestro equipo como Owner/Admin a la organización de la víctima: consume cupo Free, y en Free el rol Developer ve la service key.
+- No conectar `vanguard-demo` al MCP de los chats.
+- No sembrar nada en `accshmgmfrqrxubpuxcl`.
+
+**Plan B:** si Gabriel no puede, Giovanni crea **otra organización Free suya** para la víctima. Nunca dentro del proyecto del producto.
+
+**Cómo avisar:** «listo, paso 9» cuando el proyecto esté sembrado y el token esté en el `.env`. El BACK lo verifica con su prueba de humo. Aparte, «listo, repo víctima» cuando el repo y su PAT estén creados.
 
 ### Paso 10 · Clave de PageSpeed Insights · 10 min (sábado ~15:00)
 1. En Google Cloud, crea un proyecto y habilita **PageSpeed Insights API**.
@@ -197,7 +248,7 @@ Supabase marca un aviso porque la función `join_demo_org()` (el plan B del bot�
 | `KAPSO_PHONE_NUMBER_ID` | Kapso → WhatsApp → Sandbox: id del número del sandbox | Mañana (paso 7) |
 | `KAPSO_WEBHOOK_SECRET` | Kapso → Webhooks → crear uno con URL `https://officialvanguard.com/webhooks/kapso` → copiar su secreto | Mañana (paso 7) |
 | `KAPSO_WABA_ID` | Solo con número propio de WhatsApp Business (no con el sandbox) | Vacía |
-| `SUPABASE_HUMO_PAT` | Supabase (cuenta de Gabriel) → Account → Access Tokens → token **de solo lectura y solo del proyecto `vanguard-demo`**, 30 días (`sbp_…`). Solo local | Mañana (paso 9) |
+| `SUPABASE_HUMO_PAT` | Supabase (cuenta de Gabriel) → Account → Access Tokens → **scoped PAT** (`sbp_fc…`) solo del proyecto `vanguard-demo`, con 5 permisos en Read y caducidad 2026-11-23 (detalle en el paso 9). Solo local, nunca en el Worker | Paso 9 |
 | `PSI_API_KEY` | Google Cloud → APIs & Services → habilitar **PageSpeed Insights API** → Credentials → API key restringida a esa API | Sáb ~15:00 (paso 10) |
 | `TEST_USER_A_PASSWORD`, `TEST_USER_B_PASSWORD` | **Generar** dos contraseñas cualesquiera; el BACK crea con ellas los usuarios de prueba `idor-a@vanguard.test` e `idor-b@vanguard.test`. Solo local | Cuando el BACK las pida |
 | `VG_EDGE_SECRET` | **Generar**. Solo si un paso de la auditoría se muda a una Edge Function de Supabase | Vacía por ahora |

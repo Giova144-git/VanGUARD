@@ -17,8 +17,9 @@ vi.mock('../lib/credentials.ts', () => ({
 const ia = vi.hoisted(() => ({ llamar: vi.fn() }));
 vi.mock('../ia/claude.ts', () => ({ llamarIATexto: ia.llamar }));
 
-const { cierreWikiDlq, pasoWiki, REINTENTOS_WIKI } = await import('./pasos.ts');
-const { MAX_REINTENTOS_COLA } = await import('../jobs.ts');
+const { cierreWikiDlq, MAX_ESPERA_S, pasoWiki, REINTENTOS_WIKI } = await import('./pasos.ts');
+const { colaEnSerie, MAX_REINTENTOS_COLA } = await import('../jobs.ts');
+const { SIN_AVANCE_MS } = await import('./corridas.ts');
 
 const ORG = '0f6c0000-0000-4000-8000-000000000001';
 const RUN = '3a110000-0000-4000-8000-000000000001';
@@ -67,6 +68,7 @@ let urls: { url: string; auth: string | null }[];
 let github: (url: string) => Response | Promise<Response>;
 let casPierde: boolean;
 let fallaAvanzar: number;
+let escrituras: number;
 let auditorias: Record<string, unknown>[];
 let hallazgosDb: Record<string, unknown>[];
 
@@ -93,9 +95,11 @@ const clon = <T>(v: T): T => (v === null || v === undefined ? v : JSON.parse(JSO
 beforeEach(() => {
   fila = { id: RUN, org_id: ORG, connection_id: CONN, repo_full_name: 'acme/tienda', branch: 'main', status: 'queued',
     est_usd: null, max_usd: 1, models: { fast: 'claude-haiku-5-5', smart: 'claude-sonnet-5-5' }, state: null,
-    steps: [], progress: 0, cost_usd: 0, doc: null, error: null, commit_sha: SHA, started_at: null, finished_at: null };
+    steps: [], progress: 0, cost_usd: 0, doc: null, error: null, commit_sha: SHA, started_at: null, finished_at: null,
+    updated_at: 't0' };
   casPierde = false;
   fallaAvanzar = 0;
+  escrituras = 0;
   // Una auditoría terminada en la que el paso repo leyó acme/tienda (hallazgosDelRepo de wiki/corridas.ts).
   auditorias = [{ steps: [{ name: 'repo', status: 'done' }], params: {}, finished_at: '2026-10-20T15:00:00+00:00' }];
   hallazgosDb = [
@@ -122,7 +126,8 @@ beforeEach(() => {
       }
       return undefined;
     },
-    // vg_wiki_avanzar de 0010: id + org + n + corrida abierta; progress nunca baja; started_at/finished_at.
+    // vg_wiki_avanzar de 0010: id + org + n + corrida abierta; progress nunca baja; started_at/finished_at; updated_at
+    // en cada escritura (t1, t2…).
     rpc: (name, a): Resp | undefined => {
       if (name !== 'vg_wiki_avanzar') return undefined;
       if (fallaAvanzar > 0) { fallaAvanzar--; return { error: { code: '08006' } }; }
@@ -136,6 +141,7 @@ beforeEach(() => {
       if (typeof p.progress === 'number') fila.progress = Math.max(fila.progress, p.progress);
       if (p.status === 'running') fila.started_at ??= 'ahora';
       if (p.status === 'succeeded' || p.status === 'failed') fila.finished_at ??= 'ahora';
+      fila.updated_at = `t${++escrituras}`;
       return { data: true };
     },
   });
@@ -544,6 +550,156 @@ describe('el PAT de GitHub', () => {
     expect(JSON.stringify(d.enviados)).not.toContain(PAT);
     expect(JSON.stringify(ia.llamar.mock.calls)).not.toContain(PAT);
     expect(lineas.join('\n')).not.toContain(MARCA);
+  });
+});
+
+describe('esperas acotadas y toque de updated_at (vigilante de 10 min)', () => {
+  // Toque = vg_wiki_avanzar con p_state null y parche vacío: solo cambia updated_at.
+  const toques = () => avances().filter((r) => r.args.p_state === null && JSON.stringify(r.args.p_patch) === '{}');
+  const sinUpdatedAt = (f: Fila) => { const { updated_at: _u, ...resto } = f; return resto; };
+  const enArea = async (d: ReturnType<typeof conIA>) => {
+    await pasoWiki(d.env, msg('arbol'));
+    await pasoWiki(d.env, msg('triage'));
+    return (d.enviados[1] as MsgWiki).area!;
+  };
+  const limiteGithub = (retryAfter: string) => (url: string) =>
+    (url.startsWith(RAW) ? new Response('', { status: 403, headers: { 'retry-after': retryAfter } }) : githubOk(url));
+
+  it('cada espera cabe con margen en el vigilante: 480 s más la entrega y el paso < SIN_AVANCE_MS', () => {
+    expect(MAX_ESPERA_S).toBe(480);
+    expect(MAX_ESPERA_S * 1000 + 60_000).toBeLessThan(SIN_AVANCE_MS);
+  });
+
+  it('GitHub pide 3600 s → la espera se acota a 480 s y toca updated_at sin cambiar nada más', async () => {
+    const d = conIA();
+    const area = await enArea(d);
+    github = limiteGithub('3600');
+    const antes = clon(fila);
+    const t0 = toques().length;
+    expect(await pasoWiki(d.env, msg('area', area))).toEqual({ retry: 480 });
+    expect(toques().length - t0).toBe(1);
+    expect(toques().at(-1)!.args).toEqual({ p_run: RUN, p_org: ORG, p_n: nDe(antes.state), p_state: null, p_patch: {} });
+    expect(fila.updated_at).not.toBe(antes.updated_at);
+    expect(sinUpdatedAt(fila)).toEqual(sinUpdatedAt(antes));        // estado, n, pasos, progreso y costo intactos
+  });
+
+  it('si GitHub sigue pidiendo más, cada entrega espera 480 s y toca; agotados los reintentos, failed con limite_github (nunca colgada)', async () => {
+    const d = conIA();
+    const area = await enArea(d);
+    github = limiteGithub('3600');
+    const t0 = toques().length;
+    for (let intento = 1; intento <= REINTENTOS_WIKI; intento++) {
+      expect(await pasoWiki(d.env, msg('area', area), intento)).toEqual({ retry: 480 });
+      expect(fila.status).toBe('running');
+    }
+    expect(toques().length - t0).toBe(REINTENTOS_WIKI);
+    expect(await pasoWiki(d.env, msg('area', area), REINTENTOS_WIKI + 1)).toBe('ack');
+    expect(fila.status).toBe('failed');
+    expect(fila.finished_at).toBe('ahora');
+    expect(stepDe('area')).toMatchObject({ status: 'failed', error_code: 'limite_github' });
+    expect(fila.error).toMatch(/^GitHub siguió frenando/);
+    expect(fila.error!.length).toBeLessThanOrEqual(120);
+  });
+
+  it('una espera corta de GitHub se respeta tal cual y también toca', async () => {
+    const d = conIA();
+    const area = await enArea(d);
+    github = limiteGithub('120');
+    const t0 = toques().length;
+    expect(await pasoWiki(d.env, msg('area', area))).toEqual({ retry: 120 });
+    expect(toques().length - t0).toBe(1);
+  });
+
+  it('el ritmo de la IA y un transitorio de la IA también tocan; agotado el último reintento, failed con ia_no_disponible', async () => {
+    const d = conIA();
+    await pasoWiki(d.env, msg('arbol'));
+    const t0 = toques().length;
+    ia.llamar.mockResolvedValueOnce({ ok: false, code: 'budget', reintentar: true });
+    expect(await pasoWiki(d.env, msg('triage'))).toEqual({ retry: 60 });
+    ia.llamar.mockResolvedValue({ ok: false, code: 'timeout' });
+    expect(await pasoWiki(d.env, msg('triage'), 2)).toEqual({ retry: 20 });
+    expect(await pasoWiki(d.env, msg('triage'), 3)).toEqual({ retry: 40 });
+    expect(toques().length - t0).toBe(3);
+    expect(await pasoWiki(d.env, msg('triage'), REINTENTOS_WIKI + 1)).toBe('ack');
+    expect(fila.status).toBe('failed');
+    expect(stepDe('triage')).toMatchObject({ status: 'failed', error_code: 'ia_no_disponible' });
+    expect(fila.error).toBe('El servicio de IA no respondió tras varios intentos.');
+  });
+
+  it('el toque es de mejor esfuerzo: si pierde el CAS (otra entrega avanzó) o la base falla, el reintento sigue igual', async () => {
+    const d = conIA();
+    const area = await enArea(d);
+    github = limiteGithub('60');
+    casPierde = true;
+    expect(await pasoWiki(d.env, msg('area', area))).toEqual({ retry: 60 });
+    casPierde = false;
+    const real = doble.client;
+    estado.client = { ...real, rpc: async (n: string, a: Record<string, unknown>) => (a.p_state === null && n === 'vg_wiki_avanzar'
+      ? { data: null, error: { code: '08006' } } : real.rpc(n, a)) };
+    expect(await pasoWiki(d.env, msg('area', area), 2)).toEqual({ retry: 60 });
+    expect(lineas.filter((l) => l.includes('wiki.toque_omitido'))).toHaveLength(2);
+    expect(fila.status).toBe('running');
+  });
+
+  it('con la base caída no se toca (no saldría): solo el reintento', async () => {
+    const d = conIA();
+    fallaAvanzar = 2;
+    const a0 = avances().length;
+    expect(await pasoWiki(d.env, msg('arbol'))).toEqual({ retry: 10 });
+    expect(avances().length - a0).toBe(2);                          // las 2 del guardado, ningún toque
+  });
+});
+
+describe('reintentos agotados: la corrida queda failed, nunca running', () => {
+  it('base caída en las 4 entregas (max_retries 3 de vg-jobs): la cola la manda a la DLQ y cierreWikiDlq la deja failed con dlq', async () => {
+    const d = conIA();
+    await correrCola(d, [msg('arbol')], (m) => m.paso === 'sintesis');
+    const real = doble.client;
+    estado.client = { ...real, from: (t: string) => (t === 'findings'
+      ? dbDoble({ tabla: () => ({ error: { code: '08006' } }) }).client.from(t) : real.from(t)) };
+    vi.useFakeTimers();
+    try {
+      const cola = colaEnSerie(d.env);
+      (d.env as unknown as { JOBS_Q: unknown }).JOBS_Q = cola;
+      await cola.send(msg('sintesis'));
+      for (let i = 0; i < 20 && fila.status === 'running'; i++) await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await cola.vacia();
+    } finally {
+      vi.useRealTimers();
+    }
+    const eventos = lineas.filter((l) => l.includes('"wiki.reintento"')).map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(eventos.filter((e) => e.event === 'wiki.reintento').map((e) => e.intento)).toEqual([1, 2, 3, 4]);
+    expect(fila.status).toBe('failed');
+    expect(fila.finished_at).toBe('ahora');
+    expect(stepDe('sintesis')).toMatchObject({ status: 'failed', error_code: 'dlq' });
+    expect(stepDe('fin')?.status).toBe('skipped');
+    expect(fila.error).toBe('La generación falló varias veces seguidas y se detuvo.');
+    expect(llamadasIA('wiki_sintesis')).toHaveLength(0);
+  });
+
+  it('un transitorio en la última entrega (intento 4) falla la corrida con su código en vez de esperar a la DLQ', async () => {
+    const d = conIA();
+    const area = (await (async () => { await pasoWiki(d.env, msg('arbol')); await pasoWiki(d.env, msg('triage'));
+      return (d.enviados[1] as MsgWiki).area!; })());
+    github = (url) => { if (url.startsWith(RAW)) throw new TypeError('red'); return githubOk(url); };
+    expect(await pasoWiki(d.env, msg('area', area), MAX_REINTENTOS_COLA + 1)).toBe('ack');
+    expect(fila.status).toBe('failed');
+    expect(fila.error).toBe('No pudimos contactar a GitHub tras varios intentos.');
+    // Y si aun así cae a la DLQ (la escritura del fallo no salió), el cierre de la DLQ no la reabre ni la pisa.
+    expect(await cierreWikiDlq(d.env, msg('area', area))).toBe('ack');
+    expect(stepDe('area')).toMatchObject({ status: 'failed', error_code: 'github_red' });
+  });
+
+  it('la escritura del fallo no sale en la última entrega → retry (la cola la lleva a la DLQ) y cierreWikiDlq la cierra', async () => {
+    const d = conIA();
+    await pasoWiki(d.env, msg('arbol'));
+    ia.llamar.mockResolvedValue({ ok: false, code: 'timeout' });
+    fallaAvanzar = 2;
+    expect(await pasoWiki(d.env, msg('triage'), REINTENTOS_WIKI + 1)).toEqual({ retry: expect.any(Number) });
+    expect(fila.status).toBe('running');
+    expect(await cierreWikiDlq(d.env, msg('triage'))).toBe('ack');
+    expect(fila.status).toBe('failed');
+    expect(stepDe('triage')).toMatchObject({ status: 'failed', error_code: 'dlq' });
   });
 });
 

@@ -22,6 +22,8 @@ import { ErrorLlmWiki, llmWiki } from './llm.ts';
 //   triage   1 + 4 + 2 + 2 = 9, sin GitHub
 //   area     1 + 3 + 4 + 2 + 2 = 12 fijas → GitHub ≤ 28 (25 descargas y 3 reintentos)
 //   sintesis 1 + 3 (hallazgos) + 2 (marca) + 4 + 2 = 12, sin GitHub
+// Un paso que se reprograma por un error (no de la base) no escribe ni envía: el toque de updated_at (1, sin reintento)
+// cabe en esas 4. Con la base o la cola caídas no se toca: ya gastó sus reintentos y tampoco saldría.
 // CPU: el motor está medido para 10 ms por paso; aquí solo hay armado de objetos y JSON (la espera de red no cuenta).
 
 export type RespuestaCola = 'ack' | { retry: number };
@@ -31,7 +33,12 @@ export type RespuestaCola = 'ack' | { retry: number };
 export const REINTENTOS_WIKI = 3;
 const FIJAS_ARBOL = 8;
 const FIJAS_AREA = 12;
-const MAX_ESPERA_S = 3600;            // tope de reintentarEnS de GitHub (y de lo que se pide a la cola)
+// Tope de cada espera que se pide a la cola (reintentarEnS de GitHub, el ritmo de la IA, la marca de la síntesis). El
+// vigilante del housekeeping (engine/housekeeping.ts) cierra la corrida que lleva SIN_AVANCE_MS (10 min, wiki/corridas.ts)
+// sin tocar updated_at; cada reprogramación lo toca, así que 480 s de espera más la entrega y el paso caben con margen.
+// Si GitHub pide más (su límite por hora), cada entrega espera 480 s y vuelve a chocar: agotados los REINTENTOS_WIKI, la
+// corrida falla con limite_github (~24 min en total). Nunca queda colgada ni la mata el vigilante mientras espera.
+export const MAX_ESPERA_S = 480;
 const MARGEN_SINTESIS_S = 5;          // tras vencer la marca de otra entrega
 const MAX_AVISOS_DOC = 10;            // WikiDoc.avisos
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -209,7 +216,8 @@ async function correrArea(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> 
 
 // LEEME, punto 5: antes de pagar, marcarSintesis con el mismo compare-and-set. Con una marca de otra entrega de hace
 // menos de 5 minutos no se corre: se reintenta cuando venza (si esa entrega termina, la reentrega ve succeeded; si se
-// cayó, la paga esta). Un transitorio tras marcar desmarca para que el reintento no espere los 5 minutos. El documento
+// cayó, la paga esta). Esa espera no toca updated_at: la marca lo tocó al ponerse y vence en ≤ 5 min, dentro del margen
+// del vigilante. Un transitorio tras marcar desmarca para que el reintento no espere los 5 minutos. El documento
 // generado se guarda siempre, con un aviso si el pensamiento del modelo pasó el tope.
 async function correrSintesis(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> {
   const { env, m, fila } = ctx;
@@ -342,7 +350,7 @@ function clasificar(e: unknown): Clase {
   if (e instanceof ErrorGithub) {
     if (e.codigo === 'limite_github') {
       return { reintentar: true, codigo: e.codigo, texto: textoDe(e.codigo),
-        esperaS: Math.min(MAX_ESPERA_S, Math.max(1, Math.ceil(e.reintentarEnS ?? 60))) };
+        esperaS: Math.max(1, Math.ceil(e.reintentarEnS ?? 60)) };
     }
     const transitorio = e.codigo === 'github_red' || (e.status !== null && e.status >= 500);
     return { reintentar: transitorio, codigo: e.codigo, texto: textoDe(e.codigo) };
@@ -366,8 +374,9 @@ async function alFallar(ctx: Ctx, e: unknown): Promise<RespuestaCola> {
   const base = { run: ctx.m.wiki_run_id, paso: ctx.m.paso, codigo: c.codigo, intento: ctx.intento };
   // La base o la cola caídas se reintentan siempre: no se podría ni escribir el fallo (la DLQ es el respaldo).
   if (c.reintentar && (c.codigo === 'base' || ctx.intento <= REINTENTOS_WIKI)) {
-    const retry = c.esperaS ?? escalonado(ctx.intento);
+    const retry = Math.min(MAX_ESPERA_S, c.esperaS ?? escalonado(ctx.intento));
     log('warn', 'wiki.reintento', { ...base, retry_s: retry });
+    if (c.codigo !== 'base') await tocar(ctx);
     return { retry };
   }
   log('warn', 'wiki.fallo', { ...base, name: e instanceof Error ? e.name : null });
@@ -377,6 +386,19 @@ async function alFallar(ctx: Ctx, e: unknown): Promise<RespuestaCola> {
     return { retry: escalonado(ctx.intento) };
   }
   return 'ack';
+}
+
+// Reprogramado por una espera: updated_at = now() sin cambiar nada más (vg_wiki_avanzar con p_state null y un parche
+// vacío, mismo compare-and-set sobre n), para que el vigilante cuente desde la última espera y no desde el último avance.
+// Si otra entrega ya avanzó, su avance ya lo tocó. Mejor esfuerzo, una sola llamada: si falla, el reintento sigue igual.
+async function tocar(ctx: Ctx) {
+  try {
+    const { data, error } = await db(ctx.env).rpc('vg_wiki_avanzar', { p_run: ctx.m.wiki_run_id, p_org: ctx.m.org_id,
+      p_n: ctx.n, p_state: null, p_patch: {} });
+    if (error || data !== true) log('info', 'wiki.toque_omitido', { run: ctx.m.wiki_run_id, code: error?.code ?? null });
+  } catch {
+    log('info', 'wiki.toque_omitido', { run: ctx.m.wiki_run_id, code: null });
+  }
 }
 
 // failed con su código en steps[i] y el texto corto en error, con el mismo compare-and-set: si otra entrega ya avanzó

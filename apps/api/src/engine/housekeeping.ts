@@ -3,6 +3,7 @@ import { deshacerBloqueos, PERMANENTES } from '../actions/block-ip.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
+import { SIN_AVANCE_MS } from '../wiki/corridas.ts';
 
 // housekeeping del cron por minuto (S12 12.3, S15 15.7). P0: cierre automático de los incidentes CF_ sin peticiones de
 // su IP en edge_hits desde hace 15 min, en UNA consulta acotada (RPC vg_resolve_idle_incidents, 0009). Mientras la 0009
@@ -17,11 +18,27 @@ import { log } from '../lib/log.ts';
 // 1, 2, 4… min): mientras espera se salta, así unas filas atascadas no tapan las de otras orgs; al MAX_REINTENTOS pasa a
 // failed. Solo con VG_ENV=production (cron sin petición, S15 15.3): en local y previews no se toca Cloudflare.
 // SB_DB_DOWN se cierra en su monitor (2 lecturas sanas seguidas), no aquí.
+// Vigilante (0011, vg_vigilar_corridas): una corrida cuyo mensaje de vg-jobs se perdió (dev-node --watch reiniciado con
+// la cola en memoria, un mensaje que no llegó ni a la DLQ) se quedaría queued/running para siempre. Una sola RPC acotada
+// (LIMITE_VIGILANTE filas por tabla, las más viejas primero, for update skip locked) deja failed, con su texto corto y sin
+// tocar cost_usd: las wiki_runs con updated_at (último avance o última espera, wiki/pasos.ts) de hace más de
+// VIGILANTE_WIKI_MS (= SIN_AVANCE_MS de wiki/corridas.ts) y las scan_runs sin avance desde hace VIGILANTE_SCAN_MS
+// (started_at o created_at, o un hallazgo de esa auditoría: scan_runs no tiene updated_at). El filtro de tiempo va en la
+// misma sentencia que escribe: un paso que avanza a la vez gana. Corre en todos los entornos (solo toca la base). Mientras
+// la 0011 no esté aplicada (PGRST202), respaldo en un solo UPDATE acotado (orden por id + limit), una tabla por minuto
+// (wiki en los pares, auditorías en los impares) para no pasar de 2 subpeticiones; sin arreglar steps.
+// Presupuesto del minuto: incidentes ≤ 2 + vigilante ≤ 2 + caducidad ≤ 23 = 27 subpeticiones (tope del equipo: 40).
 
 export const LIMITE_CIERRE = 200;
 export const LIMITE_CADUCIDAD = 5;           // ≤ 5 reglas por minuto (§08.8): ≤ 23 subpeticiones en el peor caso
 export const CANDIDATOS_CADUCIDAD = 50;      // se leen más para saltar las que esperan su reintento
 export const MAX_REINTENTOS = 6;             // ~1 h de esperas (1+2+4+8+16+32 min) antes de rendirse
+export const VIGILANTE_WIKI_MS = SIN_AVANCE_MS;            // 10 min sin avanzar ni esperar
+export const VIGILANTE_SCAN_MS = 15 * 60_000;              // una auditoría normal acaba en pocos minutos
+export const LIMITE_VIGILANTE = 50;                        // filas por tabla y minuto
+// Los mismos textos que pone la 0011 (su prueba lo comprueba).
+export const ERROR_WIKI_INTERRUMPIDA = 'La corrida se interrumpió; vuelve a generarla';
+export const ERROR_SCAN_INTERRUMPIDA = 'La auditoría se interrumpió; vuelve a lanzarla';
 const SIN_RPC = new Set(['PGRST202', '42883']);
 const esperaMs = (intentos: number) => Math.min(2 ** (intentos - 1), 60) * 60_000;
 type Obj = Record<string, unknown>;
@@ -34,11 +51,15 @@ export type ResultadoHousekeeping = {
   error: string | null;       // código corto (de Postgres/PostgREST o nuestro), nunca un mensaje
   deshechos: number;          // bloqueos caducados retirados de Cloudflare
   fallidos: number;           // bloqueos que no se pudieron retirar y quedan failed
+  vigilante: 'rpc' | 'respaldo' | null;
+  interrumpidas: { wiki: number; scans: number };   // corridas que el vigilante dejó failed
 };
 
 export async function housekeeping(env: CloudflareBindings, now = new Date()): Promise<ResultadoHousekeeping> {
-  const r: ResultadoHousekeeping = { resueltos: 0, subpeticiones: 0, modo: null, error: null, deshechos: 0, fallidos: 0 };
+  const r: ResultadoHousekeeping = { resueltos: 0, subpeticiones: 0, modo: null, error: null, deshechos: 0, fallidos: 0,
+    vigilante: null, interrumpidas: { wiki: 0, scans: 0 } };
   const cierre = await cerrarIncidentes(env, now, r);
+  await vigilar(env, now, cierre);
   await caducarBloqueos(env, now, cierre);
   return cierre;
 }
@@ -61,6 +82,59 @@ async function cerrarIncidentes(env: CloudflareBindings, now: Date, r: Resultado
     return { ...r, modo: 'respaldo', resueltos: Array.isArray(res.data) ? res.data.length : 0 };
   } catch (e) {
     return { ...r, error: e instanceof ApiError ? e.code : e instanceof Error ? e.name : 'desconocido' };
+  }
+}
+
+// 1 subpetición con la 0011; 2 en el respaldo (la RPC que falta y el UPDATE). Nunca lanza: el error va al resumen.
+async function vigilar(env: CloudflareBindings, now: Date, r: ResultadoHousekeeping) {
+  try {
+    const admin = db(env);
+    const { data, error } = await admin.rpc('vg_vigilar_corridas', { p_wiki_seconds: VIGILANTE_WIKI_MS / 1000,
+      p_scan_seconds: VIGILANTE_SCAN_MS / 1000, p_limit: LIMITE_VIGILANTE });
+    r.subpeticiones++;
+    r.vigilante = 'rpc';
+    if (!error) return contarInterrumpidas(r, (Array.isArray(data) ? data : []) as Obj[]);
+    if (!SIN_RPC.has(error.code ?? '')) {
+      r.error ??= error.code ?? 'rpc';
+      return;
+    }
+
+    r.vigilante = 'respaldo';
+    const ahora = now.toISOString();
+    const abiertas = ['queued', 'running'];
+    const tabla = now.getUTCMinutes() % 2 === 0 ? 'wiki_runs' : 'scan_runs';
+    const corteScan = corte(now, VIGILANTE_SCAN_MS);
+    // Compare-and-set en el mismo UPDATE: si un paso tocó la fila después del corte, el filtro ya no la ve.
+    const res = tabla === 'wiki_runs'
+      ? await admin.from('wiki_runs').update({ status: 'failed', error: ERROR_WIKI_INTERRUMPIDA, finished_at: ahora,
+        updated_at: ahora }).in('status', abiertas).lt('updated_at', corte(now, VIGILANTE_WIKI_MS))
+        .order('id').limit(LIMITE_VIGILANTE).select('id, org_id')
+      // created_at ≤ started_at: así se escribe «coalesce(started_at, created_at) < corte» sin la función.
+      : await admin.from('scan_runs').update({ status: 'failed', error: ERROR_SCAN_INTERRUMPIDA, step: null, finished_at: ahora })
+        .in('status', abiertas).lt('created_at', corteScan).or(`started_at.is.null,started_at.lt."${corteScan}"`)
+        .order('id').limit(LIMITE_VIGILANTE).select('id, org_id');
+    r.subpeticiones++;
+    if (res.error) {
+      r.error ??= res.error.code ?? 'update';
+      return;
+    }
+    contarInterrumpidas(r, ((Array.isArray(res.data) ? res.data : []) as Obj[]).map((f) => ({ ...f, tabla })));
+  } catch (e) {
+    r.error ??= e instanceof ApiError ? e.code : e instanceof Error ? e.name : 'desconocido';
+  }
+}
+
+const corte = (now: Date, ms: number) => new Date(now.getTime() - ms).toISOString();
+
+function contarInterrumpidas(r: ResultadoHousekeeping, filas: Obj[]) {
+  const ids = (tabla: string) => filas.filter((f) => f.tabla === tabla).map((f) => String(f.id));
+  const wiki = ids('wiki_runs');
+  const scans = ids('scan_runs');
+  r.interrumpidas = { wiki: wiki.length, scans: scans.length };
+  // Solo ids de corridas (sin repos ni nombres), para seguir en los logs qué se cerró.
+  if (wiki.length || scans.length) {
+    log('warn', 'vigilante.interrumpidas', { modo: r.vigilante, wiki: wiki.slice(0, 10), scans: scans.slice(0, 10),
+      total: wiki.length + scans.length });
   }
 }
 

@@ -1,42 +1,83 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { ApiError } from '../lib/errors.ts';
 import { envDoble } from '../test/dobles.ts';
 
 // Doble propio: el UPDATE de respaldo y la caducidad usan lt/overlaps, que el doble común (test/db-doble.ts) no trae.
+// wiki_runs y scan_runs son tablas en memoria: el UPDATE de respaldo del vigilante se evalúa (in, lt, or, order, limit)
+// sobre las filas que haya en ese momento, como haría Postgres.
 type Llamada = { tabla?: string; rpc?: string; args?: unknown; metodos: [string, ...unknown[]][] };
 type R = { data?: unknown; error?: { code?: string } | null };
+type FilaMem = Record<string, unknown> & { id: string };
 const estado = vi.hoisted(() => ({
   client: null as unknown,
   llamadas: [] as { tabla?: string; rpc?: string; args?: unknown; metodos: [string, ...unknown[]][] }[],
   rpc: (_n: string, _a: unknown): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
+  vigilante: (_a: unknown): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
   update: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
   vencidas: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
   actualizar: (): { data?: unknown; error?: { code?: string } | null } => ({ data: null }),
+  tablas: {} as Record<string, (Record<string, unknown> & { id: string })[]>,
+  errorTabla: null as { code?: string } | null,
+  antesDeUpdate: null as (() => void) | null,
 }));
 vi.mock('../lib/db.ts', () => ({ db: () => { if (!estado.client) throw new Error('sin base'); return estado.client; } }));
 const cred = vi.hoisted(() => ({ withSecret: vi.fn() }));
 vi.mock('../lib/credentials.ts', () => ({ withSecret: cred.withSecret }));
 
-const { CANDIDATOS_CADUCIDAD, housekeeping, LIMITE_CIERRE, MAX_REINTENTOS } = await import('./housekeeping.ts');
+const { CANDIDATOS_CADUCIDAD, ERROR_SCAN_INTERRUMPIDA, ERROR_WIKI_INTERRUMPIDA, housekeeping, LIMITE_CIERRE, LIMITE_VIGILANTE,
+  MAX_REINTENTOS, VIGILANTE_SCAN_MS, VIGILANTE_WIKI_MS } = await import('./housekeeping.ts');
 const { CRON_MINUTO, onCron } = await import('../cron.ts');
+const { SIN_AVANCE_MS } = await import('../wiki/corridas.ts');
+
+// Filtros que usa el respaldo del vigilante, evaluados sobre una fila: in, lt (fechas) y el or de started_at.
+function pasaFiltros(f: FilaMem, metodos: [string, ...unknown[]][]): boolean {
+  const antes = (v: unknown, corte: string) => typeof v === 'string' && Date.parse(v) < Date.parse(corte);
+  return metodos.every(([m, ...a]) => {
+    if (m === 'in') return (a[1] as unknown[]).includes(f[String(a[0])]);
+    if (m === 'lt') return antes(f[String(a[0])], String(a[1]));
+    if (m !== 'or') return true;
+    return String(a[0]).split(',').some((c) => {
+      const [col = '', op, ...resto] = c.split('.');
+      const valor = resto.join('.');
+      if (op === 'is' && valor === 'null') return f[col] === null || f[col] === undefined;
+      if (op === 'lt' && /^".*"$/.test(valor)) return antes(f[col], valor.slice(1, -1));
+      throw new Error('filtro or no soportado por el doble: ' + c);
+    });
+  });
+}
+
+function updateEnMemoria(tabla: string, l: Llamada): R {
+  estado.antesDeUpdate?.();
+  if (estado.errorTabla) return { error: estado.errorTabla };
+  const cambio = l.metodos.find(([m]) => m === 'update')![1] as Record<string, unknown>;
+  const orden = l.metodos.find(([m]) => m === 'order')?.[1];
+  const limite = Number(l.metodos.find(([m]) => m === 'limit')?.[1] ?? Infinity);
+  const elegidas = (estado.tablas[tabla] ?? []).filter((f) => pasaFiltros(f, l.metodos))
+    .sort((a, b) => (orden === 'id' ? a.id.localeCompare(b.id) : 0)).slice(0, limite);
+  for (const f of elegidas) Object.assign(f, cambio);
+  return { data: elegidas.map((f) => ({ id: f.id, org_id: f.org_id })) };
+}
 
 function cliente() {
   return {
     async rpc(name: string, args: unknown) {
       estado.llamadas.push({ rpc: name, args, metodos: [] });
-      const r = estado.rpc(name, args);
+      const r = name === 'vg_vigilar_corridas' ? estado.vigilante(args) : estado.rpc(name, args);
       return { data: r.data ?? null, error: r.error ?? null };
     },
     from(tabla: string) {
       const l: Llamada = { tabla, metodos: [] };
       estado.llamadas.push(l);
       const b: Record<string, unknown> = {};
-      for (const m of ['update', 'in', 'lt', 'overlaps', 'select', 'eq', 'order', 'limit']) {
+      for (const m of ['update', 'in', 'lt', 'or', 'overlaps', 'select', 'eq', 'order', 'limit']) {
         b[m] = (...a: unknown[]) => { l.metodos.push([m, ...a]); return b; };
       }
       b.then = (ok: (r: unknown) => unknown) => {
         const esUpdate = l.metodos.some(([m]) => m === 'update');
-        const r: R = tabla === 'actions' ? (esUpdate ? estado.actualizar() : estado.vencidas()) : estado.update();
+        const r: R = tabla === 'wiki_runs' || tabla === 'scan_runs' ? updateEnMemoria(tabla, l)
+          : tabla === 'actions' ? (esUpdate ? estado.actualizar() : estado.vencidas()) : estado.update();
         return Promise.resolve({ data: r.data ?? null, error: r.error ?? null }).then(ok);
       };
       return b;
@@ -52,6 +93,8 @@ const ZONA = '023e105f4ecef8ad9ca31a8372d0c353';
 const TOKEN = ['tok', 'acciones', 'x'.repeat(20)].join('-');
 const REGLAS = `https://api.cloudflare.com/client/v4/zones/${ZONA}/firewall/access_rules/rules`;
 const SIN_BLOQUEOS = { deshechos: 0, fallidos: 0 };
+const VIGILANTE_QUIETO = { vigilante: 'rpc', interrumpidas: { wiki: 0, scans: 0 } };
+const VIGILAR = { rpc: 'vg_vigilar_corridas', args: { p_wiki_seconds: 600, p_scan_seconds: 900, p_limit: LIMITE_VIGILANTE }, metodos: [] };
 let logs: MockInstance<typeof console.log>;
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -62,6 +105,10 @@ beforeEach(() => {
   estado.llamadas = [];
   estado.client = cliente();
   estado.rpc = () => ({ data: [{ id: 'i1', org_id: 'o1' }, { id: 'i2', org_id: 'o2' }] });
+  estado.vigilante = () => ({ data: [] });
+  estado.tablas = {};
+  estado.errorTabla = null;
+  estado.antesDeUpdate = null;
   estado.update = () => ({ data: [{ id: 'i3' }] });
   estado.vencidas = () => ({ data: [] });
   estado.actualizar = () => ({ data: null });
@@ -75,14 +122,15 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe('housekeeping · cierre automático (§12.3)', () => {
   it('una sola RPC acotada: 15 min sin peticiones de la IP, tope de candidatos; cuenta los resueltos', async () => {
     const r = await housekeeping(envDoble().env, AHORA);
-    expect(estado.llamadas).toEqual([{ rpc: 'vg_resolve_idle_incidents', args: { p_idle_seconds: 900, p_limit: LIMITE_CIERRE }, metodos: [] }]);
-    expect(r).toEqual({ resueltos: 2, subpeticiones: 1, modo: 'rpc', error: null, ...SIN_BLOQUEOS });
+    expect(estado.llamadas).toEqual([{ rpc: 'vg_resolve_idle_incidents', args: { p_idle_seconds: 900, p_limit: LIMITE_CIERRE }, metodos: [] },
+      VIGILAR]);
+    expect(r).toEqual({ resueltos: 2, subpeticiones: 2, modo: 'rpc', error: null, ...SIN_BLOQUEOS, ...VIGILANTE_QUIETO });
   });
 
   it('sin la 0009 aplicada (PGRST202): un solo UPDATE de respaldo por last_event_at, solo CF_ y no resueltos', async () => {
     estado.rpc = () => ({ error: { code: 'PGRST202' } });
     const r = await housekeeping(envDoble().env, AHORA);
-    expect(r).toEqual({ resueltos: 1, subpeticiones: 2, modo: 'respaldo', error: null, ...SIN_BLOQUEOS });
+    expect(r).toEqual({ resueltos: 1, subpeticiones: 3, modo: 'respaldo', error: null, ...SIN_BLOQUEOS, ...VIGILANTE_QUIETO });
     const u = estado.llamadas[1]!;
     expect(u.tabla).toBe('incidents');
     expect(u.metodos).toEqual([
@@ -96,16 +144,18 @@ describe('housekeeping · cierre automático (§12.3)', () => {
 
   it('nunca lanza: error de la RPC, del respaldo o sin base configurada → código corto en el resumen', async () => {
     estado.rpc = () => ({ error: { code: '57014' } });
-    expect(await housekeeping(envDoble().env, AHORA)).toEqual({ resueltos: 0, subpeticiones: 1, modo: 'rpc', error: '57014', ...SIN_BLOQUEOS });
-    expect(estado.llamadas).toHaveLength(1);                 // otro error no cae al respaldo
+    expect(await housekeeping(envDoble().env, AHORA)).toEqual({ resueltos: 0, subpeticiones: 2, modo: 'rpc', error: '57014',
+      ...SIN_BLOQUEOS, ...VIGILANTE_QUIETO });
+    expect(estado.llamadas.filter((l) => l.tabla === 'incidents')).toHaveLength(0);   // otro error no cae al respaldo
 
     estado.rpc = () => ({ error: { code: '42883' } });
     estado.update = () => ({ error: { code: '42501' } });
-    expect(await housekeeping(envDoble().env, AHORA)).toEqual({ resueltos: 0, subpeticiones: 2, modo: 'respaldo', error: '42501', ...SIN_BLOQUEOS });
+    expect(await housekeeping(envDoble().env, AHORA)).toEqual({ resueltos: 0, subpeticiones: 3, modo: 'respaldo', error: '42501',
+      ...SIN_BLOQUEOS, ...VIGILANTE_QUIETO });
 
     estado.client = null;
     const r = await housekeeping(envDoble().env, AHORA);
-    expect(r).toMatchObject({ resueltos: 0, subpeticiones: 0, modo: null });
+    expect(r).toMatchObject({ resueltos: 0, subpeticiones: 0, modo: null, vigilante: null, interrumpidas: { wiki: 0, scans: 0 } });
     expect(typeof r.error).toBe('string');
   });
 });
@@ -124,7 +174,7 @@ describe('housekeeping · caducidad de «Bloquear IP» (§08.8)', () => {
       .mockImplementationOnce(async () => new Response('{}', { status: 404 }));
     const r = await housekeeping(envDoble(PROD).env, AHORA);
     expect(r).toMatchObject({ resueltos: 2, error: null, deshechos: 3, fallidos: 0 });
-    expect(r.subpeticiones).toBe(1 + 1 + 2 + 2 + 2);           // rpc · select · sobre (2) · 2 DELETE · undone por id y por regla
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 2 + 2);       // rpc · vigilante · select · sobre (2) · 2 DELETE · undone por id y por regla
 
     const [sel, up, porRegla] = llamadaActions();
     expect(sel!.metodos).toEqual([
@@ -145,7 +195,7 @@ describe('housekeeping · caducidad de «Bloquear IP» (§08.8)', () => {
       .mockImplementationOnce(async () => new Response('{}', { status: 503 }));
     const r = await housekeeping(envDoble(PROD).env, AHORA);
     expect(r).toMatchObject({ deshechos: 0, fallidos: 1, error: null });
-    expect(r.subpeticiones).toBe(1 + 1 + 2 + 2 + 2);           // rpc · select · sobre · 2 DELETE · una escritura por fila
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 2 + 2);       // rpc · vigilante · select · sobre · 2 DELETE · una escritura por fila
     expect(updates().map((u) => u.metodos)).toEqual([
       [['update', { status: 'failed', previous: { ...PREV, intentos: 1, deshacer_error: 'sin_permiso' } }],
         ['eq', 'id', 'a1'], ['eq', 'org_id', ORG], ['eq', 'status', 'executed']],
@@ -211,12 +261,156 @@ describe('housekeeping · caducidad de «Bloquear IP» (§08.8)', () => {
   });
 });
 
+describe('housekeeping · vigilante de corridas colgadas (0011)', () => {
+  const ORG2 = '0f6c0000-0000-4000-8000-000000000002';
+  const hace = (min: number) => new Date(AHORA.getTime() - min * 60_000).toISOString();
+  const MINUTO_IMPAR = new Date(AHORA.getTime() + 60_000);
+  const lineasVigilante = () => logs.mock.calls.map((a) => JSON.parse(String(a[0])) as Record<string, unknown>)
+    .filter((e) => e.event === 'vigilante.interrumpidas');
+  const corrida = (id: string, status: string, avance: number, o: Record<string, unknown> = {}): FilaMem =>
+    ({ id, org_id: ORG, status, updated_at: hace(avance), created_at: hace(avance + 30), cost_usd: 0.0421, error: null,
+      finished_at: null, ...o });
+  const auditoria = (id: string, status: string, creada: number, iniciada: number | null): FilaMem =>
+    ({ id, org_id: ORG2, status, created_at: hace(creada), started_at: iniciada === null ? null : hace(iniciada), step: 'repo',
+      error: null, finished_at: null });
+
+  it('umbrales: 10 min para la wiki (= SIN_AVANCE_MS de E41), 15 para auditorías; tope de 50 filas por tabla', () => {
+    expect([VIGILANTE_WIKI_MS, SIN_AVANCE_MS, VIGILANTE_SCAN_MS, LIMITE_VIGILANTE]).toEqual([600_000, 600_000, 900_000, 50]);
+  });
+
+  it('una sola RPC acotada (1 subpetición): cuenta lo cerrado por tabla y deja una línea con los ids, sin escribir nada más', async () => {
+    estado.vigilante = () => ({ data: [{ tabla: 'wiki_runs', id: 'w1', org_id: ORG }, { tabla: 'scan_runs', id: 's1', org_id: ORG2 },
+      { tabla: 'wiki_runs', id: 'w2', org_id: ORG }] });
+    const r = await housekeeping(envDoble().env, AHORA);
+    expect(estado.llamadas.filter((l) => l.rpc === 'vg_vigilar_corridas')).toEqual([VIGILAR]);
+    expect(estado.llamadas.filter((l) => l.tabla)).toEqual([]);
+    expect(r).toMatchObject({ subpeticiones: 2, vigilante: 'rpc', interrumpidas: { wiki: 2, scans: 1 }, error: null });
+    expect(lineasVigilante()).toEqual([{ level: 'warn', event: 'vigilante.interrumpidas', modo: 'rpc', wiki: ['w1', 'w2'],
+      scans: ['s1'], total: 3 }]);
+  });
+
+  it('sin nada que cerrar no deja línea propia; otro error de la RPC va al resumen sin caer al respaldo', async () => {
+    await housekeeping(envDoble().env, AHORA);
+    expect(lineasVigilante()).toEqual([]);
+
+    estado.vigilante = () => ({ error: { code: '57014' } });
+    const r = await housekeeping(envDoble().env, AHORA);
+    expect(r).toMatchObject({ resueltos: 2, subpeticiones: 2, vigilante: 'rpc', error: '57014', interrumpidas: { wiki: 0, scans: 0 } });
+    expect(estado.llamadas.filter((l) => l.tabla)).toEqual([]);
+  });
+
+  describe('respaldo sin la 0011 (PGRST202)', () => {
+    beforeEach(() => { estado.vigilante = () => ({ error: { code: 'PGRST202' } }); });
+
+    it('minuto par: un UPDATE de wiki_runs con el corte en la misma sentencia; cierra la de hace 11 min y no la de hace 9 ni la que avanzó justo antes; no cobra', async () => {
+      const filas = [corrida('a1', 'running', 11), corrida('a2', 'running', 9), corrida('a3', 'queued', 11),
+        corrida('a4', 'succeeded', 120), corrida('a5', 'failed', 60), corrida('a6', 'queued', 25)];
+      estado.tablas.wiki_runs = filas;
+      // vg_wiki_avanzar de otra entrega entre la decisión y la escritura: el UPDATE ya no la ve.
+      estado.antesDeUpdate = () => { filas[2]!.updated_at = AHORA.toISOString(); };
+      const antes = structuredClone(filas);
+      const r = await housekeeping(envDoble().env, AHORA);
+
+      expect(r).toMatchObject({ subpeticiones: 1 + 2, vigilante: 'respaldo', interrumpidas: { wiki: 2, scans: 0 }, error: null });
+      const [u] = estado.llamadas.filter((l) => l.tabla);
+      expect(u).toEqual({ tabla: 'wiki_runs', metodos: [
+        ['update', { status: 'failed', error: ERROR_WIKI_INTERRUMPIDA, finished_at: AHORA.toISOString(), updated_at: AHORA.toISOString() }],
+        ['in', 'status', ['queued', 'running']], ['lt', 'updated_at', hace(10)], ['order', 'id'], ['limit', LIMITE_VIGILANTE],
+        ['select', 'id, org_id']] });
+      expect(filas.map((f) => [f.id, f.status])).toEqual([['a1', 'failed'], ['a2', 'running'], ['a3', 'queued'], ['a4', 'succeeded'],
+        ['a5', 'failed'], ['a6', 'failed']]);
+      expect(filas[0]).toEqual({ ...antes[0], status: 'failed', error: ERROR_WIKI_INTERRUMPIDA, finished_at: AHORA.toISOString(),
+        updated_at: AHORA.toISOString() });
+      expect(filas.map((f) => f.cost_usd)).toEqual(antes.map((f) => f.cost_usd));          // sin cobrar nada más
+      expect([filas[1], filas[3], filas[4]]).toEqual([antes[1], antes[3], antes[4]]);
+      expect(lineasVigilante()).toEqual([expect.objectContaining({ modo: 'respaldo', wiki: ['a1', 'a6'], scans: [] })]);
+      expect(estado.llamadas.some((l) => l.tabla === 'scan_runs')).toBe(false);
+    });
+
+    it('tope de filas: con 60 colgadas cierra 50 y el resto queda para el minuto siguiente', async () => {
+      estado.tablas.wiki_runs = Array.from({ length: 60 }, (_, i) => corrida(`w${String(i).padStart(2, '0')}`, 'running', 30 + i));
+      expect(await housekeeping(envDoble().env, AHORA)).toMatchObject({ interrumpidas: { wiki: 50, scans: 0 } });
+      expect(estado.tablas.wiki_runs.filter((f) => f.status === 'running')).toHaveLength(10);
+      estado.llamadas = [];
+      expect(await housekeeping(envDoble().env, new Date(AHORA.getTime() + 2 * 60_000))).toMatchObject({ interrumpidas: { wiki: 10 } });
+    });
+
+    it('minuto impar: auditorías queued/running sin avance desde hace más de 15 min → failed con su error y step null', async () => {
+      const filas = [auditoria('s1', 'running', 17, 16), auditoria('s2', 'running', 20, 14), auditoria('s3', 'queued', 16, null),
+        auditoria('s4', 'queued', 14, null), auditoria('s5', 'succeeded', 90, 89), auditoria('s6', 'failed', 90, 89)];
+      estado.tablas.scan_runs = filas;
+      const antes = structuredClone(filas);
+      const r = await housekeeping(envDoble().env, MINUTO_IMPAR);
+
+      expect(r).toMatchObject({ subpeticiones: 1 + 2, vigilante: 'respaldo', interrumpidas: { wiki: 0, scans: 2 }, error: null });
+      const corte = new Date(MINUTO_IMPAR.getTime() - VIGILANTE_SCAN_MS).toISOString();
+      const [u] = estado.llamadas.filter((l) => l.tabla);
+      expect(u).toEqual({ tabla: 'scan_runs', metodos: [
+        ['update', { status: 'failed', error: ERROR_SCAN_INTERRUMPIDA, step: null, finished_at: MINUTO_IMPAR.toISOString() }],
+        ['in', 'status', ['queued', 'running']], ['lt', 'created_at', corte], ['or', `started_at.is.null,started_at.lt."${corte}"`],
+        ['order', 'id'], ['limit', LIMITE_VIGILANTE], ['select', 'id, org_id']] });
+      expect(filas.map((f) => [f.id, f.status, f.step])).toEqual([['s1', 'failed', null], ['s2', 'running', 'repo'],
+        ['s3', 'failed', null], ['s4', 'queued', 'repo'], ['s5', 'succeeded', 'repo'], ['s6', 'failed', 'repo']]);
+      expect([filas[1], filas[3], filas[4], filas[5]]).toEqual([antes[1], antes[3], antes[4], antes[5]]);
+      expect(estado.llamadas.some((l) => l.tabla === 'wiki_runs')).toBe(false);
+    });
+
+    it('un error del UPDATE de respaldo va al resumen sin lanzar', async () => {
+      estado.errorTabla = { code: '42501' };
+      expect(await housekeeping(envDoble().env, AHORA)).toMatchObject({ resueltos: 2, subpeticiones: 3, vigilante: 'respaldo',
+        error: '42501', interrumpidas: { wiki: 0, scans: 0 } });
+    });
+  });
+
+  // La sentencia real vive en la 0011 (se aplica aparte): aquí se comprueba su forma, que el doble no puede probar.
+  describe('0011_vigilante.sql', () => {
+    const ruta = fileURLToPath(new URL('../../../../supabase/migrations/0011_vigilante.sql', import.meta.url).href);
+    const crudo = readFileSync(ruta, 'utf8').replace(/--.*$/gm, '');
+    const sql = crudo.toLowerCase().replace(/\s+/g, ' ');
+    const entre = (desde: string, hasta: string) => {
+      const i = sql.indexOf(desde);
+      return sql.slice(i, sql.indexOf(hasta, i));
+    };
+
+    it('una sola sentencia acotada: for update skip locked y tope de filas en cada tabla, umbrales con suelo', () => {
+      expect(sql).toContain('create or replace function public.vg_vigilar_corridas(p_wiki_seconds int default 600, '
+        + 'p_scan_seconds int default 900, p_limit int default 50) returns table (tabla text, id uuid, org_id uuid) language sql '
+        + "security definer set search_path = ''");
+      expect(sql.match(/for update skip locked/g)).toHaveLength(2);
+      expect(sql.match(/limit least\(greatest\(p_limit, 1\), 200\)/g)).toHaveLength(2);
+      expect(sql.replace(/'[^']*'/g, "''").match(/;/g)).toHaveLength(3);   // la función, el revoke y el grant
+    });
+
+    it('compare-and-set: el corte va en el select for update y otra vez en el update de cada tabla', () => {
+      const corteWiki = 'updated_at < now() - make_interval(secs => greatest(p_wiki_seconds, 300))';
+      const corteScan = 'coalesce(s.started_at, s.created_at) < now() - make_interval(secs => greatest(p_scan_seconds, 300))';
+      expect(entre('with cw as', 'for update')).toContain(`w.${corteWiki}`);
+      expect(entre('update public.wiki_runs u', 'returning')).toContain(`u.${corteWiki}`);
+      expect(entre('update public.wiki_runs u', 'returning')).toContain("u.status in ('queued', 'running')");
+      expect(entre('cs as', 'for update')).toContain(corteScan);
+      expect(entre('update public.scan_runs u', 'returning')).toContain(corteScan.replace(/\bs\./g, 'u.'));
+      expect(entre('update public.scan_runs u', 'returning')).toContain("u.status in ('queued', 'running')");
+    });
+
+    it('no cobra: no toca cost_usd ni state; los textos son los mismos que los del respaldo', () => {
+      expect(sql).not.toMatch(/cost_usd|state\s*=/);
+      expect(crudo).toContain(`error = '${ERROR_WIKI_INTERRUMPIDA}'`);
+      expect(crudo).toContain(`error = '${ERROR_SCAN_INTERRUMPIDA}'`);
+    });
+
+    it('solo service_role la ejecuta', () => {
+      expect(sql).toContain('revoke all on function public.vg_vigilar_corridas(int, int, int) from public, anon, authenticated;');
+      expect(sql).toContain('grant execute on function public.vg_vigilar_corridas(int, int, int) to service_role;');
+    });
+  });
+});
+
 describe('cron por minuto', () => {
   it('engancha housekeeping y deja UNA línea monitor.minuto con su resumen', async () => {
     await onCron(CRON_MINUTO, envDoble().env, AHORA);
     const ev = logs.mock.calls.map((a) => JSON.parse(String(a[0])) as Record<string, unknown>);
-    expect(ev).toEqual([{ level: 'info', event: 'monitor.minuto', minuto: 30, trabajos: 1, subpeticiones: 1, resueltos: 2,
-      housekeeping: 'rpc', error: null }]);
+    expect(ev).toEqual([{ level: 'info', event: 'monitor.minuto', minuto: 30, trabajos: 1, subpeticiones: 2, resueltos: 2,
+      housekeeping: 'rpc', vigilante: 'rpc', interrumpidas: { wiki: 0, scans: 0 }, error: null }]);
   });
 
   it('si housekeeping falla, la línea sale en warn con el código y el cron no lanza', async () => {

@@ -12,12 +12,13 @@ import { log } from '../lib/log.ts';
 
 // Columnas de WikiRun (E42/E43): sin state ni doc, que pesan y no salen nunca en esas respuestas.
 export const COLUMNAS_RUN = 'id, repo_full_name, branch, commit_sha, status, progress, steps, est_usd, cost_usd, models, cached, error, created_at, started_at, finished_at';
-// Una corrida queued/running que avanzó (updated_at, lo pone vg_wiki_avanzar) hace menos de esto sigue viva: E41 la
-// devuelve en vez de pagar otra igual. El hueco más largo entre dos avances de una corrida viva es un paso que agota sus
-// reintentos esperando a GitHub: 3 × 3600 s (REINTENTOS_WIKI y MAX_ESPERA_S de wiki/pasos.ts); después la DLQ la cierra.
-// Sin avanzar más tiempo, es de un Worker perdido: E41 la marca failed (su compare-and-set ya no avanza ni paga) y crea
-// otra.
-export const SIN_AVANCE_MS = 4 * 60 * 60_000;
+// Una corrida queued/running que avanzó o se reprogramó (updated_at: lo pone vg_wiki_avanzar en cada avance y en cada
+// espera, wiki/pasos.ts) hace menos de esto sigue viva: E41 la devuelve en vez de pagar otra igual. El hueco más largo
+// entre dos toques de una corrida viva es una espera (≤ MAX_ESPERA_S = 480 s de wiki/pasos.ts) más la entrega y el paso
+// (la síntesis marca antes de pagar y tarda < 7 min). Más tiempo sin tocar es un mensaje perdido o un Worker caído: el
+// vigilante del housekeeping por minuto (engine/housekeeping.ts) la deja failed y, si E41 llega antes, la marca failed
+// (su compare-and-set ya no avanza ni paga) y crea otra. Es el mismo umbral que usa el vigilante.
+export const SIN_AVANCE_MS = 10 * 60_000;
 // Texto de wiki_runs.error de esa corrida perdida.
 export const ERROR_PARADA = 'Se detuvo sin avanzar y se reemplazó por una generación nueva.';
 // max_usd si E41 no lo trae: el default de la columna. El techo práctico de una corrida ronda US$ 0,10 (LEEME, Costos)

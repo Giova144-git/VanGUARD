@@ -247,6 +247,14 @@ describe('elegir: caché, corrida en curso y corrida parada con la misma huella'
     expect(elegir(filas, null, ahora)).toEqual({ cache: 'c', enCurso: null, parada: filas[4] });  // 'e' es de un Worker perdido
     expect(elegir(filas, 'h3', ahora)).toEqual({ cache: null, enCurso: null, parada: null });
   });
+
+  it('SIN_AVANCE_MS = 10 min, el umbral del vigilante: tocada hace 9 min sigue viva; hace 11 min es parada', () => {
+    expect(SIN_AVANCE_MS).toBe(10 * 60_000);
+    const viva = f('v', 'running', 'h1', 9 * 60_000, 30 * 60_000);
+    expect(elegir([viva], 'h1', ahora)).toEqual({ cache: null, enCurso: 'v', parada: null });
+    const parada = f('p', 'queued', 'h1', 11 * 60_000);
+    expect(elegir([parada], 'h1', ahora)).toEqual({ cache: null, enCurso: null, parada });
+  });
 });
 
 describe('pasos y mensaje de la cola', () => {

@@ -139,8 +139,8 @@ export const usePerfRuns = (org: string) => useQuery({
 });
 
 // DeepWiki (E42–E44). wiki_runs no tiene Realtime: 3 s mientras queued|running y solo con la pestaña visible.
-export const useWikiRuns = (org: string, repo: string | null) => useQuery({
-  ...base, queryKey: ['org', org, 'wiki', 'runs', repo], refetchInterval: 30_000,
+export const useWikiRuns = (org: string, repo: string | null, habilitado = true) => useQuery({
+  ...base, queryKey: ['org', org, 'wiki', 'runs', repo], refetchInterval: 30_000, enabled: habilitado,
   queryFn: () => api(`/api/orgs/${org}/wiki/runs${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`, { esquema: z.array(WikiRun) }),
 });
 

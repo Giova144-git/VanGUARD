@@ -1,9 +1,18 @@
 // Funciones puras de la wiki (sin React ni red), para poder probarlas solas.
-import type { WikiDoc } from '@vanguard/contracts';
+import { RepoFullName, type WikiDoc } from '@vanguard/contracts';
 import { codigoMd, escaparMd } from '@/lib/md-escape';
+import { extraerRepoYRama } from '@/lib/pre-guardas';
 
 // Tope aceptado: la estimación × 1,5 redondeada a centavos, máximo 5 USD (WikiRunCreate.max_usd).
 export const topeUsd = (est: number) => Math.min(5, Math.max(0.01, Math.ceil(est * 1.5 * 100) / 100));
+
+// Historial (E43): campo vacío → todas las wikis de la org; un owner/repo que pasa RepoFullName → las de ese repo; un
+// texto a medio escribir o una URL que no es de GitHub → no se consulta (E43 respondería 422) y basta la ayuda de formato.
+export function consultaHistorial(texto: string): { repo: string | null; consultar: boolean } {
+  if (!texto.trim()) return { repo: null, consultar: true };
+  const repo = extraerRepoYRama(texto)?.repo ?? null;
+  return repo && RepoFullName.safeParse(repo).success ? { repo, consultar: true } : { repo: null, consultar: false };
+}
 
 // «Copiar como Markdown»: el documento entero, con el mapa en su valla mermaid y una sección por área. overview_md y
 // resumen_md son Markdown a propósito (ya saneado por el motor); títulos, áreas, rama y rutas vienen del repo o del

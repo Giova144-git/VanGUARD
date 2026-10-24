@@ -23,9 +23,9 @@ import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { esId } from '@/lib/ids';
 import { cuando, miles, usd } from '@/lib/formato';
 import { Markdown } from '@/lib/markdown';
-import { comoMarkdown, topeUsd } from './texto';
+import { comoMarkdown, consultaHistorial, topeUsd } from './texto';
 import { useEstimarWiki, useGenerarWiki } from '@/lib/mutaciones';
-import { extraerRepo } from '@/lib/pre-guardas';
+import { extraerRepo, extraerRepoYRama } from '@/lib/pre-guardas';
 import { deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 
@@ -199,10 +199,20 @@ export default function PaginaWiki() {
   const [errorRepo, setErrorRepo] = useState<string | null>(null);
   useEffect(() => { if (repoConexion && !repo) setRepo(repoConexion); }, [repoConexion, repo]);
   const repoValido = useMemo(() => extraerRepo(repo), [repo]);
+  // El historial espera 400 ms a que se deje de escribir y solo pregunta por un owner/repo válido (E43 da 422 si no).
+  const [repoQuieto, setRepoQuieto] = useState(repo);
+  useEffect(() => { const t = setTimeout(() => setRepoQuieto(repo), 400); return () => clearTimeout(t); }, [repo]);
+  const consulta = useMemo(() => consultaHistorial(repoQuieto), [repoQuieto]);
+  const cambiarRepo = (v: string) => {
+    setRepo(v);
+    const r = extraerRepoYRama(v)?.rama;   // una URL …/tree/<rama> rellena la rama si estaba vacía
+    if (r && !rama.trim()) setRama(r);
+  };
 
   const estimar = useEstimarWiki(org.id);
   const generar = useGenerarWiki(org.id);
-  const historial = useWikiRuns(org.id, repoValido);
+  const historial = useWikiRuns(org.id, consulta.repo, consulta.consultar);
+  const sinFormato = !consulta.consultar || (historial.isError && esApiError(historial.error) && historial.error.status === 422);
   const run = useWikiRun(org.id, runId);
   const doc = useWikiDoc(org.id, runId, run.data?.status === 'succeeded');
   // Repo de la conexión GitHub (privado: va con su connection_id) o texto libre para repos públicos.
@@ -233,8 +243,9 @@ export default function PaginaWiki() {
         {org.puedeEscribir ? (
           <form onSubmit={pedirEstimacion} className="flex flex-col gap-4" noValidate>
             <div className="grid gap-4 md:grid-cols-[2fr_1fr]">
-              <CampoTexto id="wiki-repo" etiqueta="Repositorio" valor={repo} onCambio={setRepo} mono placeholder="owner/repo" error={errorRepo}
-                ayuda={repoConexion ? 'Por defecto, el repo de tu conexión con GitHub. También puedes escribir uno público.' : 'Escribe un repo público, o conecta GitHub para uno privado.'} />
+              <CampoTexto id="wiki-repo" etiqueta="Repositorio" valor={repo} onCambio={cambiarRepo} mono placeholder="owner/repo" error={errorRepo}
+                ayuda={repo.trim() && !repoValido ? 'Formato owner/repo, o pega la URL del repo en GitHub.'
+                  : repoConexion ? 'Por defecto, el repo de tu conexión con GitHub. También puedes escribir uno público.' : 'Escribe un repo público, o conecta GitHub para uno privado.'} />
               <CampoTexto id="wiki-rama" etiqueta="Rama (opcional)" valor={rama} onCambio={setRama} mono placeholder="main" />
             </div>
             <div><BotonAccion variante="principal" tam="grande" icono={Coins} ocupado={estimar.isPending} type="submit">Estimar costo</BotonAccion></div>
@@ -256,8 +267,9 @@ export default function PaginaWiki() {
       {doc.isError ? <ErrorBloque error={doc.error} onReintentar={() => doc.refetch()} /> : null}
 
       <section className="flex flex-col gap-3" aria-labelledby="t-historial">
-        <h3 id="t-historial" className="text-[17px] font-semibold">Historial{repoValido ? <span className="font-mono text-[13px] font-normal text-muted-foreground"> · {repoValido}</span> : null}</h3>
-        {historial.isError ? <ErrorBloque error={historial.error} onReintentar={() => historial.refetch()} />
+        <h3 id="t-historial" className="text-[17px] font-semibold">Historial{consulta.repo ? <span className="font-mono text-[13px] font-normal text-muted-foreground"> · {consulta.repo}</span> : null}</h3>
+        {sinFormato ? <p className="text-sm text-muted-foreground">Escribe el repo como owner/repo (o pega su URL de GitHub) para ver su historial.</p>
+          : historial.isError ? <ErrorBloque error={historial.error} onReintentar={() => historial.refetch()} />
           : historial.data ? <Historial runs={historial.data} actual={runId} alElegir={elegir} /> : <p className="text-texto-3">—</p>}
       </section>
 

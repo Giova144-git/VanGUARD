@@ -28,9 +28,14 @@ export function extraerProjectRef(entrada: string): string | null {
 
 // Misma regex que el contrato y §06.3: rechaza acme/. y acme/.. sin petición de red.
 const REPO = /^[A-Za-z0-9-]{1,39}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
-export function extraerRepo(entrada: string): string | null {
-  const v = entrada.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
-  return REPO.test(v) ? v : null;
+// owner/repo o la URL de GitHub (con o sin https://, .git, barra final o /tree/<rama>) → owner/repo y la rama si viene.
+export function extraerRepoYRama(entrada: string): { repo: string; rama: string | null } | null {
+  const v = entrada.trim().replace(/^(?:https?:\/\/)?(?:www\.)?github\.com\//i, '').replace(/\/+$/, '');
+  const m = v.match(/^([^/]+)\/([^/]+?)(?:\.git)?(?:\/tree\/(.+))?$/);
+  if (!m || !REPO.test(`${m[1]}/${m[2]}`)) return null;
+  const rama = m[3] && /^[\w./-]{1,100}$/.test(m[3]) && !m[3].split('/').includes('..') ? m[3] : null;
+  return { repo: `${m[1]}/${m[2]}`, rama };
 }
+export const extraerRepo = (entrada: string): string | null => extraerRepoYRama(entrada)?.repo ?? null;
 
 export const zoneIdValido = (z: string) => /^[0-9a-f]{32}$/.test(z.trim());

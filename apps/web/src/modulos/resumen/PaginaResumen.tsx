@@ -1,0 +1,145 @@
+// /o/:orgId/overview (S14 §14.11). Orden fijo: barra → puntaje + «Auditar todo» → barra por severidad → cifras →
+// «Ahora» → tarjetas por vertical. La API decide (L1): aquí no se recuenta nada, solo se pinta `overview`.
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router';
+import { ChevronRight, Cloud, Database, GitBranch, ShieldCheck, type LucideIcon } from 'lucide-react';
+import type { AhoraItem, ConnectionPublic, Module } from '@vanguard/contracts';
+import { BarraModulo } from '@/componentes/vg/BarraModulo';
+import { BarraSegmentada } from '@/componentes/vg/BarraSegmentada';
+import { BotonAccion } from '@/componentes/vg/BotonAccion';
+import { BotonGrande } from '@/componentes/vg/BotonGrande';
+import { Cifra, FilaCifras } from '@/componentes/vg/Cifra';
+import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
+import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
+import { MarcasContador } from '@/componentes/vg/MarcasContador';
+import { PuntajeBlindaje } from '@/componentes/vg/PuntajeBlindaje';
+import { ErrorBloque } from '@/componentes/vg/Vacio';
+import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { chapaEstado } from '@/modulos/conexiones/TarjetaConexion';
+import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
+import { esApiError, mensajeDe } from '@/lib/errores';
+import { cuando } from '@/lib/formato';
+import { useLanzarScan } from '@/lib/mutaciones';
+import { entradaNav } from '@/lib/nav';
+
+const NOMBRE: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
+
+function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
+  const href = item.kind === 'incident' ? `/o/${org}/incidents/${item.id}` : `/o/${org}/findings/${item.id}`;
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
+      <Etiqueta texto={NOMBRE[item.module]} />
+      <ChapaSeveridad severity={item.severity} />
+      <div className="flex min-w-0 flex-1 flex-col" title={item.rule_id}>
+        <span className="text-[15px] font-medium">{item.title}</span>
+        <span className="truncate font-mono text-[13px] text-muted-foreground">{item.resource}</span>
+      </div>
+      <Link to={href} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info hover:bg-info/15">
+        {item.kind === 'incident' ? 'Ver incidente' : 'Ver y corregir'}<ChevronRight className="size-4" />
+      </Link>
+    </li>
+  );
+}
+
+function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones }: {
+  org: string; modulo: Module; proveedor: 'supabase' | 'cloudflare' | 'github'; icono: LucideIcon; conexiones: ConnectionPublic[] | undefined;
+}) {
+  const navegar = useNavigate();
+  const estado = useEstadoModulo(org, modulo);
+  const c = conexiones?.find((x) => x.provider === proveedor && x.kind === 'read');
+  const e = entradaNav(modulo)!;
+  if (conexiones && !c) return (
+    <BotonGrande icono={Icono} titulo={`Conectar ${NOMBRE[modulo]}`} descripcion={e.descripcion}
+      onClick={() => navegar(`/o/${org}/connections/${proveedor}`)} />
+  );
+  const chapa = c ? chapaEstado(c) : null;
+  return (
+    <Link to={`/o/${org}/${modulo}`} className="flex min-h-16 items-center gap-4 rounded-xl border bg-card px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-info-relleno text-info"><Icono className="size-6" /></span>
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-base font-semibold">{NOMBRE[modulo]}</span>
+        {chapa ? <Etiqueta texto={chapa.texto} rol={chapa.rol} className="w-fit" /> : <span className="text-texto-3">—</span>}
+      </span>
+      <MarcasContador contador={estado.data?.contador} grande />
+      <span className="text-sm font-medium text-info">Abrir</span>
+    </Link>
+  );
+}
+
+export default function PaginaResumen() {
+  const org = useOrg();
+  const navegar = useNavigate();
+  const q = useOverview(org.id);
+  const conexiones = useConexiones(org.id);
+  const lanzar = useLanzarScan(org.id);
+  const [errorAuditar, setErrorAuditar] = useState<string | null>(null);
+  const o = q.data;
+  const e = entradaNav('overview')!;
+
+  const auditar = () => {
+    setErrorAuditar(null);
+    lanzar.mutate({ kind: 'full_audit' }, {
+      onSuccess: (r) => navegar(`/o/${org.id}/audit/${r.scan_run_id}`),
+      onError: (err) => {
+        const enCurso = esApiError(err) && err.code === 'conflict' && typeof err.details?.scan_run_id === 'string' ? err.details.scan_run_id : null;
+        if (enCurso) navegar(`/o/${org.id}/audit/${enCurso}`);              // ya hay una del mismo tipo corriendo
+        else setErrorAuditar(mensajeDe(err));                               // 429 budget_exceeded: el mensaje del servidor
+      },
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <BarraModulo titulo="Resumen" descripcion={e.descripcion}
+        extra={q.dataUpdatedAt ? <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`}>revisado {cuando(q.dataUpdatedAt)}</span> : null} />
+      {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
+
+      <section className="flex flex-wrap items-end justify-between gap-6 rounded-xl border bg-card p-5" aria-label="Puntaje">
+        {o ? <PuntajeBlindaje score={o.score} band={o.band} coverage={o.coverage} enlaceConectar={`/o/${org.id}/connections`} />
+          : <span className="font-mono text-6xl font-semibold text-texto-3">—</span>}
+        <div className="flex flex-col items-start gap-2">
+          <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
+            disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
+          {errorAuditar ? <span role="alert" className="max-w-xs text-sm text-mal">{errorAuditar}</span> : null}
+          {o?.last_scan ? (
+            <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}
+              <Link to={`/o/${org.id}/audit/${o.last_scan.id}`} className="font-medium text-info underline underline-offset-4">Ver</Link></span>
+          ) : null}
+        </div>
+      </section>
+
+      {o ? <BarraSegmentada tramos={[
+        { etiqueta: 'Crítica', n: o.counts.critical, rol: 'mal', fuerte: true }, { etiqueta: 'Alta', n: o.counts.high, rol: 'mal' },
+        { etiqueta: 'Media', n: o.counts.medium, rol: 'aviso' }, { etiqueta: 'Baja', n: o.counts.low, rol: 'cola' },
+      ]} /> : null}
+
+      <FilaCifras>
+        <Cifra etiqueta="Críticos abiertos" n={o?.counts.critical ?? null} rol="mal" href={o?.counts.critical ? '#ahora' : undefined} />
+        <Cifra etiqueta="Altos" n={o?.counts.high ?? null} rol="mal" href={o?.counts.high ? '#ahora' : undefined} />
+        <Cifra etiqueta="Incidentes abiertos" n={o?.open_incidents ?? null} rol="mal" href={o?.open_incidents ? `/o/${org.id}/incidents` : undefined} />
+        <Cifra etiqueta="Fuentes" n={o?.coverage.seen ?? null} de={o?.coverage.total}
+          rol={o && o.coverage.seen === o.coverage.total ? 'bien' : 'neutra'} />
+        <Cifra etiqueta="Última auditoría" n={o?.last_scan ? 1 : null} valor={o?.last_scan ? cuando(o.last_scan.finished_at) : undefined} />
+      </FilaCifras>
+
+      <section id="ahora" className="flex flex-col gap-3 scroll-mt-20" aria-labelledby="titulo-ahora">
+        <h3 id="titulo-ahora" className="text-[17px] font-semibold">Ahora</h3>
+        {!o ? <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>
+          : o.ahora.length === 0
+            ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender · revisado {cuando(q.dataUpdatedAt)}</div>
+            : <ul className="overflow-hidden rounded-xl border bg-card">{o.ahora.map((a) => <FilaAhora key={`${a.kind}-${a.id}`} item={a} org={org.id} />)}</ul>}
+      </section>
+
+      <section className="flex flex-col gap-3" aria-label="Tu ecosistema">
+        <h3 className="text-[17px] font-semibold">Tu ecosistema</h3>
+        <div className="grid gap-3 lg:grid-cols-3">
+          <TarjetaVertical org={org.id} modulo="supabase" proveedor="supabase" icono={Database} conexiones={conexiones.data} />
+          <TarjetaVertical org={org.id} modulo="cloudflare" proveedor="cloudflare" icono={Cloud} conexiones={conexiones.data} />
+          <TarjetaVertical org={org.id} modulo="codebase" proveedor="github" icono={GitBranch} conexiones={conexiones.data} />
+        </div>
+      </section>
+
+      <GuiaModulo id="overview" />
+    </div>
+  );
+}

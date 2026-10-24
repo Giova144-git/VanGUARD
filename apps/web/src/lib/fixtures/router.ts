@@ -45,7 +45,7 @@ function crearOrg(body: unknown): Org {
 // Conexiones por org: la demo arranca con las del fixture; una org nueva (o ?escenario=vacio), vacía.
 const conexiones = new Map<string, ConnectionPublic[]>();
 const listaDe = (org: string) => {
-  if (!conexiones.has(org)) conexiones.set(org, vacia(org) ? [] : structuredClone(fx.connections));
+  if (!conexiones.has(org)) conexiones.set(org, vacia(org) ? [] : structuredClone(fx.connections as unknown as ConnectionPublic[]));  // el literal con satisfies no casa con Record<string, boolean>
   return conexiones.get(org)!;
 };
 
@@ -133,7 +133,7 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r('\\/api\\/orgs'),                    (_m, b) => crearOrg(b)],
   ['GET',  r(`${ORG}\\/overview`),                (m) => vacia(m[1]!) ? fx.overviewVacio : fx.overview],
   ['GET',  r(`${ORG}\\/modules\\/(\\w+)\\/state`), (m) => fx.moduleState[m[2] as keyof typeof fx.moduleState] ?? falla(404, 'not_found', 'Módulo desconocido')],
-  ['GET',  r(`${ORG}\\/connections`),             (m) => listaDe(m[1]!)],
+  ['GET',  r(`${ORG}\\/connections`),             (m) => structuredClone(listaDe(m[1]!))],   // copia: TanStack no ve cambios en el mismo array
   ['POST', r(`${ORG}\\/connections`),             (m, b) => conectarFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/connections\\/([^/]+)\\/test`), (m) => probarFalso(m[1]!, m[2]!)],
   ['DELETE', r(`${ORG}\\/connections\\/([^/]+)`), (m) => quitarFalso(m[1]!, m[2]!)],

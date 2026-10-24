@@ -33,29 +33,31 @@ function urlRevocar(u: string | null): string | null {
   try { const x = new URL(u); return x.protocol === 'https:' && HOSTS_REVOCAR.has(x.host) ? x.href : null; } catch { return null; }
 }
 
+type Quitada = { en: string; revocar: string | null; nombre: string };
+
+// «Quitado · 21:41 · Revoca también el token en {proveedor} ›» (S14 §14.10). Vive en la tarjeta: la línea desaparece al refrescar.
+function AvisoQuitada({ q }: { q: Quitada }) {
+  const url = urlRevocar(q.revocar);
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-4 py-3 text-sm">
+      <span className="font-medium">Quitado · {cuando(q.en)}</span>
+      {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-info underline underline-offset-4">
+        Revoca también el token en {q.nombre}<ExternalLink className="size-3.5" /></a> : null}
+    </div>
+  );
+}
+
 // Una línea de conexión: lectura o modo blindaje.
-function LineaConexion({ c, titulo }: { c: ConnectionPublic; titulo?: string }) {
+function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: string; alQuitar: (q: Quitada) => void }) {
   const org = useOrg();
   const navegar = useNavigate();
   const probar = useProbarConexion(org.id);
   const quitar = useQuitarConexion(org.id);
   const [prueba, setPrueba] = useState<ConnectionTest | null>(null);
-  const [quitada, setQuitada] = useState<{ en: string; revocar: string | null } | null>(null);
   const estado = chapaEstado(c);
   const nombre = GUIAS_CONEXION[c.provider].nombre;
   const meta = META_VISIBLE.filter((k) => typeof c.meta[k] === 'string' || typeof c.meta[k] === 'boolean').map((k) => `${k}: ${String(c.meta[k])}`);
   const solo = org.puedeEscribir ? undefined : SOLO_LECTURA;
-
-  if (quitada) {
-    const url = urlRevocar(quitada.revocar);
-    return (
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-4 py-3 text-sm">
-        <span className="font-medium">Quitado · {cuando(quitada.en)}</span>
-        {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-info underline underline-offset-4">
-          Revoca también el token en {nombre}<ExternalLink className="size-3.5" /></a> : null}
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border px-4 py-3">
@@ -84,7 +86,7 @@ function LineaConexion({ c, titulo }: { c: ConnectionPublic; titulo?: string }) 
         ) : null}
         <ConfirmarEnSitio verbo="Quitar" deshabilitado={solo}
           aviso={c.kind === 'action' ? 'Sin este token no podrás bloquear IPs desde VanGUARD.' : 'Dejamos de mirar este servicio; los hallazgos se conservan.'}
-          onConfirmar={async () => { const r = await quitar.mutateAsync(c.id); setQuitada({ en: new Date().toISOString(), revocar: r.revocar }); }} />
+          onConfirmar={async () => { const r = await quitar.mutateAsync(c.id); alQuitar({ en: new Date().toISOString(), revocar: r.revocar, nombre }); }} />
       </div>
       {solo ? <span className="text-[12.5px] text-texto-3">{solo}</span> : null}
     </div>
@@ -97,6 +99,7 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
   const org = useOrg();
   const navegar = useNavigate();
   const Icono = icono;
+  const [quitada, setQuitada] = useState<Quitada | null>(null);
   const lectura = conexiones.find((c) => c.provider === proveedor && c.kind === 'read');
   const accion = conexiones.find((c) => c.provider === proveedor && c.kind === 'action');
   const g = GUIAS_CONEXION[proveedor];
@@ -110,10 +113,11 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
         </div>
         {lectura ? null : <Etiqueta texto="Falta" />}
       </div>
+      {quitada ? <AvisoQuitada q={quitada} /> : null}
       {lectura ? <>
-        <LineaConexion c={lectura} titulo={proveedor === 'cloudflare' ? 'Lectura' : undefined} />
+        <LineaConexion c={lectura} titulo={proveedor === 'cloudflare' ? 'Lectura' : undefined} alQuitar={setQuitada} />
         {proveedor === 'cloudflare' ? (accion
-          ? <LineaConexion c={accion} titulo="Modo blindaje (acciones)" />
+          ? <LineaConexion c={accion} titulo="Modo blindaje (acciones)" alQuitar={setQuitada} />
           : <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-4 py-3 text-sm">
               <span className="font-semibold">Modo blindaje (acciones)</span><Etiqueta texto="No configurado" />
               <span className="text-muted-foreground">Para bloquear IPs desde VanGUARD, reconecta Cloudflare con los dos tokens.</span>
@@ -130,6 +134,7 @@ export function TarjetaIngesta({ conexiones }: { conexiones: ConnectionPublic[] 
   const org = useOrg();
   const navegar = useNavigate();
   const ingest = conexiones.filter((c) => c.provider === 'ingest');
+  const [quitada, setQuitada] = useState<Quitada | null>(null);
   return (
     <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="tarjeta-ingest">
       <div className="flex flex-wrap items-center gap-2">
@@ -137,7 +142,8 @@ export function TarjetaIngesta({ conexiones }: { conexiones: ConnectionPublic[] 
         {ingest.length ? null : <Etiqueta texto="Falta" />}
       </div>
       <p className="text-sm text-muted-foreground">Tu app nos manda sus peticiones firmadas y detectamos ataques en segundos.</p>
-      {ingest.map((c) => <LineaConexion key={c.id} c={c} titulo={c.label} />)}
+      {quitada ? <AvisoQuitada q={quitada} /> : null}
+      {ingest.map((c) => <LineaConexion key={c.id} c={c} titulo={c.label} alQuitar={setQuitada} />)}
       <div>
         <Button variant={ingest.length ? 'secundaria' : 'principal'} disabled={!org.puedeEscribir} onClick={() => navegar(`/o/${org.id}/connections/ingest`)}>
           <KeyRound />{ingest.length ? 'Conectar otra app' : 'Conectar tu app'}

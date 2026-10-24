@@ -19,7 +19,7 @@ import { nombrePermiso } from '@/lib/permisos';
 import { extraerProjectRef, extraerRepo, preGuardar, zoneIdValido, type Rechazo } from '@/lib/pre-guardas';
 
 const PROVEEDORES: Provider[] = ['supabase', 'cloudflare', 'github', 'ingest'];
-type Errores = Partial<Record<'ref' | 'token' | 'zona' | 'accion' | 'repo' | 'label' | 'general', Rechazo | string>>;
+type Errores = Partial<Record<'ref' | 'token' | 'zona' | 'accion' | 'repo' | 'label', Rechazo | string>> & { general?: string };
 
 function Pasos({ proveedor }: { proveedor: Provider }) {
   const g = GUIAS_CONEXION[proveedor];

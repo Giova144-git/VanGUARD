@@ -18,6 +18,15 @@ export function bytes(b?: number | null) {                                      
   if (b == null || !Number.isFinite(b)) return SIN_DATO; const u = ['B', 'KB', 'MB', 'GB']; let i = 0, x = b;
   while (x >= 1024 && i < u.length - 1) { x /= 1024; i++; } return i === 0 ? `${miles(x)} B` : `${decimal(x)} ${u[i]}`;
 }
+// CifraDato.unidad → formato (lo usa <Cifra/>): '%' pct · 'ms' duracion · 'bytes' bytes · 'h' `${n} h` · 'd' `${n} d`;
+// sin unidad: decimales != null ? decimal(n, decimales) : miles(n); con `de`: «6 de 6».
+export function cifra(c: { n: number | null; de?: number; unidad?: '%' | 'ms' | 'bytes' | 'h' | 'd'; decimales?: number }) {
+  if (c.n == null) return SIN_DATO;
+  const v = c.unidad === '%' ? pct(c.n) : c.unidad === 'ms' ? duracion(c.n) : c.unidad === 'bytes' ? bytes(c.n)
+    : c.unidad === 'h' ? `${miles(c.n)} h` : c.unidad === 'd' ? `${miles(c.n)} d`
+    : c.decimales != null ? decimal(c.n, c.decimales) : miles(c.n);
+  return c.de != null ? `${v} de ${miles(c.de)}` : v;
+}
 const hhmm = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', hour: '2-digit', minute: '2-digit', hour12: false });
 const ddmm = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', day: '2-digit', month: '2-digit' });
 export function cuando(t?: string | Date | number | null, ahora = new Date()) {                        // 21:14 hoy · 24-10 22:35

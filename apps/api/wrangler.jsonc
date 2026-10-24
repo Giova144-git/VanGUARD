@@ -35,9 +35,10 @@
   "vars": {
     "VG_ENV": "production",
     "APP_ORIGIN": "https://officialvanguard.com",
-    // Demo por el sandbox de Kapso: E27 y el despachador no exigen la ventana de 24 h (el código de unión no llega
-    // como message.received). Se quita al pasar al número real (kapso-config.mjs --real).
-    "KAPSO_SANDBOX": "1"
+    // Número real de WhatsApp (desde el 24-oct): sin KAPSO_SANDBOX, E27 y el despachador exigen la ventana de 24 h.
+    // El número visible arma el enlace wa.me de «Verificar por WhatsApp» (E26); no es un secreto. Para volver al
+    // sandbox: "KAPSO_SANDBOX": "1", su KAPSO_PHONE_NUMBER_ID en el Worker y rehacer su webhook con el secreto actual.
+    "KAPSO_DISPLAY_NUMBER": "12058432279"
   },
 
   // ── BACK: crons, cola y rate limits (S15 15.7, 15.8 y 15.3). Plan Workers Free: sin "limits" (no se pueden

@@ -318,6 +318,11 @@ Sin esto el módulo Cloudflare de la demo sale vacío y «Bloquear IP» responde
 2. En `officialvanguard.com`, con el selector en **Tienda Demo** → **Conexiones → Cloudflare**: pega el zone id (`14d12778b0249e6d6854a67876c37e72`, no es secreto), el token de lectura y el de blindaje → Conectar. Tiene que decir «Modo blindaje activo».
 3. **Red el día de la demo:** el portátil que pulsa «Bloquear IP» no puede salir por la misma IP que el ataque. VanGUARD se niega a bloquear tu propia IP. El ataque va por el hotspot del teléfono y el panel por el wifi del evento.
 
+### Paso 16 · Apagar el script de analítica de Cloudflare · 1 min (cuando puedas)
+Cloudflare inyecta `static.cloudflareinsights.com/beacon.min.js` en la web y nuestra CSP lo bloquea: sale un error rojo en la consola, aunque no rompe nada. Un producto de seguridad no debería cargar scripts de terceros.
+1. Cloudflare → zona `officialvanguard.com` → **Speed → Observatory** (o **Analytics & Logs → Web Analytics**) → desactiva **Real User Monitoring (RUM)** / **Automatic setup** para `officialvanguard.com`.
+2. Escríbeme «listo, paso 16» y compruebo que la consola queda limpia.
+
 ## Después de que WhatsApp funcione de punta a punta (P1)
 
 ### Paso 12 · Llamada de voz (ElevenLabs + Twilio de prueba) · 30 min

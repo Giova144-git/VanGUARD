@@ -44,7 +44,7 @@ export const GUIAS: Record<IdNav, Guia> = {
   supabase: { titulo: '¿Cómo leer este módulo?', pasos: [
     'Miramos tu proyecto con un token de solo lectura: nunca podemos cambiar nada de tu base.',
     'Rojo es lo que deja tus datos a la vista de cualquiera (tablas sin RLS, políticas que dejan pasar a todos). Ámbar es lo que conviene revisar pronto.',
-    'Cada problema trae «Ver y corregir»: te damos el arreglo listo para pegar en tu IA.',
+    'Cada problema trae «Generar prompt»: te damos el arreglo listo para pegar en tu IA.',
   ] },
   cloudflare: { titulo: '¿Cómo leer este módulo?', pasos: [
     'Aquí ves quién está tocando tu web: las IPs y los programas que más insisten, y los escaneos de rutas de administración.',
@@ -66,7 +66,7 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Si una métrica empeora frente a la anterior, la marcamos en ámbar para que sepas qué cambio la causó.',
   ] },
   audit: { titulo: '¿Cómo funciona la auditoría?', pasos: [
-    'Un botón revisa todo tu ecosistema por pasos: Supabase, Cloudflare, tu repo y el rendimiento.',
+    'Un botón revisa todo tu ecosistema por pasos: Supabase, Cloudflare y tu repo.',
     'Verás cada paso avanzar en vivo. Si una fuente no está conectada, ese paso sale «sin mirar» y el puntaje lo dice.',
     'Al final, una IA resume lo encontrado en lenguaje llano. Si la IA está en pausa, sale un resumen automático.',
   ] },
@@ -80,13 +80,13 @@ export const GUIAS: Record<IdNav, Guia> = {
     'El informe va redactado: los secretos nunca salen completos.',
   ] },
   connections: { titulo: '¿Qué te pedimos?', pasos: [
-    'Solo tokens de solo lectura: con ellos podemos mirar, nunca escribir.',
+    'Tokens de solo lectura: con ellos podemos mirar, nunca escribir. La única excepción es el token opcional de Modo blindaje, que solo bloquea una IP cuando tú lo confirmas.',
     'Si pegas una clave que puede escribir (como la secreta de Supabase o un token clásico de GitHub), la rechazamos sin que salga de tu navegador.',
     'Después de guardar, solo verás los últimos 4 caracteres del token.',
   ] },
   settings: { titulo: '¿Qué puedes ajustar?', pasos: [
-    'A quién avisamos y por qué canal: WhatsApp primero y, si hace falta, una llamada.',
-    'Prueba cada canal antes de una emergencia para saber que el aviso llega.',
+    'A quién avisamos y por qué canal: hoy por WhatsApp; la llamada llega próximamente.',
+    'Prueba WhatsApp antes de una emergencia para saber que el aviso llega.',
   ] },
 };
 

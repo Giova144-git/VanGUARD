@@ -44,7 +44,7 @@ export default function PaginaExportar() {
         </p>
         <div className="flex flex-wrap items-start gap-3">
           {md.data
-            ? <BotonCopiar valor={md.data} texto="Copiar para mi IA" variante="principal" />
+            ? <BotonCopiar valor={md.data} texto="Copiar para mi IA" variante="principal" tam="grande" />
             : <Button variant="principal" size="grande" disabled aria-busy={md.isPending || undefined}>{md.isPending ? <Spinner /> : null}Copiar para mi IA</Button>}
           <BotonDescargar org={org.id} formato="md" />
           <BotonDescargar org={org.id} formato="json" />

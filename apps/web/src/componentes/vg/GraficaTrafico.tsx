@@ -12,7 +12,8 @@ export function GraficaTrafico({ buckets }: { buckets: Traffic['buckets'] }) {
     <figure className="flex flex-col gap-2">
       <div className="h-52 w-full" role="img" aria-label={`Tráfico de los últimos 5 minutos: ${miles(total)} peticiones`}>
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={datos} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
+          {/* Sin capa de accesibilidad de Recharts: dentro de role="img" sería una parada de tabulación sin nombre. */}
+          <AreaChart data={datos} margin={{ top: 8, right: 8, bottom: 0, left: -16 }} accessibilityLayer={false}>
             <CartesianGrid stroke="var(--border)" vertical={false} />
             <XAxis dataKey="t" tick={{ fill: 'var(--texto-3)', fontSize: 12 }} tickLine={false} axisLine={false} minTickGap={40} />
             <YAxis tick={{ fill: 'var(--texto-3)', fontSize: 12 }} tickLine={false} axisLine={false} allowDecimals={false} />
@@ -34,14 +35,15 @@ export function GraficaTrafico({ buckets }: { buckets: Traffic['buckets'] }) {
   );
 }
 
-// Top de IPs (IP en mono, peticiones, UA recortado a 60). La IP del incidente va resaltada en tinte info.
+// Top de IPs (IP en mono, peticiones, UA recortado a 60). La IP del incidente va resaltada en tinte info con borde
+// (el relleno solo no se distingue en proyector); el offset negativo evita que el overflow-hidden lo recorte.
 export function TablaTopIps({ ips, resaltar, accion }: { ips: Traffic['top_ips']; resaltar?: string | null; accion?: (ip: string) => React.ReactNode }) {
   if (ips.length === 0) return <p className="text-sm text-muted-foreground">Sin tráfico en los últimos 5 minutos.</p>;
   return (
     <ul className="overflow-hidden rounded-xl border bg-card" aria-label="IPs con más peticiones">
       {ips.map((x) => (
-        <li key={x.ip} className={`flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2.5 last:border-b-0 ${x.ip === resaltar ? 'bg-info-relleno' : ''}`}>
-          <span className="font-mono text-[13px] font-medium">{x.ip}</span>
+        <li key={x.ip} className={`flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2.5 last:border-b-0 ${x.ip === resaltar ? 'bg-info-relleno outline-2 -outline-offset-2 outline-info' : ''}`}>
+          <span className={`font-mono text-[13px] font-medium ${x.ip === resaltar ? 'text-info' : ''}`}>{x.ip}</span>
           <span className="text-sm tabular-nums">{miles(x.n)}</span>
           <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-texto-3" title={x.ua_top ?? undefined}>{x.ua_top ? x.ua_top.slice(0, 60) : '—'}</span>
           {accion?.(x.ip)}

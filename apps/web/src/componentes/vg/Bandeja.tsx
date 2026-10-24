@@ -3,17 +3,20 @@ import { Link, useLocation } from 'react-router';
 import { ChevronRight } from 'lucide-react';
 import type { AccionDato, FilaDato, GrupoDato } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
-import { useOrg } from '@/app/guardas';
+import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { rutaDe } from '@/lib/destino';
 import { SEP, cuando } from '@/lib/formato';
 import { TEXTO_ROL, type Rol } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
+import { BotonAccion } from './BotonAccion';
 import { BotonCopiar } from './BotonCopiar';
 import { ChapaSeveridad, Etiqueta } from './Etiqueta';
 import { PuntoEstado } from './PuntoEstado';
 
 // L3: rojo o ámbar solo con una acción al lado; sin acción se pinta neutro.
 export const rolVisible = (rol: Rol, acciones: unknown[]): Rol => (rol === 'mal' || rol === 'aviso') && acciones.length === 0 ? 'neutra' : rol;
+// El color nunca es la única señal (S14 §14.6): el punto lleva nombre para el lector.
+const nombreRol = (rol: Rol) => (rol === 'mal' ? 'Urgente' : rol === 'aviso' ? 'Aviso' : undefined);
 
 const enlace = 'inline-flex h-11 items-center gap-1 rounded-lg border px-4 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -36,7 +39,7 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
       if (accion.args?.kind === 'block_ip' && inc)
         return puedeEscribir
           ? <Link to={`/o/${org.id}/incidents/${encodeURIComponent(inc)}`} className={cn(enlace, 'border-mal-borde bg-mal-relleno text-mal hover:bg-mal/15')}>{accion.verbo}<ChevronRight className="size-4" /></Link>
-          : <Button variant="peligro" disabled title="Modo demo: solo lectura">{accion.verbo}</Button>;
+          : <BotonAccion variante="peligro" disabled ayuda={SOLO_LECTURA}>{accion.verbo}</BotonAccion>;
       return <Button disabled title="Acción no disponible">Acción no disponible</Button>;
     }
     default:
@@ -48,7 +51,7 @@ export function FilaProblema({ fila, puedeEscribir }: { fila: FilaDato; puedeEsc
   const rol = rolVisible(fila.rol, fila.acciones);
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
-      <PuntoEstado rol={rol} />
+      <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className={cn('text-[15px] font-medium', rol === 'neutra' ? '' : TEXTO_ROL[rol])}>{fila.etiqueta}</span>
@@ -74,8 +77,8 @@ export function Bandeja({ grupos, puedeEscribir, filtro, hora }: { grupos: Grupo
   if (!grupos) return <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>;
   const f = filtro?.toLowerCase();
   const casa = (x: FilaDato) => !f || [x.objeto, x.etiqueta, x.sub].some((t) => t?.toLowerCase().includes(f));
-  const visibles = [...grupos].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0))
-    .map((g) => ({ ...g, filas: g.filas.filter(casa) })).filter((g) => g.filas.length > 0);
+  // Los grupos se pintan en el orden en que llegan: el servidor ya los ordena (L1).
+  const visibles = grupos.map((g) => ({ ...g, filas: g.filas.filter(casa) })).filter((g) => g.filas.length > 0);
   if (visibles.length === 0)
     return <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender{hora ? `${SEP}revisado ${cuando(hora)}` : ''}</div>;
   return (
@@ -85,7 +88,7 @@ export function Bandeja({ grupos, puedeEscribir, filtro, hora }: { grupos: Grupo
         return (
           <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={g.etiqueta}>
             <header className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
-              <PuntoEstado rol={rol} />
+              <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
               <h4 className="flex-1 text-sm font-semibold">{g.etiqueta}</h4>
               {g.chapas?.map((c) => <Etiqueta key={c} texto={c} />)}
               <span className={cn('text-sm font-semibold tabular-nums', rol === 'neutra' ? 'text-muted-foreground' : TEXTO_ROL[rol])}>{g.n}</span>

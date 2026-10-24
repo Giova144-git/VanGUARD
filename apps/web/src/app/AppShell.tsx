@@ -122,7 +122,7 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
           <span className="flex-1 truncate text-sm">{org.me.user.email ?? 'Invitado · demo'}</span>
           <Etiqueta texto={ROL_TEXTO[org.role]} rol={org.role === 'viewer' ? 'neutra' : 'info'} />
         </div>}
-        <Button variant="fantasma" size="chico" onClick={salir} className={cn('justify-start text-muted-foreground', compacto && 'size-9 justify-center px-0')} aria-label="Cerrar sesión">
+        <Button variant="fantasma" size="fila" onClick={salir} className={cn('justify-start text-muted-foreground', compacto && 'size-11 justify-center px-0')} aria-label="Cerrar sesión">
           <LogOut />{compacto ? null : 'Cerrar sesión'}
         </Button>
       </div>
@@ -144,7 +144,7 @@ function FilaEstado({ overview, fallos, sinConexiones }: { overview: UseQueryRes
     <div className="flex flex-wrap items-center gap-3 border-b bg-muted px-4 py-2.5 md:px-6">
       <WifiOff className="size-5 shrink-0 text-mal" />
       <span className="flex-1 text-sm font-medium">Sin conexión con VanGUARD</span>
-      <Button variant="secundaria" size="chico" onClick={() => overview.refetch()}>Reintentar</Button>
+      <Button variant="secundaria" size="fila" onClick={() => overview.refetch()}>Reintentar</Button>
     </div>
   );
   else if (sinConexiones) contenido = (
@@ -167,7 +167,7 @@ export default function AppShell() {
   const [movilAbierto, setMovilAbierto] = useState(false);
 
   const segmento = loc.pathname.split('/')[3] ?? 'overview';
-  const vista = entradaNav(segmento)?.nombre ?? 'Resumen';
+  const vista = entradaNav(segmento)?.nombre ?? (segmento === 'findings' ? 'Hallazgo' : 'Resumen');   // /findings/:id no está en NAV
   const abiertos = overview.data?.open_incidents ?? 0;
   useEffect(() => { document.title = `${abiertos > 0 ? `(${abiertos}) ` : ''}${MARCA.nombre} · ${vista}`; }, [abiertos, vista]);
   useEffect(() => () => { document.title = MARCA.nombre; }, []);
@@ -202,7 +202,8 @@ export default function AppShell() {
           <Button variant="fantasma" size="icono" onClick={alternar} aria-label="Mostrar u ocultar el menú (Ctrl+B)"><PanelLeft className="size-5" /></Button>
           <h1 className="flex-1 truncate text-[17px] font-semibold">{vista}</h1>
           {org.puedeEscribir ? null : <Etiqueta texto="Demo · solo lectura" rol="info" />}
-          {overview.data?.ai?.enabled === false ? <Etiqueta texto="IA en pausa" rol="aviso" /> : null}
+          {/* «IA en pausa» no trae acción al lado: neutra (L3). */}
+          {overview.data?.ai?.enabled === false ? <Etiqueta texto="IA en pausa" rol="neutra" /> : null}
         </header>
         <FilaEstado overview={overview} fallos={fallos} sinConexiones={conexiones.data?.length === 0} />
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-6">

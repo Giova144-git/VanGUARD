@@ -15,10 +15,10 @@ function TextoPrompt({ r, plantilla }: { r: Pick<FixPromptResponse, 'prompt' | '
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2">
         {plantilla ? <Etiqueta texto="Plantilla · IA en pausa" rol="aviso" /> : r.model === 'template' ? <Etiqueta texto="Plantilla fija" /> : null}
-        {r.injection_flags.length > 0 ? <Etiqueta texto={`Quitamos ${r.injection_flags.length} instrucciones sospechosas de la evidencia`} rol="aviso" /> : null}
+        {r.injection_flags.length > 0 ? <Etiqueta texto={`Quitamos ${r.injection_flags.length} ${r.injection_flags.length === 1 ? 'instrucción sospechosa' : 'instrucciones sospechosas'} de la evidencia`} rol="aviso" /> : null}
       </div>
       <pre className="max-h-[28rem] overflow-auto rounded-lg border bg-background p-3 font-mono text-[13px] whitespace-pre-wrap">{r.prompt}</pre>
-      <BotonCopiar valor={r.prompt} texto="Copiar para mi IA" variante="principal" />
+      <BotonCopiar valor={r.prompt} texto="Copiar para mi IA" variante="principal" tam="grande" />
       <p className="text-[12.5px] text-muted-foreground">
         Este texto incluye evidencia de sistemas externos. Léelo antes de dárselo a una IA que pueda escribir en tu código o tu base.
       </p>
@@ -36,8 +36,10 @@ export function PromptCorreccion({ org, finding, puedeEscribir }: { org: string;
   const plantilla = esApiError(error) && typeof error.details?.fallback_prompt === 'string' ? error.details.fallback_prompt : null;
 
   return (
-    <section className="flex flex-col gap-3" aria-labelledby="titulo-prompt" aria-live="polite">
+    <section className="flex flex-col gap-3" aria-labelledby="titulo-prompt">
       <h3 id="titulo-prompt" className="text-[15px] font-semibold">Prompt de corrección</h3>
+      {/* Aviso corto para el lector: la región live no envuelve el <pre>, que tiene varios KB. */}
+      <p className="sr-only" role="status">{r || plantilla ? 'Prompt listo' : ''}</p>
       {r ? <TextoPrompt r={r} />
         : plantilla ? <TextoPrompt r={{ prompt: plantilla, model: 'template', cached: false, injection_flags: [] }} plantilla />
         : finding.has_fix_prompt && guardado.isPending ? <p className="text-texto-3" aria-busy="true">—</p>

@@ -1,7 +1,7 @@
 // «Bloquear esta IP» (S14 §14.16): reposo → simulando → vista → escribiendo → hecho, sin modal (L6). La aprobación
 // también llega por el botón «Sí, bloquear» de WhatsApp (A8): si el incidente refrescado trae un block_ip executed
 // creado después de abrir la vista, se pasa a «hecho» solo.
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Ban, Undo2 } from 'lucide-react';
 import type { ActionPublic, ProposeResponse } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
@@ -20,19 +20,23 @@ const RAZON: Record<string, string> = {
   not_an_ip: 'Solo bloqueamos una IP suelta (/32 o /128)',
   range_too_wide: 'Solo bloqueamos una IP suelta (/32 o /128)',
 };
+const SOLO_PRODUCCION = 'Solo disponible en officialvanguard.com';
+// El resultado ocupa el sitio del botón de 56 px que sustituye (L6, L7): mismo alto, letra legible a 3 m; en móvil parte línea.
+const RESULTADO = 'h-auto min-h-14 shrink gap-2 px-4 py-2 text-base font-semibold [&_svg]:size-5';
 
 function errorPropuesta(e: unknown): string {
-  if (esApiError(e) && e.status === 403) return 'Solo disponible en officialvanguard.com';
+  if (esApiError(e) && e.status === 403) return SOLO_PRODUCCION;
   const r = esApiError(e) && typeof e.details?.reason === 'string' ? RAZON[e.details.reason] : undefined;
   return r ?? mensajeDe(e);
 }
 
+// role="timer" y aria-live="off": el lector no lee el reloj cada segundo mientras escriben el código.
 function CuentaAtras({ hasta, alVencer }: { hasta: string; alVencer: () => void }) {
   const [ahora, setAhora] = useState(() => Date.now());
   useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 1000); return () => clearInterval(t); }, []);
   const queda = Date.parse(hasta) - ahora;
   useEffect(() => { if (queda <= 0) alVencer(); }, [queda, alVencer]);
-  return <span className="font-mono tabular-nums">{cronometro(queda)}</span>;
+  return <span role="timer" aria-live="off" className="font-mono tabular-nums">{cronometro(queda)}</span>;
 }
 
 type Fase =
@@ -50,19 +54,37 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
     ? { f: 'hecho', accion: { id: ejecutada.id, en: ejecutada.created_at, expira: ejecutada.expires_at } } : { f: 'reposo' });
   const [codigo, setCodigo] = useState('');
   const [deshaciendo, setDeshaciendo] = useState(false);
+  const [errorDeshacer, setErrorDeshacer] = useState<string | null>(null);
   const campo = useRef<HTMLInputElement>(null);
+  // Al cambiar de fase el control pulsado desaparece: el foco pasa al siguiente si el paso lo dio el usuario o si el
+  // foco ya estaba dentro (aprobado por WhatsApp mientras escribía). Nunca al montar.
+  const raiz = useRef<HTMLDivElement>(null);
+  const botonBloquear = useRef<HTMLButtonElement>(null);
+  const botonDeshacer = useRef<HTMLButtonElement>(null);
+  const resultado = useRef<HTMLDivElement>(null);
+  const enfocar = useRef(false);
+  const dentro = () => !!raiz.current?.contains(document.activeElement);
 
   // Aprobado desde WhatsApp: el incidente refrescado (Realtime o respaldo) trae el block_ip executed.
   useEffect(() => {
     if (!ejecutada) return;
-    setFase((x) => x.f === 'hecho' || x.f === 'deshecho' ? x
-      : x.f === 'vista' && Date.parse(ejecutada.created_at) < x.desde ? x
-      : { f: 'hecho', accion: { id: ejecutada.id, en: ejecutada.created_at, expira: ejecutada.expires_at } });
+    const conFoco = dentro();
+    setFase((x) => {
+      if (x.f === 'hecho' || x.f === 'deshecho' || (x.f === 'vista' && Date.parse(ejecutada.created_at) < x.desde)) return x;
+      enfocar.current = conFoco;
+      return { f: 'hecho', accion: { id: ejecutada.id, en: ejecutada.created_at, expira: ejecutada.expires_at } };
+    });
   }, [ejecutada]);
+  useEffect(() => {
+    if (!enfocar.current) return;
+    enfocar.current = false;
+    (fase.f === 'hecho' ? botonDeshacer : fase.f === 'deshecho' ? resultado : fase.f === 'reposo' ? botonBloquear : null)?.current?.focus();
+  }, [fase.f]);
+  const cancelar = () => { setCodigo(''); enfocar.current = true; setFase({ f: 'reposo' }); };
   useEffect(() => {
     if (fase.f !== 'vista') return;
     campo.current?.focus();
-    const tecla = (e: KeyboardEvent) => { if (e.key === 'Escape') { setCodigo(''); setFase({ f: 'reposo' }); } };
+    const tecla = (e: KeyboardEvent) => { if (e.key === 'Escape') cancelar(); };
     window.addEventListener('keydown', tecla);
     return () => window.removeEventListener('keydown', tecla);
   }, [fase.f]);
@@ -81,39 +103,63 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
     setFase({ f: 'escribiendo', p, desde });
     try {
       const r = await b.confirmar(p.approval_id, c);
-      if (r.ok && r.action_id) setFase({ f: 'hecho', accion: { id: r.action_id, en: r.en ?? new Date().toISOString(), expira: null } });
+      if (r.ok && r.action_id) { enfocar.current = true; setFase({ f: 'hecho', accion: { id: r.action_id, en: r.en ?? new Date().toISOString(), expira: null } }); }
       else setFase({ f: 'vista', p, desde, error: r.error ?? r.aviso ?? 'No pudimos bloquearla' });
     } catch (e) {
-      if (esApiError(e) && e.status === 409) setFase({ f: 'reposo', error: e.message });
-      else if (esApiError(e) && e.details?.reason === 'wrong_code')
-        setFase({ f: 'vista', p, desde, error: `Código incorrecto. Te quedan ${String(e.details.attempts_left ?? 0)} intentos` });
+      if (esApiError(e) && e.status === 409) { enfocar.current = true; setFase({ f: 'reposo', error: e.message }); }
+      else if (esApiError(e) && e.details?.reason === 'wrong_code') {
+        const n = Number(e.details.attempts_left ?? 0);
+        setFase({ f: 'vista', p, desde, error: `Código incorrecto. Te quedan ${n} ${n === 1 ? 'intento' : 'intentos'}` });
+      }
       else setFase({ f: 'vista', p, desde, error: mensajeDe(e) });
     }
   };
+  const vencer = () => { enfocar.current = dentro(); setFase({ f: 'reposo', error: 'El código venció, pídelo de nuevo' }); };
   const deshacer = async (id: string) => {
     setDeshaciendo(true);
-    try { const r = await b.deshacer(id); setFase({ f: 'deshecho', en: r.en ?? new Date().toISOString() }); }
-    catch (e) {
-      if (esApiError(e) && e.status === 409) setFase({ f: 'deshecho', en: new Date().toISOString() });   // ya deshecha: cuenta como hecho
-      else setFase((x) => x);
+    setErrorDeshacer(null);
+    try {
+      const r = await b.deshacer(id);
+      if (r.ok) { enfocar.current = true; setFase({ f: 'deshecho', en: r.en ?? new Date().toISOString() }); }
+      else setErrorDeshacer(r.error ?? r.aviso ?? 'No pudimos desbloquearla');   // sigue bloqueada: se dice en el sitio (L6)
+    } catch (e) {
+      if (esApiError(e) && e.status === 409) { enfocar.current = true; setFase({ f: 'deshecho', en: new Date().toISOString() }); }   // ya deshecha: cuenta como hecho
+      else setErrorDeshacer(esApiError(e) && e.status === 403 ? SOLO_PRODUCCION : mensajeDe(e));
     } finally { setDeshaciendo(false); }
   };
 
   // La caducidad la da el servidor: la del incidente refrescado si ya trae esta acción.
   const expira = fase.f === 'hecho' ? (ejecutada?.id === fase.accion.id ? ejecutada.expires_at : fase.accion.expira) : null;
-  if (fase.f === 'hecho') return (
-    <div className="flex flex-wrap items-center gap-3" aria-live="polite">
-      <Etiqueta texto={`Bloqueada · ${cuando(fase.accion.en)}${expira ? ` · caduca ${cuando(expira)}` : ''}`} rol="bien" icono={Ban} />
-      <Button variant="secundaria" disabled={!puedeEscribir || deshaciendo} aria-busy={deshaciendo || undefined} onClick={() => deshacer(fase.accion.id)}>
-        {deshaciendo ? <Spinner /> : <Undo2 />}Deshacer bloqueo
-      </Button>
+  const bloqueada = fase.f === 'hecho' ? `Bloqueada · ${cuando(fase.accion.en)}${expira ? ` · caduca ${cuando(expira)}` : ''}` : '';
+  // Región siempre montada: las ramas se montan ya con su texto y así el lector sí anuncia el resultado.
+  const marco = (hijo: ReactNode) => (
+    <div ref={raiz}>
+      <p className="sr-only" role="status">{fase.f === 'hecho' ? bloqueada : fase.f === 'deshecho' ? `Desbloqueada · ${cuando(fase.en)}` : ''}</p>
+      {hijo}
     </div>
   );
-  if (fase.f === 'deshecho') return <Etiqueta texto={`Desbloqueada · ${cuando(fase.en)}`} rol="neutra" />;
 
-  if (fase.f === 'reposo' || fase.f === 'simulando') return (
+  if (fase.f === 'hecho') return marco(
     <div className="flex flex-col gap-1">
-      <Button variant="peligro" size="grande" disabled={!puedeEscribir} aria-busy={fase.f === 'simulando' || undefined}
+      <div className="flex flex-wrap items-center gap-3">
+        <Etiqueta texto={bloqueada} rol="bien" icono={Ban} className={RESULTADO} />
+        <Button ref={botonDeshacer} variant="secundaria" size="grande" disabled={!puedeEscribir} aria-busy={deshaciendo || undefined}
+          onClick={deshaciendo ? undefined : () => deshacer(fase.accion.id)}>
+          {deshaciendo ? <Spinner /> : <Undo2 />}Deshacer bloqueo
+        </Button>
+      </div>
+      {errorDeshacer ? <span role="alert" className="text-sm text-mal">{errorDeshacer}</span> : null}
+    </div>
+  );
+  if (fase.f === 'deshecho') return marco(
+    <div ref={resultado} tabIndex={-1} className="w-fit outline-none">
+      <Etiqueta texto={`Desbloqueada · ${cuando(fase.en)}`} rol="neutra" className={RESULTADO} />
+    </div>
+  );
+
+  if (fase.f === 'reposo' || fase.f === 'simulando') return marco(
+    <div className="flex flex-col gap-1">
+      <Button ref={botonBloquear} variant="peligro" size="grande" disabled={!puedeEscribir} aria-busy={fase.f === 'simulando' || undefined}
         onClick={fase.f === 'simulando' ? undefined : simular}>
         {fase.f === 'simulando' ? <Spinner /> : <Ban />}Bloquear esta IP
       </Button>
@@ -123,15 +169,15 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
   );
 
   const { p } = fase;
-  return (
-    <form onSubmit={confirmar} className="flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4" aria-live="polite">
+  return marco(
+    <form onSubmit={confirmar} className="flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4">
       <p className="text-[15px] font-semibold text-mal">{p.efecto}</p>
       {p.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{a}</p>)}
       <p className="text-sm text-muted-foreground">
         {p.delivery === 'whatsapp'
           ? 'Te lo enviamos por WhatsApp. También puedes aprobar con el botón del mensaje.'
-          : <>No pudimos enviarte el WhatsApp: tu código es <span className="font-mono font-semibold text-foreground">{p.code}</span></>}
-        {' '}Vence en <CuentaAtras hasta={p.expires_at} alVencer={() => setFase({ f: 'reposo', error: 'El código venció, pídelo de nuevo' })} />.
+          : <>No pudimos enviarte el WhatsApp: tu código es <span className="font-mono font-semibold text-foreground">{p.code}</span>.</>}
+        {' '}Vence en <CuentaAtras hasta={p.expires_at} alVencer={vencer} />.
       </p>
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1.5">
@@ -139,7 +185,7 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
           <Input ref={campo} value={codigo} onChange={(e) => setCodigo(e.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric"
             autoComplete="one-time-code" pattern="\d{6}" maxLength={6} className="w-40 font-mono text-lg tracking-widest" aria-invalid={!!fase.error || undefined} />
         </label>
-        <Button type="button" variant="secundaria" size="grande" onClick={() => { setCodigo(''); setFase({ f: 'reposo' }); }}>Cancelar</Button>
+        <Button type="button" variant="secundaria" size="grande" onClick={cancelar}>Cancelar</Button>
         <Button type="submit" variant="peligro" size="grande" disabled={codigo.length !== 6 || fase.f === 'escribiendo'} aria-busy={fase.f === 'escribiendo' || undefined}>
           {fase.f === 'escribiendo' ? <Spinner /> : <Ban />}Confirmar bloqueo
         </Button>

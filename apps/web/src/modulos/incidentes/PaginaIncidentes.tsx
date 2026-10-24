@@ -22,6 +22,8 @@ export const ESTADO_INC: Record<IncidentStatus, { texto: string; rol: Rol }> = {
 };
 const abierto = (i: Incident) => i.status === 'open' || i.status === 'ack';
 const origen = (r: string) => r.replace(/^ip:/, '');
+// Pistas de la tabla: por ancho del contenedor, no del viewport (riel abierto o modo presentación); por debajo, tarjetas.
+const PISTAS = '@min-[66rem]:grid-cols-[6rem_5rem_1fr_9rem_5rem_6rem_8rem_5rem_1rem]';
 
 export default function PaginaIncidentes() {
   const org = useOrg();
@@ -53,7 +55,7 @@ export default function PaginaIncidentes() {
       <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label="Qué incidentes ver">
         {(['open', 'all'] as const).map((v) => (
           <button key={v} type="button" aria-pressed={estado === v} onClick={() => cambiar(v)}
-            className={cn('h-10 rounded-md px-4 text-sm font-medium', estado === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>
+            className={cn('h-11 rounded-md px-4 text-sm font-medium', estado === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>
             {v === 'open' ? `Abiertos${q.data && estado === 'open' ? ` ${q.data.length}` : ''}` : 'Todos'}
           </button>
         ))}
@@ -61,23 +63,28 @@ export default function PaginaIncidentes() {
       <p className="sr-only" aria-live="polite">{nuevo?.texto ?? ''}</p>
       {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
       {!q.data ? <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>
-        : lista.length === 0 ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Sin incidentes abiertos · vigilando</div>
+        : lista.length === 0 ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">
+            {estado === 'all' ? '0 ✓ Sin incidentes · vigilando' : '0 ✓ Sin incidentes abiertos · vigilando'}
+          </div>
         : (
-          <ul className="overflow-hidden rounded-xl border bg-card" aria-label="Incidentes">
+          <ul className="@container overflow-hidden rounded-xl border bg-card" aria-label="Incidentes">
+            <li aria-hidden="true" className={cn('hidden items-center gap-x-4 border-b px-4 py-2 text-[12.5px] font-medium text-muted-foreground @min-[66rem]:grid', PISTAS)}>
+              <span>Severidad</span><span>Código</span><span>Qué pasa</span><span>Origen</span><span>Eventos</span><span>Empezó</span><span>Estado</span><span>Cronómetro</span><span />
+            </li>
             {lista.map((i) => {
               const est = ESTADO_INC[i.status];
               return (
-                <li key={i.id} className={cn('border-b last:border-b-0 transition-colors', nuevo?.id === i.id && 'bg-info-relleno')}>
-                  <Link to={i.id} className="grid grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring md:grid-cols-[6rem_5rem_1fr_9rem_5rem_6rem_8rem_5rem_1rem]">
+                <li key={i.id} className={cn('border-b last:border-b-0 transition-colors', nuevo?.id === i.id && 'bg-info-relleno outline-2 -outline-offset-2 outline-info')}>
+                  <Link to={i.id} className={cn('grid grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring', PISTAS)}>
                     <ChapaSeveridad severity={i.severity} />
                     <span className="font-mono text-[13px]">{i.code}</span>
                     <span className="text-[15px] font-medium">{i.title}</span>
                     <span className="truncate font-mono text-[13px] text-muted-foreground">{origen(i.resource)}</span>
-                    <span className="text-sm tabular-nums">{miles(i.event_count)} <span className="text-texto-3 md:hidden">eventos</span></span>
+                    <span className="text-sm tabular-nums">{miles(i.event_count)} <span className="text-texto-3 @min-[66rem]:sr-only">eventos</span></span>
                     <span className="text-sm text-muted-foreground tabular-nums">{cuando(i.started_at)}</span>
                     <Etiqueta texto={est.texto} rol={est.rol} className="w-fit" />
                     {abierto(i) ? <Cronometro desde={i.started_at} hasta={null} className="text-base" /> : <span className="text-texto-3">—</span>}
-                    <ChevronRight className="hidden size-4 text-texto-3 md:block" />
+                    <ChevronRight className="hidden size-4 text-texto-3 @min-[66rem]:block" />
                   </Link>
                 </li>
               );

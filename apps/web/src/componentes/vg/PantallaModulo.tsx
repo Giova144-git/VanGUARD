@@ -1,8 +1,8 @@
 // Página de módulo genérica (S14 §14.12) sobre GET …/modules/:module/state. Orden fijo (R08 R9): barra → cifras →
 // «Ahora» → secciones propias → «Revisado» → guía. Una sola para Supabase, Cloudflare y Codebase.
 import type { ReactNode } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
-import { Gauge, KeyRound, RotateCw, X } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { ChevronRight, Gauge, KeyRound, RotateCw, X } from 'lucide-react';
 import type { EstadoModulo, Module, Provider } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
@@ -27,6 +27,8 @@ const ERROR_ESTADO: Record<NonNullable<EstadoModulo['error']>, string> = {
   limite_api: 'Límite de la API · reintentamos en 1 min', sin_conexion: 'No llegamos al proveedor · Reintentar',
 };
 const NOMBRE_PROV: Record<Exclude<Provider, 'ingest'>, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', github: 'GitHub' };
+// Cifras «—» mientras carga: tantas como manda el BACK, para que la rejilla no salte al llegar el dato (L7).
+const HUECOS: Record<Module, number> = { supabase: 2, cloudflare: 2, codebase: 2, performance: 6 };
 
 // `proveedor = null` (Rendimiento, S14 §14.13): sin conexión propia; «Sin datos» = ninguna cifra con n → «Aún no medimos tu web».
 export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; children?: ReactNode }) {
@@ -39,14 +41,23 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
   const c = proveedor ? conexiones.data?.find((x) => x.provider === proveedor && x.kind === 'read') : undefined;
   const filtro = params.get('filtro');
   const est = q.data;
+  // L3: la chapa roja de la conexión lleva al lado la acción que la arregla.
+  const arreglo = !proveedor ? null
+    : est?.error === 'token_invalido' || (c && c.status !== 'active') ? 'Reconectar'
+    : est?.error === 'sin_permiso' ? 'Ver' : null;
 
   const barra = (
     <BarraModulo titulo={e.nombre} descripcion={e.descripcion} contador={est?.contador ?? null} extra={<>
       {c ? <Etiqueta {...chapaEstado(c)} /> : null}
       {est && !est.ok ? <Etiqueta texto={est.error ? ERROR_ESTADO[est.error] : 'No pudimos leer · Reintentar'} rol="mal" /> : null}
+      {arreglo ? (
+        <Link to={`/o/${org.id}/connections/${proveedor}`}
+          className="inline-flex h-11 items-center gap-1 rounded-lg border border-mal-borde bg-mal-relleno px-4 text-sm font-medium text-mal outline-none hover:bg-mal/15 focus-visible:ring-2 focus-visible:ring-ring">
+          {arreglo}<ChevronRight className="size-4" /></Link>
+      ) : null}
       <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`}>{est ? cuando(est.hora) : '—'}</span>
-      <Button variant={q.isError ? 'peligro' : 'secundaria'} size="chico" onClick={() => q.refetch()} aria-busy={q.isFetching || undefined}
-        aria-label="Actualizar">{q.isFetching ? <Spinner /> : <RotateCw />}{q.isError ? 'Reintentar' : 'Actualizar'}</Button>
+      <Button variant={q.isError ? 'peligro' : 'secundaria'} size="fila" onClick={() => q.refetch()} aria-busy={q.isFetching || undefined}>
+        {q.isFetching ? <Spinner /> : <RotateCw />}{q.isError ? 'Reintentar' : 'Actualizar'}</Button>
     </>} />
   );
 
@@ -73,7 +84,7 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
       {barra}
       {q.isError && est ? <p role="status" className="text-sm text-mal">Sin conexión · mostramos los datos de las {cuando(est.hora)}</p> : null}
       <FilaCifras>
-        {(est?.cifras ?? [null, null, null, null]).map((x, i) => x
+        {(est?.cifras ?? Array<null>(HUECOS[modulo]).fill(null)).map((x, i) => x
           ? <Cifra key={`${x.tipo}-${i}`} etiqueta={x.etiqueta} n={x.n} de={x.de} unidad={x.unidad} decimales={x.decimales} sub={x.sub} rol={x.rol}
               href={x.destino ? rutaDe(org.id, x.destino) : undefined} />
           : <Cifra key={i} etiqueta="—" n={null} />)}
@@ -82,9 +93,12 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
         <div className="flex flex-wrap items-center gap-2">
           <h3 id={`ahora-${modulo}`} className="text-[17px] font-semibold">Ahora</h3>
           {filtro ? (
+            // Se ve como chapa, pero la zona de toque mide 44 px (L8) sin agrandar la fila.
             <button type="button" onClick={() => { params.delete('filtro'); setParams(params); }}
-              className="inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[12.5px] font-medium hover:bg-muted" aria-label="Quitar filtro">
-              Filtro: <span className="font-mono">{filtro}</span><X className="size-3.5" />
+              className="group -my-2 inline-flex h-11 items-center outline-none" aria-label={`Quitar filtro: ${filtro}`}>
+              <span className="inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[12.5px] font-medium group-hover:bg-muted group-focus-visible:ring-2 group-focus-visible:ring-ring">
+                Filtro: <span className="font-mono">{filtro}</span><X className="size-3.5" />
+              </span>
             </button>
           ) : null}
         </div>

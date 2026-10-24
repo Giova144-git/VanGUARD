@@ -8,6 +8,13 @@ import { PuntoEstado } from './PuntoEstado';
 import { SectorPlegable } from './SectorPlegable';
 
 const VIA: Record<string, string> = { whatsapp: 'por WhatsApp', in_app: 'desde la app', voice: 'por llamada' };
+// Respaldo si un hito llega sin `label`: nunca el id en inglés en pantalla.
+const TIPO: Record<TimelineItem['kind'], string> = {
+  attack_start: 'Empieza el ataque', detected: 'Ataque detectado', severity_up: 'Sube a crítica', whatsapp_sent: 'WhatsApp enviado',
+  whatsapp_delivered: 'WhatsApp entregado', whatsapp_read: 'WhatsApp leído', call_started: 'Llamada', call_failed: 'Llamada fallida',
+  ack: 'Lo están viendo', muted: 'Silenciado', action_proposed: 'Bloqueo propuesto', action_executed: 'IP bloqueada',
+  action_undone: 'Bloqueo deshecho', edge_confirmed: 'Cloudflare confirmó el bloqueo', mitigated: 'Mitigado', resolved: 'Resuelto',
+};
 
 export function LineaTiempo({ hitos, resto }: { hitos: Hito[]; resto: TimelineItem[] }) {
   return (
@@ -38,7 +45,7 @@ export function LineaTiempo({ hitos, resto }: { hitos: Hito[]; resto: TimelineIt
           <ul className="flex flex-col gap-2">
             {resto.map((t, i) => (
               <li key={`${t.kind}-${i}`} className="flex flex-wrap items-center gap-x-3 text-sm">
-                <span className={cn('flex-1', t.kind === 'call_failed' ? 'text-aviso' : '')}>{t.label ?? t.kind}</span>
+                <span className={cn('flex-1', t.kind === 'call_failed' ? 'text-aviso' : '')}>{t.label ?? TIPO[t.kind] ?? t.kind}</span>
                 <span className="font-mono text-[13px] text-texto-3 tabular-nums">+{(t.ms / 1000).toFixed(1).replace('.', ',')} s</span>
               </li>
             ))}

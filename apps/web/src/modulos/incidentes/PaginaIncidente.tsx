@@ -2,7 +2,7 @@
 // del WhatsApp o código en el sitio) → bloqueo → «Deshacer». Dos columnas 60/40 desde 1280 px; apiladas por debajo.
 import { useNavigate, useParams, Link } from 'react-router';
 import { ArrowLeft, Bell, BellOff, Eye, MessageCircle, Phone, ShieldHalf } from 'lucide-react';
-import type { Channel, IncidentDetail, NotificationPublic } from '@vanguard/contracts';
+import type { ActionKind, ActionStatus, Channel, IncidentDetail, NotificationPublic } from '@vanguard/contracts';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { BotonGrande } from '@/componentes/vg/BotonGrande';
 import { Cronometro } from '@/componentes/vg/Cronometro';
@@ -25,14 +25,20 @@ import { BotonSimularWhatsApp } from './Simulacion';
 
 const ICONO: Record<Channel, typeof MessageCircle> = { in_app: Bell, whatsapp: MessageCircle, voice: Phone };
 const NOMBRE_CANAL: Record<Channel, string> = { in_app: 'En la app', whatsapp: 'WhatsApp', voice: 'Llamada' };
+const TIPO_ACCION: Record<ActionKind, string> = {
+  block_ip: 'Bloqueo de IP', unblock_ip: 'Desbloqueo de IP', under_attack_on: 'Under Attack activado',
+  under_attack_off: 'Under Attack desactivado', rate_limit: 'Límite de peticiones',
+};
+const ESTADO_ACCION: Record<ActionStatus, string> = { executed: 'Activo', undone: 'Deshecho', proposed: 'En curso', failed: 'Falló' };
 
-function estadoAviso(n: NotificationPublic): { texto: string; rol: 'bien' | 'aviso' | 'neutra' | 'mal' } {
-  if (n.status === 'skipped_cap') return { texto: 'No enviado: tope por hora', rol: 'aviso' };
-  if (n.status === 'failed' && n.error === 'dry_run') return { texto: 'Simulado (fuera de officialvanguard.com)', rol: 'neutra' };
-  if (n.status === 'failed') return { texto: 'Falló', rol: 'mal' };
-  if (n.status === 'read') return { texto: 'Leído', rol: 'neutra' };
-  if (n.status === 'delivered') return { texto: 'Entregado', rol: 'neutra' };
-  return { texto: n.status === 'sent' ? 'Enviado' : 'En cola', rol: 'neutra' };
+// Sin acción al lado (no hay reenvío), así que todo va en neutro (L3): el texto ya dice qué pasó.
+function estadoAviso(n: NotificationPublic): string {
+  if (n.status === 'skipped_cap') return 'No enviado: tope por hora';
+  if (n.status === 'failed' && n.error === 'dry_run') return 'Simulado (fuera de officialvanguard.com)';
+  if (n.status === 'failed') return 'Falló';
+  if (n.status === 'read') return 'Leído';
+  if (n.status === 'delivered') return 'Entregado';
+  return n.status === 'sent' ? 'Enviado' : 'En cola';
 }
 
 function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; puedeEscribir: boolean }) {
@@ -59,8 +65,10 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
       {accion.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(accion.error)}</p> : null}
       {esIp ? (blindaje || ejecutada
         ? <BloquearIp key={i.id} org={org} incidentId={i.id} ip={i.resource.slice(3)} ejecutada={ejecutada} puedeEscribir={puedeEscribir} />
+        : conexiones.isPending ? <div className="h-14" aria-busy="true" />   // sin saber si hay blindaje: hueco fijo, no el CTA equivocado (L7)
         : <BotonGrande icono={ShieldHalf} titulo="Activa el Modo blindaje para bloquear desde aquí"
-            descripcion="Reconecta Cloudflare con el token de acciones" onClick={() => navegar(`/o/${org}/connections/cloudflare`)} />) : null}
+            descripcion="Primero quita la conexión de lectura de Cloudflare y vuelve a conectarla con los dos tokens; los hallazgos se conservan"
+            onClick={() => navegar(`/o/${org}/connections/cloudflare`)} />) : null}
       <BotonSimularWhatsApp org={org} incidentId={i.id} />
     </section>
   );
@@ -87,7 +95,7 @@ export default function PaginaIncidente() {
         <div className="flex min-w-0 flex-col gap-6">
           <header className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2">
-              <ChapaSeveridad severity={i.severity} />
+              <ChapaSeveridad severity={i.severity} grande />
               <span className="font-mono text-[13px] text-muted-foreground">{i.code}</span>
               <Etiqueta texto={est.texto} rol={est.rol} />
             </div>
@@ -127,12 +135,11 @@ export default function PaginaIncidente() {
               <ul className="flex flex-col gap-2">
                 {i.notifications.map((n) => {
                   const Icono = ICONO[n.channel];
-                  const e = estadoAviso(n);
                   return (
                     <li key={n.id} className="flex flex-wrap items-center gap-2 text-sm">
                       <Icono className="size-4 text-muted-foreground" aria-label={NOMBRE_CANAL[n.channel]} />
                       <span className="font-mono text-[13px]">{n.recipient_masked}</span>
-                      <Etiqueta texto={e.texto} rol={e.rol} />
+                      <Etiqueta texto={estadoAviso(n)} />
                       <span className="ml-auto text-[12.5px] text-texto-3 tabular-nums">{cuando(n.created_at)}</span>
                     </li>
                   );
@@ -146,9 +153,9 @@ export default function PaginaIncidente() {
               <ul className="flex flex-col gap-2">
                 {i.actions.map((a) => (
                   <li key={a.id} className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="font-medium">{a.kind === 'block_ip' ? 'Bloqueo de IP' : a.kind}</span>
+                    <span className="font-medium">{TIPO_ACCION[a.kind] ?? a.kind}</span>
                     <span className="font-mono text-[13px]">{a.target}</span>
-                    <Etiqueta texto={a.status === 'executed' ? 'Activo' : a.status === 'undone' ? 'Deshecho' : a.status} rol={a.status === 'executed' ? 'bien' : 'neutra'} />
+                    <Etiqueta texto={ESTADO_ACCION[a.status] ?? a.status} rol={a.status === 'executed' ? 'bien' : 'neutra'} />
                     {a.approval_id ? <span className="text-[12.5px] text-texto-3">aprobado</span> : null}
                     <span className="ml-auto text-[12.5px] text-texto-3 tabular-nums">{cuando(a.created_at)}{a.expires_at ? ` · caduca ${cuando(a.expires_at)}` : ''}</span>
                   </li>

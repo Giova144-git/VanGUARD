@@ -1,5 +1,6 @@
 // /o/:orgId/audit[/:scanId] (S14 §14.14). Los cambios de scan_runs llegan por Realtime y useScan consulta de respaldo
-// cada 10 s mientras queued|running. El puntaje se pinta en cuanto `score` no es null, aunque siga `running`.
+// cada 10 s mientras queued|running. El puntaje se pinta en cuanto `score` no es null, aunque siga `running`, y va debajo
+// de los pasos: así no los empuja a mitad de la corrida (L7).
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ChevronRight, KeyRound, ShieldCheck } from 'lucide-react';
@@ -14,9 +15,10 @@ import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { useHallazgos, useOverview, useScan } from '@/lib/consultas';
-import { esApiError, mensajeDe } from '@/lib/errores';
+import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
+import { entradaNav } from '@/lib/nav';
 import { ESTADO_SCAN, PINTA_PASO, TEXTO_PASO, estadoPaso } from './pasos';
 
 const ORDEN_SEV = { critical: 0, high: 1, medium: 2, low: 3, info: 4 } as const;
@@ -78,15 +80,18 @@ function Pasos({ run }: { run: ScanRun }) {
         const e = estadoPaso(run, s);
         const p = PINTA_PASO[e];
         const prov = t.modulo ? PROVEEDOR[t.modulo] : undefined;
+        // L3: el ámbar de «No pudimos revisarlo» va con su acción (abrir el módulo); sin módulo (resumen con IA), neutro.
+        const rol = e === 'error' && !t.modulo ? 'neutra' : p.rol;
         return (
           <li key={s.name} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
-            <PuntoEstado rol={p.rol} hueco={p.hueco} girando={p.girando} />
+            <PuntoEstado rol={rol} hueco={p.hueco} girando={p.girando} />
             <div className="flex min-w-0 flex-1 flex-col">
-              <span className="text-[15px] font-medium">{t.nombre}{s.findings != null && e === 'hecho' ? <span className="text-muted-foreground"> · {s.findings} hallazgos</span> : null}</span>
+              <span className="text-[15px] font-medium">{t.nombre}{s.findings != null && e === 'hecho' ? <span className="text-muted-foreground"> · {s.findings} {s.findings === 1 ? 'hallazgo' : 'hallazgos'}</span> : null}</span>
               <span className="text-[12.5px] text-texto-3">{t.detalle}</span>
             </div>
             <span className="text-sm text-muted-foreground">{p.texto}</span>
             {e === 'sin_mirar' && prov ? <Link to={`/o/${org.id}/connections/${prov}`} className="inline-flex items-center gap-1 text-sm font-medium text-info underline underline-offset-4"><KeyRound className="size-3.5" />Sin conexión · Conectar</Link> : null}
+            {e === 'error' && t.modulo ? <Link to={`/o/${org.id}/${t.modulo}`} className="inline-flex items-center gap-1 text-sm font-medium text-info underline underline-offset-4">Abrir {entradaNav(t.modulo)?.nombre}<ChevronRight className="size-3.5" /></Link> : null}
           </li>
         );
       })}
@@ -164,20 +169,21 @@ function Corrida({ id }: { id: string }) {
         </div>
         <p className="sr-only" aria-live="polite">{actual ? `Paso actual: ${actual}` : ''} {est.texto}</p>
       </section>
+      {run.status === 'failed' ? (
+        <div className="flex flex-col gap-3">
+          {/* ApiError para que mensajeDe muestre el `run.error` del servidor (con un Error suelto saldría «Algo falló»). */}
+          <ErrorBloque error={new ApiError(0, 'run_failed', run.error ?? 'La auditoría falló')} />
+          <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>
+          {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
+        </div>
+      ) : null}
+      <Pasos run={run} />
       {run.score != null && run.coverage ? (
         // La banda la decide el servidor (L1): la de la corrida; si es vieja y no la trae, la del overview si es esta misma; si no, neutra.
         <section className="rounded-xl border bg-card p-5"><PuntajeBlindaje score={run.score}
           band={run.band ?? (overview.data?.last_scan?.id === run.id ? overview.data.band : null)}
           coverage={run.coverage} enlaceConectar={`/o/${org.id}/connections`} /></section>
       ) : null}
-      {run.status === 'failed' ? (
-        <div className="flex flex-col gap-3">
-          <ErrorBloque error={new Error(run.error ?? 'La auditoría falló')} />
-          <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>
-          {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
-        </div>
-      ) : null}
-      <Pasos run={run} />
       {terminada ? <Resumen run={run} porId={porId} /> : null}
       {terminada && ordenados.length ? (
         <section className="flex flex-col gap-3" aria-labelledby="hallazgos-abiertos">

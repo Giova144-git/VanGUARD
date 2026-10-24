@@ -18,29 +18,25 @@ export function DiagramaWiki({ fuente }: { fuente: string }) {
     return [n.id, { x: M + n.col * (W + GX), y: y0 + n.fila * (H + GY) }];
   }));
   const descripcion = g.aristas.map((a) => `${g.nodos.find((n) => n.id === a.de)!.etiqueta} → ${g.nodos.find((n) => n.id === a.a)!.etiqueta}${a.texto ? ` (${a.texto})` : ''}`).join('; ');
+  const trazos = g.aristas.map((a) => {
+    const p = pos.get(a.de)!, q = pos.get(a.a)!;
+    const atras = q.x <= p.x;                                // ciclo o misma columna: la flecha sale por abajo
+    const x1 = atras ? p.x + W / 2 : p.x + W, y1 = atras ? p.y + H : p.y + H / 2;
+    const x2 = atras ? q.x + W / 2 : q.x, y2 = atras ? q.y + H : q.y + H / 2;
+    const cx = (x1 + x2) / 2;
+    const d = atras ? `M${x1},${y1} C${x1},${y1 + 40} ${x2},${y2 + 40} ${x2},${y2}` : `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`;
+    return { d, texto: a.texto, x: cx, y: (y1 + y2) / 2 - 6 };
+  });
 
   return (
-    <div className="overflow-x-auto rounded-xl border bg-background p-2">
+    <div className="overflow-x-auto rounded-xl border bg-background p-2" tabIndex={0} role="region" aria-label="Mapa del repositorio">
       <svg viewBox={`0 0 ${ancho} ${altura}`} width={ancho} height={altura} role="img" aria-label={`Mapa del repositorio: ${descripcion}`} className="max-w-none">
         <defs>
           <marker id="vg-flecha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="var(--muted-foreground)" />
           </marker>
         </defs>
-        {g.aristas.map((a, i) => {
-          const p = pos.get(a.de)!, q = pos.get(a.a)!;
-          const atras = q.x <= p.x;                            // ciclo o misma columna: la flecha sale por abajo
-          const x1 = atras ? p.x + W / 2 : p.x + W, y1 = atras ? p.y + H : p.y + H / 2;
-          const x2 = atras ? q.x + W / 2 : q.x, y2 = atras ? q.y + H : q.y + H / 2;
-          const cx = (x1 + x2) / 2;
-          const d = atras ? `M${x1},${y1} C${x1},${y1 + 40} ${x2},${y2 + 40} ${x2},${y2}` : `M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}`;
-          return (
-            <g key={i}>
-              <path d={d} fill="none" stroke="var(--muted-foreground)" strokeWidth={1.5} markerEnd="url(#vg-flecha)" />
-              {a.texto ? <text x={cx} y={(y1 + y2) / 2 - 6} textAnchor="middle" fontSize={11} fill="var(--texto-3)">{a.texto}</text> : null}
-            </g>
-          );
-        })}
+        {trazos.map((t, i) => <path key={i} d={t.d} fill="none" stroke="var(--muted-foreground)" strokeWidth={1.5} markerEnd="url(#vg-flecha)" />)}
         {g.nodos.map((n) => {
           const p = pos.get(n.id)!;
           const lineas = partir(n.etiqueta);
@@ -54,6 +50,11 @@ export function DiagramaWiki({ fuente }: { fuente: string }) {
             </g>
           );
         })}
+        {/* El texto de las flechas va encima de las cajas (que son opacas), con halo del fondo para leerse sobre el trazo. */}
+        {trazos.map((t, i) => (t.texto ? (
+          <text key={i} x={t.x} y={t.y} textAnchor="middle" fontSize={12.5} fill="var(--muted-foreground)"
+            stroke="var(--background)" strokeWidth={4} strokeLinejoin="round" paintOrder="stroke">{t.texto}</text>
+        ) : null))}
       </svg>
     </div>
   );

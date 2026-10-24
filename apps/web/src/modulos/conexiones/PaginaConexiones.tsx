@@ -17,7 +17,7 @@ export default function PaginaConexiones() {
 
   return (
     <div className="flex flex-col gap-6">
-      <BarraModulo titulo="Conexiones" descripcion="Solo lectura: con estos tokens podemos mirar, nunca escribir." />
+      <BarraModulo titulo="Conexiones" descripcion="Solo lectura: con estos tokens podemos mirar, nunca escribir. La única excepción es el token opcional de Modo blindaje, que solo bloquea una IP cuando tú lo confirmas." />
       <GuiaPasos pasos={[
         { texto: 'Conecta Supabase', hecho: activa('supabase') },
         { texto: 'Conecta Cloudflare', hecho: activa('cloudflare') },

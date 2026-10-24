@@ -1,6 +1,6 @@
 // /o/:orgId/connections/:provider (S14 §14.10): pasos a la izquierda y formulario a la derecha (apilado en móvil).
 // Pre-guardas antes de enviar; el token vive solo en el campo y se vacía al enviar, con éxito o con error (L10).
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, CircleCheck, ExternalLink } from 'lucide-react';
 import type { ConnectionCreate, ConnectionCreated, Provider } from '@vanguard/contracts';
@@ -43,12 +43,14 @@ function Pasos({ proveedor }: { proveedor: Provider }) {
 // Lo que el servidor devolvió al crear: permisos comprobados, ••••last4 y, en la ingesta, el secreto UNA vez.
 function Resultado({ r, alTerminar }: { r: ConnectionCreated; alTerminar: () => void }) {
   const [guardado, setGuardado] = useState(false);
+  const titulo = useRef<HTMLSpanElement>(null);
+  useEffect(() => titulo.current?.focus(), []);   // el botón enviado desaparece: el foco pasa al resultado
   const c = r.connection;
   return (
-    <div className="flex flex-col gap-4" aria-live="polite">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <CircleCheck className="size-6 text-bien" />
-        <span className="text-[17px] font-semibold">Conectado</span>
+        <span ref={titulo} tabIndex={-1} className="text-[17px] font-semibold outline-none">Conectado</span>
         {c.last4 ? <span className="font-mono text-[13px] text-muted-foreground">••••{c.last4}</span> : null}
         {r.action_connection ? <Etiqueta texto="Modo blindaje activo" rol="info" /> : null}
       </div>

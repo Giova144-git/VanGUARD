@@ -18,7 +18,7 @@ function Grupo<T extends string>({ valor, opciones, onCambio, etiqueta }: { valo
     <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label={etiqueta}>
       {opciones.map(([v, t]) => (
         <button key={v} type="button" aria-pressed={valor === v} onClick={() => onCambio(v)}
-          className={cn('h-10 rounded-md px-3 text-sm font-medium', valor === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>{t}</button>
+          className={cn('h-11 rounded-md px-3 text-sm font-medium', valor === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>{t}</button>
       ))}
     </div>
   );
@@ -43,6 +43,8 @@ function Historico() {
   const [url, setUrl] = useState<string | null>(null);
   const actual = url ?? urls[0] ?? null;
   const serie = mismaSerie(todas.filter((m) => m.url === actual && m.strategy === estrategia));
+  const nombre = METRICAS.find(([m]) => m === metrica)![1];
+  const peorQueAntes = (i: number, k: Metrica) => i > 0 && empeora(k, serie[i - 1]![k], serie[i]![k]);
 
   if (q.isError) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   if (!q.data || serie.length < 2) return null;                      // con < 2 mediciones no se pinta (S10 §10.10)
@@ -59,24 +61,45 @@ function Historico() {
         <Grupo etiqueta="Métrica" valor={metrica} opciones={METRICAS} onCambio={setMetrica} />
       </div>
       <GraficaComparativa mediciones={serie} metrica={metrica} estrategia={estrategia} />
-      <div className="overflow-x-auto">
+      {/* Desde md, tabla; el contenedor que se desplaza toma el foco para moverlo con teclado. */}
+      <div className="hidden overflow-x-auto md:block" tabIndex={0} role="region" aria-label="Histórico de mediciones">
         <table className="w-full min-w-[640px] text-left text-[15px] tabular-nums">
           <thead className="text-[12.5px] font-medium text-texto-3">
             <tr className="border-b"><th className="py-2 pr-3">Medición</th><th className="pr-3">Lighthouse</th>
-              {METRICAS.map(([m, t]) => <th key={m} className="pr-3">{t}</th>)}<th>Frente a la anterior ({METRICAS.find(([m]) => m === metrica)![1]})</th></tr>
+              {METRICAS.map(([m, t]) => <th key={m} className="pr-3">{t}</th>)}<th>Frente a la anterior ({nombre})</th></tr>
           </thead>
           <tbody>
             {serie.map((m, i) => (
               <tr key={m.clave} className="h-12 border-b last:border-b-0">
                 <td className="pr-3">{m.version ?? `Medición ${i + 1}`} <span className="text-[12.5px] text-texto-3">· {cuando(m.at)}</span></td>
                 <td className="pr-3 font-mono text-[13px]">{m.lighthouse ?? '—'}</td>
-                {METRICAS.map(([k]) => <td key={k} className={cn('pr-3', i > 0 && empeora(k, serie[i - 1]![k], m[k]) && 'text-aviso')}>{formato(k, m[k])}</td>)}
+                {METRICAS.map(([k]) => <td key={k} className={cn('pr-3', peorQueAntes(i, k) && 'text-aviso')}>{formato(k, m[k])}</td>)}
                 <td><Delta m={metrica} antes={serie[i - 1]} ahora={m} /></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {/* Por debajo de md, una tarjeta por medición con las mismas cifras (§14.6). */}
+      <ul className="flex flex-col gap-2 md:hidden" aria-label="Histórico de mediciones">
+        {serie.map((m, i) => (
+          <li key={m.clave} className="flex flex-col gap-2 rounded-lg border px-3 py-3">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-[15px] font-medium">{m.version ?? `Medición ${i + 1}`}</span>
+              <span className="text-[12.5px] text-texto-3">{cuando(m.at)} · Lighthouse <span className="font-mono">{m.lighthouse ?? '—'}</span></span>
+            </div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[15px] tabular-nums">
+              {METRICAS.map(([k, t]) => (
+                <div key={k} className="flex items-baseline justify-between gap-2">
+                  <dt className="text-[12.5px] text-texto-3">{t}</dt>
+                  <dd className={cn(peorQueAntes(i, k) && 'text-aviso')}>{formato(k, m[k])}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="text-sm tabular-nums"><span className="text-texto-3">Frente a la anterior ({nombre}): </span><Delta m={metrica} antes={serie[i - 1]} ahora={m} /></p>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

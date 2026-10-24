@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ExternalLink, KeyRound, RotateCw } from 'lucide-react';
-import type { ConnectionPublic, ConnectionTest, Provider } from '@vanguard/contracts';
+import type { ConnectionPublic, ConnectionTest, Provider, ProviderErrorCode } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
 import { BotonGrande } from '@/componentes/vg/BotonGrande';
@@ -14,10 +14,22 @@ import { mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { GUIAS_CONEXION } from '@/lib/guias';
 import { useProbarConexion, useQuitarConexion } from '@/lib/mutaciones';
+import { FRASE_ERROR, nombrePermiso } from '@/lib/permisos';
 import type { Rol } from '@/lib/severidad';
 
 const HOSTS_REVOCAR = new Set(['supabase.com', 'dash.cloudflare.com', 'github.com']);
 const META_VISIBLE = ['project_ref', 'project_name', 'zone_name', 'plan', 'repo_full_name', 'default_branch', 'hostname'];
+const ROTULO_META: Record<string, string> = {
+  project_ref: 'Proyecto', project_name: 'Nombre', zone_name: 'Zona', plan: 'Plan', repo_full_name: 'Repo', default_branch: 'Rama', hostname: 'Host',
+};
+
+// `last_error` llega como código (unauthorized, excess_scope, http_NNN…): aquí va la frase y qué hacer.
+function fraseError(c: ConnectionPublic): string {
+  const e = c.last_error ?? '';
+  if (Object.hasOwn(FRASE_ERROR, e)) return FRASE_ERROR[e as ProviderErrorCode];
+  if (e === 'excess_scope') return 'El token tiene más permisos de los necesarios: créalo de nuevo solo con lectura.';
+  return c.status === 'error' && c.provider !== 'ingest' ? 'La conexión falla: pulsa «Probar de nuevo» o reconecta.' : 'La conexión falla: pulsa «Reconectar».';
+}
 
 export function chapaEstado(c: ConnectionPublic): { texto: string; rol: Rol } {
   switch (c.status) {
@@ -56,7 +68,7 @@ function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: 
   const [prueba, setPrueba] = useState<ConnectionTest | null>(null);
   const estado = chapaEstado(c);
   const nombre = GUIAS_CONEXION[c.provider].nombre;
-  const meta = META_VISIBLE.filter((k) => typeof c.meta[k] === 'string' || typeof c.meta[k] === 'boolean').map((k) => `${k}: ${String(c.meta[k])}`);
+  const meta = META_VISIBLE.filter((k) => typeof c.meta[k] === 'string' || typeof c.meta[k] === 'boolean').map((k) => `${ROTULO_META[k] ?? k}: ${String(c.meta[k])}`);
   const solo = org.puedeEscribir ? undefined : SOLO_LECTURA;
 
   return (
@@ -67,9 +79,9 @@ function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: 
         {c.last4 ? <span className="font-mono text-[13px] text-muted-foreground">••••{c.last4}</span> : null}
         {c.expires_at ? <span className="text-[12.5px] text-texto-3">caduca {cuando(c.expires_at)}</span> : null}
       </div>
-      {c.scopes.length ? <div className="flex flex-wrap gap-1.5">{c.scopes.map((s) => <Etiqueta key={s} texto={s} mono />)}</div> : null}
+      {c.scopes.length ? <div className="flex flex-wrap gap-1.5">{c.scopes.map((s) => <Etiqueta key={s} texto={nombrePermiso(s)} />)}</div> : null}
       {meta.length ? <p className="font-mono text-[13px] break-all text-muted-foreground">{meta.join(' · ')}</p> : null}
-      {c.last_error && c.status !== 'active' ? <p className="text-sm text-mal">{c.last_error}</p> : null}
+      {c.last_error && c.status !== 'active' ? <p className="text-sm text-mal">{fraseError(c)}</p> : null}
       {prueba ? <ListaChecks checks={prueba.checks} /> : null}
       {probar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(probar.error)}</p> : null}
       <div className="flex flex-wrap items-start gap-2">
@@ -120,7 +132,7 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
           ? <LineaConexion c={accion} titulo="Modo blindaje (acciones)" alQuitar={setQuitada} />
           : <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-4 py-3 text-sm">
               <span className="font-semibold">Modo blindaje (acciones)</span><Etiqueta texto="No configurado" />
-              <span className="text-muted-foreground">Para bloquear IPs desde VanGUARD, reconecta Cloudflare con los dos tokens.</span>
+              <span className="text-muted-foreground">Primero quita la conexión de lectura de Cloudflare y vuelve a conectarla con los dos tokens; los hallazgos se conservan.</span>
             </div>) : null}
       </> : (
         <BotonGrande icono={KeyRound} titulo={`Conectar ${g.nombre}`} descripcion="Con un token de solo lectura"

@@ -20,7 +20,7 @@ import { cuando } from '@/lib/formato';
 import { SANDBOX_KAPSO } from '@/lib/guias';
 import { useGuardarContactos, useProbarCanal } from '@/lib/mutaciones';
 import { supabase } from '@/lib/supabase';
-import { aplicarTema, leerTema, type Tema } from '@/lib/tema';
+import { aplicarPresentacion, aplicarTema, leerPresentacion, leerTema, type Tema } from '@/lib/tema';
 import { cn } from '@/lib/utils';
 
 // La llamada llega después de WhatsApp (A8, P1): mientras no exista, «Probar llamada» va deshabilitado con su motivo.
@@ -96,7 +96,7 @@ function Contactos({ org }: { org: string }) {
         {filas.map((f, i) => (
           <li key={f.clave} className="flex flex-col gap-3 rounded-xl border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="flex size-7 items-center justify-center rounded-full bg-info-relleno text-sm font-semibold text-info tabular-nums" aria-label={`Prioridad ${i + 1}`}>{i + 1}</span>
+              <span className="flex size-7 items-center justify-center rounded-full bg-info-relleno text-sm font-semibold text-info tabular-nums" role="img" aria-label={`Prioridad ${i + 1}`}>{i + 1}</span>
               <Etiqueta texto={f.verified_at ? 'Verificado' : 'Sin verificar'} rol={f.verified_at ? 'bien' : 'aviso'} />
               <span className="flex-1" />
               <Button variant="fantasma" size="icono" disabled={i === 0} onClick={() => mover(i, -1)} aria-label="Subir prioridad"><ArrowUp /></Button>
@@ -131,13 +131,23 @@ function Contactos({ org }: { org: string }) {
   );
 }
 
+function ModoPresentacion() {
+  const [si, setSi] = useState(leerPresentacion);
+  return (
+    <label className="flex w-fit items-center gap-3 text-[15px]">
+      <Interruptor activo={si} etiqueta="Modo presentación" onCambio={(v) => { aplicarPresentacion(v); setSi(v); }} />
+      Modo presentación <span className="text-sm text-muted-foreground">(texto más grande para el proyector)</span>
+    </label>
+  );
+}
+
 function SelectorTema() {
   const [tema, setTema] = useState<Tema>(leerTema);
   return (
     <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label="Tema">
       {([['claro', 'Claro'], ['oscuro', 'Oscuro'], ['sistema', 'Sistema']] as const).map(([v, t]) => (
         <button key={v} type="button" aria-pressed={tema === v} onClick={() => { aplicarTema(v); setTema(v); }}
-          className={cn('h-10 rounded-md px-4 text-sm font-medium', tema === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>{t}</button>
+          className={cn('h-11 rounded-md px-4 text-sm font-medium', tema === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>{t}</button>
       ))}
     </div>
   );
@@ -162,8 +172,9 @@ export default function PaginaAjustes() {
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-canales">
         <h3 id="t-canales" className="text-[17px] font-semibold">Canales por severidad</h3>
         <ul className="flex flex-col gap-2 text-[15px]">
-          <li><span className="font-semibold text-mal">Crítica</span> · en la app + WhatsApp a todos · llamada: próximamente</li>
-          <li><span className="font-semibold text-mal">Alta</span> · en la app + WhatsApp</li>
+          {/* Solo lectura: sin acción al lado, sin rojo (L3). */}
+          <li><span className="font-semibold">Crítica</span> · en la app + WhatsApp a todos · llamada: próximamente</li>
+          <li><span className="font-semibold">Alta</span> · en la app + WhatsApp</li>
           <li><span className="font-semibold">Media, Baja e Info</span> · en la app</li>
         </ul>
         <p className="text-sm text-muted-foreground">Topes por hora: 2 llamadas y 10 WhatsApp (en la org de demo, 6 y 30).</p>
@@ -173,7 +184,7 @@ export default function PaginaAjustes() {
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-ia">
         <div className="flex flex-wrap items-center gap-2">
           <h3 id="t-ia" className="flex-1 text-[17px] font-semibold">IA</h3>
-          {ia ? <Etiqueta texto={ia.enabled ? `IA encendida · ${NIVEL_IA[ia.level]}` : 'IA en pausa'} rol={ia.enabled ? 'info' : 'aviso'} /> : <span className="text-texto-3">—</span>}
+          {ia ? <Etiqueta texto={ia.enabled ? `IA encendida · ${NIVEL_IA[ia.level]}` : 'IA en pausa'} rol={ia.enabled ? 'info' : 'neutra'} /> : <span className="text-texto-3">—</span>}
         </div>
         <p className="text-sm text-muted-foreground">El tope diario lo cambia solo el administrador de VanGUARD. Si la IA se pausa, las alertas siguen saliendo con plantillas.</p>
       </section>
@@ -186,6 +197,7 @@ export default function PaginaAjustes() {
           <dt className="text-muted-foreground">Tu correo</dt><dd>{org.me.user.email ?? 'Invitado · demo'}</dd>
         </dl>
         <SelectorTema />
+        <ModoPresentacion />
         <div><Button variant="secundaria" size="grande" onClick={salir}><LogOut />Cerrar sesión</Button></div>
         <p className="text-[12.5px] text-texto-3">
           versión{' '}

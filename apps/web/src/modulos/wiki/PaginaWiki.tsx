@@ -18,7 +18,7 @@ import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { useConexiones, useWikiDoc, useWikiRun, useWikiRuns } from '@/lib/consultas';
-import { mensajeDe } from '@/lib/errores';
+import { ApiError, mensajeDe } from '@/lib/errores';
 import { cuando, miles, usd } from '@/lib/formato';
 import { Markdown } from '@/lib/markdown';
 import { comoMarkdown, topeUsd } from './texto';
@@ -30,8 +30,14 @@ const PASO: Record<WikiRun['steps'][number]['name'], string> = {
   arbol: 'Árbol del repo', triage: 'Elegir los archivos que importan', area: 'Explicar cada área', sintesis: 'Resumen para el directivo', fin: 'Listo',
 };
 const corto = (sha: string | null) => (sha ? sha.slice(0, 7) : '—');
+// El estado de cada paso también en texto: el color del punto no basta (§14.6).
+const ESTADO_PASO: Record<WikiRun['steps'][number]['status'], string> = {
+  done: 'Hecho', running: 'En curso', failed: 'Falló', pending: 'Pendiente', skipped: 'Omitido',
+};
 
-function Estimacion({ e, alGenerar, alVer, ocupado }: { e: WikiEstimate; alGenerar: (force: boolean) => void; alVer: (id: string) => void; ocupado: boolean }) {
+function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado }: {
+  e: WikiEstimate; alGenerar: (force: boolean) => void; alRegenerar: () => Promise<void>; alVer: (id: string) => void; ocupado: boolean;
+}) {
   return (
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Estimación">
       <div className="flex flex-wrap items-center gap-2">
@@ -51,7 +57,7 @@ function Estimacion({ e, alGenerar, alVer, ocupado }: { e: WikiEstimate; alGener
         <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
           {e.est.desglose.map((d) => (
             <li key={d.paso} className="flex flex-wrap gap-x-2"><span className="font-medium text-foreground">{PASO[d.paso]}</span>
-              <span className="font-mono text-[12.5px]">{d.modelo}</span><span>· {d.llamadas} llamadas · {usd(d.usd)}</span></li>
+              <span className="font-mono text-[12.5px]">{d.modelo}</span><span>· {d.llamadas} {d.llamadas === 1 ? 'llamada' : 'llamadas'} · {usd(d.usd)}</span></li>
           ))}
         </ul>
         <p className="text-[12.5px] text-texto-3">Modelos: rápido <span className="font-mono">{e.models.fast}</span> · fino <span className="font-mono">{e.models.smart}</span></p>
@@ -59,8 +65,11 @@ function Estimacion({ e, alGenerar, alVer, ocupado }: { e: WikiEstimate; alGener
       {e.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{a}</p>)}
       {e.cached_run_id ? (
         <div className="flex flex-wrap items-start gap-3">
-          <Button variant="principal" size="grande" onClick={() => alVer(e.cached_run_id!)}><BookOpen />Ya existe la wiki de este commit · Ver (gratis)</Button>
-          <ConfirmarEnSitio verbo="Regenerar" aviso={`Vuelve a gastar ~${usd(e.est.usd)} en IA.`} onConfirmar={async () => alGenerar(true)} />
+          {/* Texto largo: a 375 px parte en dos líneas en vez de desbordar (max-w-full por el shrink-0 de Button). */}
+          <Button variant="principal" size="grande" className="h-auto min-h-14 max-w-full whitespace-normal py-2 text-left" onClick={() => alVer(e.cached_run_id!)}>
+            <BookOpen />Ya existe la wiki de este commit · Ver (gratis)
+          </Button>
+          <ConfirmarEnSitio verbo="Regenerar" aviso={`Vuelve a gastar ~${usd(e.est.usd)} en IA.`} onConfirmar={alRegenerar} />
         </div>
       ) : (
         <BotonAccion variante="principal" tam="grande" icono={Sparkles} ocupado={ocupado} onClick={() => alGenerar(false)}>
@@ -89,13 +98,15 @@ function Progreso({ run, alReintentar, puedeEscribir }: { run: WikiRun; alReinte
             <PuntoEstado rol={s.status === 'done' ? 'bien' : s.status === 'running' ? 'info' : s.status === 'failed' ? 'aviso' : 'neutra'}
               hueco={s.status === 'pending' || s.status === 'skipped'} girando={s.status === 'running'} />
             <span className="font-medium">{PASO[s.name]}</span>
+            <span className="text-sm text-muted-foreground">{ESTADO_PASO[s.status]}</span>
             {s.detalle ? <span className="text-muted-foreground">{s.detalle}</span> : null}
           </li>
         ))}
       </ol>
       {run.status === 'failed' ? (
         <div className="flex flex-col gap-2">
-          <ErrorBloque error={new Error(run.error ?? 'La wiki falló')} />
+          {/* Como ApiError, para que ErrorBloque muestre el motivo que manda el BACK y no «Algo falló». */}
+          <ErrorBloque error={new ApiError(0, 'run_failed', run.error ?? 'La wiki falló')} />
           <BotonAccion icono={RotateCw} disabled={!puedeEscribir} ayuda={SOLO_LECTURA} onClick={alReintentar}>Reintentar</BotonAccion>
         </div>
       ) : null}
@@ -203,6 +214,12 @@ export default function PaginaWiki() {
     generar.mutate({ repo_full_name: estimar.data.repo_full_name, ...e, max_usd: topeUsd(estimar.data.est.usd), ...(force ? { force: true } : {}) },
       { onSuccess: (r) => elegir(r.wiki_run_id) });
   };
+  // «Regenerar» espera la promesa: ConfirmarEnSitio pinta el resultado o el error en su sitio (L6).
+  const regenerar = async () => {
+    if (!estimar.data) return;
+    const r = await generar.mutateAsync({ repo_full_name: estimar.data.repo_full_name, ...e, max_usd: topeUsd(estimar.data.est.usd), force: true });
+    elegir(r.wiki_run_id);
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -224,7 +241,7 @@ export default function PaginaWiki() {
         )}
       </section>
 
-      {org.puedeEscribir && estimar.data ? <Estimacion e={estimar.data} ocupado={generar.isPending} alGenerar={lanzar} alVer={elegir} /> : null}
+      {org.puedeEscribir && estimar.data ? <Estimacion e={estimar.data} ocupado={generar.isPending} alGenerar={lanzar} alRegenerar={regenerar} alVer={elegir} /> : null}
       {generar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(generar.error)}</p> : null}
 
       {run.data && run.data.status !== 'succeeded' ? <Progreso run={run.data} puedeEscribir={org.puedeEscribir} alReintentar={() => lanzar(true)} /> : null}

@@ -23,7 +23,7 @@ export function ErrorBloque({ error, onReintentar }: { error: ApiError | Error |
     <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-mal-borde bg-mal-relleno px-4 py-3 text-mal">
       <TriangleAlert className="size-5 shrink-0" />
       <span className="flex-1 text-sm font-medium">{mensajeDe(error)}{rid ? <span className="ml-2 font-mono text-[13px] opacity-80">· {rid}</span> : null}</span>
-      {onReintentar ? <Button variant="peligro" size="chico" onClick={onReintentar}><RotateCw />Reintentar</Button> : null}
+      {onReintentar ? <Button variant="peligro" size="fila" onClick={onReintentar}><RotateCw />Reintentar</Button> : null}
     </div>
   );
 }

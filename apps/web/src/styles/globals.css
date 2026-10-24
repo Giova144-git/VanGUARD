@@ -54,8 +54,15 @@
   --font-sans:"Geist Variable", system-ui, sans-serif; --font-mono:"Geist Mono Variable", ui-monospace, monospace;
 }
 @layer base {
+  html.presentacion { font-size: 112.5%; }   /* modo presentación (proyector): las utilidades en rem crecen solas */
   * { @apply border-border; }
   body { @apply bg-background text-foreground font-sans antialiased; }
   :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 }
+/* Los tamaños en px de S14 §14.6 no siguen a la raíz: en presentación se pasan a rem (a 16 px se ven igual).
+   Fuera de @layer a propósito: dentro, la capa utilities les ganaría. */
+html.presentacion .text-\[12\.5px\] { font-size: .78125rem; } html.presentacion .text-\[13px\] { font-size: .8125rem; }
+html.presentacion .text-\[14px\] { font-size: .875rem; }      html.presentacion .text-\[15px\] { font-size: .9375rem; }
+html.presentacion .text-\[17px\] { font-size: 1.0625rem; }    html.presentacion .text-\[22px\] { font-size: 1.375rem; }
+html.presentacion .h-\[104px\] { height: 6.5rem; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

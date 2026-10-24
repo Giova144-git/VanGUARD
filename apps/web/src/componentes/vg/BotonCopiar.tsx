@@ -6,7 +6,10 @@ const TOPE = 150 * 1024;
 
 // S14 §14.7: el texto ya está en memoria al pulsar (no se pierde el gesto del usuario). Si el portapapeles falla o el
 // texto pasa de 150 KB, debajo y en el sitio aparece un textarea ya seleccionado con «Pulsa Ctrl+C».
-export function BotonCopiar({ valor, texto = 'Copiar', variante = 'secundaria' }: { valor: string; texto?: string; variante?: 'secundaria' | 'principal' }) {
+// `tam="grande"` (h-14) para el botón principal de la vista (L8); por defecto, de fila (h-11).
+export function BotonCopiar({ valor, texto = 'Copiar', variante = 'secundaria', tam = 'fila' }: {
+  valor: string; texto?: string; variante?: 'secundaria' | 'principal'; tam?: 'fila' | 'grande';
+}) {
   const [hecho, setHecho] = useState(false);
   const [manual, setManual] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -19,7 +22,7 @@ export function BotonCopiar({ valor, texto = 'Copiar', variante = 'secundaria' }
   };
   return (
     <span className="inline-flex w-full flex-col gap-2 sm:w-auto">
-      <Button variant={variante} onClick={copiar} aria-live="polite">{hecho ? <><Check />Copiado</> : <><Copy />{texto}</>}</Button>
+      <Button variant={variante} size={tam} onClick={copiar} aria-live="polite">{hecho ? <><Check />Copiado</> : <><Copy />{texto}</>}</Button>
       {manual ? <>
         <textarea ref={area} readOnly value={valor} rows={4} className="w-full rounded-lg border bg-card p-2 font-mono text-[13px]" />
         <span className="text-[12.5px] text-texto-3">Pulsa Ctrl+C (Cmd+C en Mac)</span>

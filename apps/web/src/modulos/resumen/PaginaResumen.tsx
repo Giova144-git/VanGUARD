@@ -76,6 +76,8 @@ export default function PaginaResumen() {
   const [errorAuditar, setErrorAuditar] = useState<string | null>(null);
   const o = q.data;
   const e = entradaNav('overview')!;
+  // «24-10 22:35» no cabe en la cifra: la hora va de valor y la fecha, si no es de hoy, de sub.
+  const [diaAud, horaAud] = o?.last_scan ? cuando(o.last_scan.finished_at).split(' ') : [];
 
   const auditar = () => {
     setErrorAuditar(null);
@@ -96,8 +98,8 @@ export default function PaginaResumen() {
       {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
 
       <section className="flex flex-wrap items-end justify-between gap-6 rounded-xl border bg-card p-5" aria-label="Puntaje">
-        {o ? <PuntajeBlindaje score={o.score} band={o.band} coverage={o.coverage} enlaceConectar={`/o/${org.id}/connections`} />
-          : <span className="font-mono text-6xl font-semibold text-texto-3">—</span>}
+        {/* Sin `o` pinta la misma estructura con «—»: la sección no crece al llegar el dato (L7). */}
+        <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={`/o/${org.id}/connections`} />
         <div className="flex flex-col items-start gap-2">
           <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
             disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
@@ -109,10 +111,10 @@ export default function PaginaResumen() {
         </div>
       </section>
 
-      {o ? <BarraSegmentada tramos={[
-        { etiqueta: 'Crítica', n: o.counts.critical, rol: 'mal', fuerte: true }, { etiqueta: 'Alta', n: o.counts.high, rol: 'mal' },
-        { etiqueta: 'Media', n: o.counts.medium, rol: 'aviso' }, { etiqueta: 'Baja', n: o.counts.low, rol: 'cola' },
-      ]} /> : null}
+      <BarraSegmentada tramos={[
+        { etiqueta: 'Crítica', n: o?.counts.critical ?? null, rol: 'mal', fuerte: true }, { etiqueta: 'Alta', n: o?.counts.high ?? null, rol: 'mal' },
+        { etiqueta: 'Media', n: o?.counts.medium ?? null, rol: 'aviso' }, { etiqueta: 'Baja', n: o?.counts.low ?? null, rol: 'cola' },
+      ]} />
 
       <FilaCifras>
         <Cifra etiqueta="Críticos abiertos" n={o?.counts.critical ?? null} rol="mal" href={o?.counts.critical ? '#ahora' : undefined} />
@@ -120,7 +122,7 @@ export default function PaginaResumen() {
         <Cifra etiqueta="Incidentes abiertos" n={o?.open_incidents ?? null} rol="mal" href={o?.open_incidents ? `/o/${org.id}/incidents` : undefined} />
         <Cifra etiqueta="Fuentes" n={o?.coverage.seen ?? null} de={o?.coverage.total}
           rol={o && o.coverage.seen === o.coverage.total ? 'bien' : 'neutra'} />
-        <Cifra etiqueta="Última auditoría" n={o?.last_scan ? 1 : null} valor={o?.last_scan ? cuando(o.last_scan.finished_at) : undefined} />
+        <Cifra etiqueta="Última auditoría" n={o?.last_scan ? 1 : null} valor={horaAud ?? diaAud} sub={horaAud ? diaAud : undefined} />
       </FilaCifras>
 
       <section id="ahora" className="flex flex-col gap-3 scroll-mt-20" aria-labelledby="titulo-ahora">

@@ -10,16 +10,18 @@ export function GraficaComparativa({ mediciones, metrica, estrategia }: { medici
   return (
     <div className="h-56 w-full" role="img" aria-label={`${ETIQUETA[metrica]} por medición: ${datos.map((d) => `${d.x} ${d.v ?? '—'}`).join(', ')}`}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={datos} margin={{ top: 8, right: 8, bottom: 0, left: -8 }}>
+        {/* Sin capa de accesibilidad de Recharts: el div role="img" ya lleva el texto y el svg no debe tomar el foco. */}
+        <BarChart data={datos} margin={{ top: 8, right: 8, bottom: 0, left: -8 }} accessibilityLayer={false}>
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis dataKey="x" tick={{ fill: 'var(--texto-3)', fontSize: 12 }} tickLine={false} axisLine={false} />
           <YAxis tick={{ fill: 'var(--texto-3)', fontSize: 12 }} tickLine={false} axisLine={false} />
           <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--foreground)' }}
             cursor={{ fill: 'var(--muted)' }} formatter={(v) => [String(v), ETIQUETA[metrica]]} />
-          <ReferenceLine y={u.bueno} stroke="var(--bien)" strokeDasharray="4 4" label={{ value: 'bueno', fill: 'var(--texto-3)', fontSize: 11, position: 'insideTopRight' }} />
-          <ReferenceLine y={u.malo} stroke="var(--aviso)" strokeDasharray="4 4" label={{ value: 'malo', fill: 'var(--texto-3)', fontSize: 11, position: 'insideTopRight' }} />
+          {/* extendDomain: el umbral se dibuja aunque quede por encima de los datos (por defecto Recharts lo descarta). */}
+          <ReferenceLine y={u.bueno} ifOverflow="extendDomain" stroke="var(--bien)" strokeDasharray="4 4" label={{ value: 'bueno', fill: 'var(--muted-foreground)', fontSize: 12.5, position: 'insideTopRight' }} />
+          <ReferenceLine y={u.malo} ifOverflow="extendDomain" stroke="var(--aviso)" strokeDasharray="4 4" label={{ value: 'malo', fill: 'var(--muted-foreground)', fontSize: 12.5, position: 'insideTopRight' }} />
           <Bar dataKey="v" name={ETIQUETA[metrica]} isAnimationActive={false} radius={[4, 4, 0, 0]}>
-            {datos.map((d, i) => <Cell key={d.x + i} fill={i === datos.length - 1 ? 'var(--info)' : 'var(--chart-1)'} fillOpacity={i === datos.length - 1 ? 0.8 : 0.45} />)}
+            {datos.map((d, i) => <Cell key={d.x + i} fill={i === datos.length - 1 ? 'var(--info)' : 'var(--chart-1)'} fillOpacity={i === datos.length - 1 ? 0.8 : 0.65} />)}
           </Bar>
         </BarChart>
       </ResponsiveContainer>

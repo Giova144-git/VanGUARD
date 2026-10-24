@@ -24,7 +24,11 @@ function traducir(e: { message?: string; code?: string } | null, modo: Modo): st
   if (e.code === 'invalid_credentials' || /invalid login credentials/i.test(e.message ?? '')) return 'Correo o contraseña incorrectos';
   if (e.code === 'user_already_exists' || /already registered/i.test(e.message ?? '')) return 'Ese correo ya tiene cuenta: entra';
   if (modo === 'crear' && e.code === 'weak_password') return 'La contraseña es muy débil: usa al menos 10 caracteres con letras y números';
-  return e.message ?? 'Algo falló';
+  if (e.code === 'email_address_invalid' || e.code === 'validation_failed') return 'Ese correo no es válido';
+  if (e.code === 'over_email_send_rate_limit' || e.code === 'over_request_rate_limit') return 'Demasiados intentos: espera un minuto';
+  if (e.code === 'signup_disabled') return 'Ahora no se pueden crear cuentas: usa «Ver la demo»';
+  // El resto llega en inglés desde Supabase Auth: respaldo en español.
+  return modo === 'crear' ? 'No pudimos crear la cuenta: inténtalo de nuevo' : 'No pudimos entrar: inténtalo de nuevo';
 }
 
 function Formulario({ modo }: { modo: Modo }) {

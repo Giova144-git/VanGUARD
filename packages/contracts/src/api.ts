@@ -77,7 +77,8 @@ export type AuditSummary = z.infer<typeof AuditSummary>;
 export const ScanRun = z.object({ id: Id, kind: ScanKind, status: ScanStatus, progress: z.number().int().min(0).max(100),
   step: z.string().nullable(), steps: z.array(ScanStep), score: z.number().int().min(0).max(100).nullable(),
   coverage: Coverage.nullable(), summary: AuditSummary.nullable(), error: z.string().nullable(), created_at: Ts,
-  started_at: Ts.nullable(), finished_at: Ts.nullable() });
+  started_at: Ts.nullable(), finished_at: Ts.nullable(),
+  band: z.enum(['red', 'amber', 'green']).nullable().optional() }); // opcional: color del puntaje en corridas viejas (§14.14)
 export type ScanRun = z.infer<typeof ScanRun>;
 
 // ── Hallazgos ─────────────────────────────────────────────────────────────────

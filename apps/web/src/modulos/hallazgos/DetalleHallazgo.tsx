@@ -12,6 +12,7 @@ import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA } from '@/app/guardas';
 import { useHallazgo } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
+import { esId } from '@/lib/ids';
 import { cuando } from '@/lib/formato';
 import { usePatchHallazgo } from '@/lib/mutaciones';
 import { porQueImporta, referencias } from '@/lib/reglas-texto';
@@ -59,7 +60,7 @@ function Acciones({ org, f, puedeEscribir }: { org: string; f: Finding; puedeEsc
 
 export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: string; puedeEscribir: boolean }) {
   const q = useHallazgo(org, id);
-  if (q.isError && esApiError(q.error) && q.error.status === 404)
+  if (!esId(id) || (q.isError && esApiError(q.error) && q.error.status === 404))
     return <p className="text-[15px] text-muted-foreground">Este hallazgo no existe o no es de esta organización.</p>;
   if (q.isError && !q.data) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   const f = q.data;

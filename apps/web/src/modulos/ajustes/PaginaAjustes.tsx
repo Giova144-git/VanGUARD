@@ -71,7 +71,7 @@ function ProbarCanal({ org, canal, deshabilitado }: { org: string; canal: 'whats
 const ESPERA_VERIFICAR_MS = 120_000;
 type Espera = { id: string; nombre: string; hasta: number };
 
-function Verificar({ c, esperando, alAbrir }: { c: Contact; esperando: boolean; alAbrir: () => void }) {
+export function Verificar({ c, esperando, alAbrir }: { c: Contact; esperando: boolean; alAbrir: () => void }) {   // exportada para el arnés de XSS
   if (!c.verificacion) return null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">

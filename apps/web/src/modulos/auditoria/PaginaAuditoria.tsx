@@ -12,11 +12,13 @@ import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { PuntajeBlindaje } from '@/componentes/vg/PuntajeBlindaje';
 import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
+import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { useHallazgos, useOverview, useScan } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
+import { esId } from '@/lib/ids';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { ESTADO_SCAN, PINTA_PASO, TEXTO_PASO, estadoPaso } from './pasos';
@@ -148,6 +150,8 @@ function Corrida({ id }: { id: string }) {
   const { auditar, ocupado, error } = useLanzarYNavegar();
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   const run = q.data;
+  if (!esId(id) || (q.isError && esApiError(q.error) && q.error.status === 404))
+    return <NoEncontrada texto="Esta auditoría no existe o no es de esta organización" />;
   if (q.isError && !run) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   if (!run) return <p className="text-texto-3" aria-busy="true">—</p>;
   const est = ESTADO_SCAN[run.status];

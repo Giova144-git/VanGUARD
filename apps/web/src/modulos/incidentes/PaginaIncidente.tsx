@@ -15,6 +15,7 @@ import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { useConexiones, useIncidente, useTrafico } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
+import { esId } from '@/lib/ids';
 import { useAccionIncidente } from '@/lib/mutaciones';
 import { porQueImporta } from '@/lib/reglas-texto';
 import { ActivarBlindaje } from '@/modulos/conexiones/ActivarBlindaje';
@@ -76,7 +77,7 @@ export default function PaginaIncidente() {
   const { incidentId = '' } = useParams();
   const q = useIncidente(org.id, incidentId);
   const trafico = useTrafico(org.id);
-  if (q.isError && esApiError(q.error) && q.error.status === 404) return <NoEncontrada texto="Este incidente no existe o no es de esta organización" />;
+  if (!esId(incidentId) || (q.isError && esApiError(q.error) && q.error.status === 404)) return <NoEncontrada texto="Este incidente no existe o no es de esta organización" />;
   if (q.isError && !q.data) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   const i = q.data;
   if (!i) return <p className="text-texto-3" aria-busy="true">—</p>;

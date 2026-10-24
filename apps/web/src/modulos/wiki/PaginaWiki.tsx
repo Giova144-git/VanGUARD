@@ -18,7 +18,8 @@ import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { useConexiones, useWikiDoc, useWikiRun, useWikiRuns } from '@/lib/consultas';
-import { ApiError, mensajeDe } from '@/lib/errores';
+import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
+import { esId } from '@/lib/ids';
 import { cuando, miles, usd } from '@/lib/formato';
 import { Markdown } from '@/lib/markdown';
 import { comoMarkdown, topeUsd } from './texto';
@@ -35,7 +36,7 @@ const ESTADO_PASO: Record<WikiRun['steps'][number]['status'], string> = {
   done: 'Hecho', running: 'En curso', failed: 'Falló', pending: 'Pendiente', skipped: 'Omitido',
 };
 
-function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado }: {
+export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado }: {   // exportada para el arnés de XSS
   e: WikiEstimate; alGenerar: (force: boolean) => void; alRegenerar: () => Promise<void>; alVer: (id: string) => void; ocupado: boolean;
 }) {
   return (
@@ -186,7 +187,8 @@ function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string
 export default function PaginaWiki() {
   const org = useOrg();
   const [params, setParams] = useSearchParams();
-  const runId = params.get('run');
+  const crudo = params.get('run');
+  const runId = esId(crudo) ? crudo : null;
   const elegir = (id: string) => { const p = new URLSearchParams(params); p.set('run', id); setParams(p); };
   const gh = useConexiones(org.id).data?.find((c) => c.provider === 'github' && c.kind === 'read' && c.status === 'active');
   const repoConexion = typeof gh?.meta.repo_full_name === 'string' ? gh.meta.repo_full_name : '';
@@ -245,7 +247,9 @@ export default function PaginaWiki() {
       {generar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(generar.error)}</p> : null}
 
       {run.data && run.data.status !== 'succeeded' ? <Progreso run={run.data} puedeEscribir={org.puedeEscribir} alReintentar={() => lanzar(true)} /> : null}
-      {run.isError ? <ErrorBloque error={run.error} onReintentar={() => run.refetch()} /> : null}
+      {(crudo && !runId) || (run.isError && esApiError(run.error) && run.error.status === 404)
+        ? <p className="text-[15px] text-muted-foreground">Esta wiki no existe o no es de esta organización.</p>
+        : run.isError ? <ErrorBloque error={run.error} onReintentar={() => run.refetch()} /> : null}
       {doc.data ? <Documento d={doc.data} /> : run.data?.status === 'succeeded' && doc.isPending ? <p className="text-texto-3" aria-busy="true">—</p> : null}
       {doc.isError ? <ErrorBloque error={doc.error} onReintentar={() => doc.refetch()} /> : null}
 

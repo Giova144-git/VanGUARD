@@ -8,6 +8,7 @@ import {
 import { z } from 'zod';
 import { api } from './api';
 import { USA_FIXTURES } from './env';
+import { esId } from './ids';
 import { useVivo } from './vivo';
 
 const base = { refetchIntervalInBackground: false, placeholderData: keepPreviousData } as const;
@@ -62,7 +63,7 @@ export function useHallazgos(org: string, f: FiltroHallazgos = {}) {
 export function useHallazgo(org: string, id: string | null) {
   const qc = useQueryClient();
   return useQuery({
-    queryKey: ['org', org, 'finding', id], enabled: !!id,
+    queryKey: ['org', org, 'finding', id], enabled: esId(id),
     queryFn: () => api(`/api/orgs/${org}/findings/${id}`, { esquema: Finding }),
     initialData: () => {
       for (const [, lista] of qc.getQueriesData<Finding[]>({ queryKey: ['org', org, 'findings'] })) {
@@ -78,14 +79,14 @@ export function useHallazgo(org: string, id: string | null) {
 
 // Con has_fix_prompt el BACK lo devuelve de caché, gratis (cached:true). Se guarda en ['org',org,'fix',id].
 export const useFixPrompt = (org: string, id: string, habilitado: boolean) => useQuery({
-  queryKey: ['org', org, 'fix', id], enabled: habilitado, staleTime: Infinity, retry: false,
+  queryKey: ['org', org, 'fix', id], enabled: habilitado && esId(id), staleTime: Infinity, retry: false,
   queryFn: () => api(`/api/orgs/${org}/findings/${id}/fix-prompt`, { method: 'POST', body: {}, esquema: FixPromptResponse }),
 });
 
 // Mientras queued|running: 10 s de respaldo (los pasos llegan por el evento de scan_runs). En fixtures, sin cupo que
 // cuidar, 1 s, para ver avanzar la simulación de 12 s.
 export const useScan = (org: string, id: string | undefined) => useQuery({
-  queryKey: ['org', org, 'scan', id], enabled: !!id, refetchIntervalInBackground: false,
+  queryKey: ['org', org, 'scan', id], enabled: esId(id), refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/scans/${id}`, { esquema: ScanRun }),
   refetchInterval: (q) => ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? (USA_FIXTURES ? 1_000 : 10_000) : false,
 });
@@ -103,7 +104,7 @@ export function useIncidentes(org: string, estado: 'open' | 'all') {
 export function useIncidente(org: string, id: string) {
   const vivo = useVivo();
   return useQuery({
-    ...base, queryKey: ['org', org, 'incident', id], queryFn: () => api(`/api/orgs/${org}/incidents/${id}`, { esquema: IncidentDetail }),
+    ...base, queryKey: ['org', org, 'incident', id], enabled: esId(id), queryFn: () => api(`/api/orgs/${org}/incidents/${id}`, { esquema: IncidentDetail }),
     refetchInterval: USA_FIXTURES ? 2_000 : intervalo(vivo, 10_000, 60_000),   // fixtures: sin cupo, para ver llenarse los hitos
   });
 }
@@ -140,12 +141,12 @@ export const useWikiRuns = (org: string, repo: string | null) => useQuery({
 });
 
 export const useWikiRun = (org: string, id: string | null) => useQuery({
-  queryKey: ['org', org, 'wiki', 'run', id], enabled: !!id, refetchIntervalInBackground: false,
+  queryKey: ['org', org, 'wiki', 'run', id], enabled: esId(id), refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/wiki/runs/${id}`, { esquema: WikiRun }),
   refetchInterval: (q) => ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? 3_000 : false,
 });
 
 export const useWikiDoc = (org: string, id: string | null, listo: boolean) => useQuery({
-  queryKey: ['org', org, 'wiki', 'doc', id], enabled: !!id && listo, staleTime: Infinity,
+  queryKey: ['org', org, 'wiki', 'doc', id], enabled: esId(id) && listo, staleTime: Infinity,
   queryFn: () => api(`/api/orgs/${org}/wiki/runs/${id}/doc`, { esquema: WikiDoc }),
 });

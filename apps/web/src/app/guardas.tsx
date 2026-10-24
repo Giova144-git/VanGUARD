@@ -20,13 +20,18 @@ export function RequireSession({ children }: { children?: ReactNode }) {
   return children ?? <Outlet />;
 }
 
-type OrgActual = { id: string; name: string; role: Role; is_demo: boolean; me: Me; puedeEscribir: boolean };
+export type OrgActual = { id: string; name: string; role: Role; is_demo: boolean; me: Me; puedeEscribir: boolean };
 const OrgCtx = createContext<OrgActual | null>(null);
 
 export function useOrg(): OrgActual {
   const o = useContext(OrgCtx);
   if (!o) throw new Error('useOrg fuera de RequireOrg');
   return o;
+}
+
+// Solo para tests (renderToStaticMarkup sin RequireOrg ni red): el mismo contexto con una org dada. La app no lo usa.
+export function OrgDePrueba({ org, children }: { org: OrgActual; children: ReactNode }) {
+  return <OrgCtx.Provider value={org}>{children}</OrgCtx.Provider>;
 }
 
 export function RequireOrg({ children }: { children?: ReactNode }) {

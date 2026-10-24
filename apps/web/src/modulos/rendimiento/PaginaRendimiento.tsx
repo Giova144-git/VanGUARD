@@ -6,6 +6,7 @@ import { GraficaComparativa } from '@/componentes/vg/GraficaComparativa';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { useOrg } from '@/app/guardas';
 import { usePerfRuns } from '@/lib/consultas';
+import { esApiError } from '@/lib/errores';
 import { cuando, decimal, duracion } from '@/lib/formato';
 import { agrupar, empeora, mismaSerie, type Estrategia, type Medicion, type Metrica } from '@/lib/perf';
 import { cn } from '@/lib/utils';
@@ -46,6 +47,9 @@ function Historico() {
   const nombre = METRICAS.find(([m]) => m === metrica)![1];
   const peorQueAntes = (i: number, k: Metrica) => i > 0 && empeora(k, serie[i - 1]![k], serie[i]![k]);
 
+  // 404 = el histórico (E24) aún no existe en esta API: igual que sin mediciones, no se pinta; arriba ya dice
+  // «Aún no medimos tu web». Un fallo de verdad sí va en rojo con su «Reintentar».
+  if (q.isError && esApiError(q.error) && q.error.status === 404) return null;
   if (q.isError) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   if (!q.data || serie.length < 2) return null;                      // con < 2 mediciones no se pinta (S10 §10.10)
   return (

@@ -5,12 +5,17 @@ interface CloudflareBindings {
   VG_ENV?: 'local' | 'production';
   APP_ORIGIN?: string;
   VG_VERSION?: string;
+  // WhatsApp real (asignaciones/back-whatsapp-real.md): '1' mientras la demo vaya por el sandbox (E27 y el despachador no
+  // exigen la ventana de 24 h); número visible de VanGUARD, solo dígitos, para los enlaces wa.me de E26.
+  KAPSO_SANDBOX?: string;
+  KAPSO_DISPLAY_NUMBER?: string;
 
   // bindings (BACK)
   JOBS_Q: Queue<import('./src/jobs.ts').JobMsg>;
   RL_API: RateLimit;
   RL_COSTLY: RateLimit;
   RL_INGEST: RateLimit;
+  RL_WA: RateLimit;   // respuestas de E31 a un mismo teléfono (3 / 60 s)
 
   // secretos de runtime: los carga Giovanni en el panel del Worker tras el primer deploy con main
   SUPABASE_URL?: string;

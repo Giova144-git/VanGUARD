@@ -31,7 +31,9 @@ const claims = (tok: string) => (tok === 'ana' ? { sub: ANA, email: 'ana@acme.de
 
 beforeEach(() => {
   rol = 'owner';
-  contacto = { id: 'c1', phone_e164: '+584141234567', verified_at: '2026-10-24T14:00:00+00:00' };
+  // B5: por defecto el contacto nos escribió hace 1 h (ventana de 24 h abierta) y PROD no lleva KAPSO_SANDBOX.
+  contacto = { id: 'c1', phone_e164: '+584141234567', verified_at: '2026-10-24T14:00:00+00:00',
+    wa_last_inbound_at: new Date(Date.now() - 3600_000).toISOString() };
   org = { name: 'Tienda Demo', is_demo: false };
   usadas = 0;
   errorInsert = null;
@@ -197,6 +199,67 @@ describe('E27 · envío', () => {
     expect((await error(r)).details?.provider_code).toBe('sin_config');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(inserts()).toEqual([]);
+  });
+});
+
+describe('E27 · ventana de 24 h de WhatsApp (B5)', () => {
+  const hace = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  it('lee wa_last_inbound_at en la MISMA consulta del contacto', async () => {
+    expect((await probar()).status).toBe(200);
+    const ops = doble.ops.filter((o) => o.table === 'contacts');
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.columns).toContain('wa_last_inbound_at');
+  });
+
+  it('nunca nos escribió → 409 window_closed con el mensaje para el FRONT, fila failed/window_closed y ni un fetch', async () => {
+    contacto = { ...contacto, wa_last_inbound_at: null };
+    const r = await probar();
+    expect(r.status).toBe(409);
+    const e = await error(r);
+    expect(e.code).toBe('conflict');
+    expect(e.details).toEqual({ reason: 'window_closed' });
+    expect(e.message).toBe('Escribe cualquier mensaje a VanGUARD desde ese teléfono y vuelve a probar');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(inserts()).toEqual([{ org_id: ORG, channel: 'whatsapp', template: 'test_v1', recipient_masked: '+58•••4567',
+      status: 'failed', error: 'window_closed' }]);
+    expect(updates()).toEqual([]);
+    // Ni siquiera se cuenta el tope: la ventana se mira antes.
+    expect(doble.ops.some((o) => o.table === 'notifications' && o.action === 'select')).toBe(false);
+  });
+
+  it('nos escribió hace más de 23 h 50 min → 409 window_closed sin fetch; hace 23 h 40 min → envía', async () => {
+    contacto = { ...contacto, wa_last_inbound_at: hace((23 * 60 + 51) * 60_000) };
+    const r = await probar();
+    expect(r.status).toBe(409);
+    expect((await error(r)).details?.reason).toBe('window_closed');
+    expect(fetchMock).not.toHaveBeenCalled();
+    contacto = { ...contacto, wa_last_inbound_at: hace((23 * 60 + 40) * 60_000) };
+    expect((await probar()).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('ventana abierta (formato de Postgres) → envía', async () => {
+    contacto = { ...contacto, wa_last_inbound_at: hace(5 * 60_000).replace('Z', '123+00:00') };
+    const r = await probar();
+    expect(r.status).toBe(200);
+    expect(NotificationTestResult.parse(await r.json()).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("KAPSO_SANDBOX='1' → envía aunque el contacto nunca nos haya escrito", async () => {
+    contacto = { ...contacto, wa_last_inbound_at: null };
+    const r = await probar(undefined, { env: { KAPSO_SANDBOX: '1' } });
+    expect(r.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(inserts()).toEqual([expect.objectContaining({ status: 'queued' })]);
+  });
+
+  it('sin verificar manda sobre la ventana: 409 unverified (no window_closed)', async () => {
+    contacto = { ...contacto, verified_at: null, wa_last_inbound_at: null };
+    const r = await probar();
+    expect((await error(r)).details?.reason).toBe('unverified');
+    expect(inserts()).toEqual([expect.objectContaining({ error: 'unverified' })]);
   });
 });
 

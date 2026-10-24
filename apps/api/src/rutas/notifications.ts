@@ -5,13 +5,15 @@ import { cuerpo } from '../lib/body.ts';
 import { db } from '../lib/db.ts';
 import { ApiError, fail } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
+import { ventanaAbierta } from '../lib/verificacion.ts';
 import { requireAdmin } from '../mw/admin.ts';
 import { requireProdHost } from '../mw/prod-host.ts';
 import { enmascararTelefono, enviarTexto, KapsoError, kapsoConfigurado } from '../notify/kapso.ts';
 
 // E27 · POST /api/orgs/:org/notifications/test · admin · solo officialvanguard.com · P0 (S15 15.4). WhatsApp al
 // contacto prioritario con whatsapp=true; solo si está verificado (§06.9). No pasa por el despachador ni mira la ventana
-// de la demo (§02.5.1). La voz es P1: 409 voice_disabled.
+// de la demo (§02.5.1), pero sí la de 24 h de WhatsApp (B5 de asignaciones/back-whatsapp-real.md). La voz es P1: 409
+// voice_disabled.
 export const notifications = new Hono<AppEnv>();
 
 export const PLANTILLA_PRUEBA = 'test_v1';
@@ -22,6 +24,9 @@ const CUENTAN = ['queued', 'sent', 'delivered', 'read'];
 
 export const textoPrueba = (org: string) =>
   `Prueba de VanGUARD: este WhatsApp recibira las alertas de seguridad de ${org.trim().slice(0, 80)}. No hace falta responder.`;
+
+// 409 window_closed (B5): el contacto abre la ventana de 24 h escribiendo él primero.
+export const MENSAJE_VENTANA = 'Escribe cualquier mensaje a VanGUARD desde ese teléfono y vuelve a probar';
 
 type Fila = { recipient_masked: string; status: 'queued' | 'failed' | 'skipped_cap'; error?: string };
 type Cierre = { status: 'sent'; provider_id: string; sent_at: string } | { status: 'failed'; error: string };
@@ -61,7 +66,9 @@ notifications.post('/orgs/:org/notifications/test', requireAdmin, requireProdHos
   const admin = db(c.env);
   const orgId = c.get('orgId');
   const rid = c.get('rid');
-  const { data: contacto, error: ec } = await admin.from('contacts').select('id, phone_e164, verified_at')
+  // wa_last_inbound_at (0008i) en la MISMA consulta: la ventana se decide con la fila que se va a usar.
+  const { data: contacto, error: ec } = await admin.from('contacts')
+    .select('id, phone_e164, verified_at, wa_last_inbound_at')
     .eq('org_id', orgId).eq('whatsapp', true).order('priority').limit(1).maybeSingle();
   if (ec) {
     log('error', 'notificacion.prueba_contacto_error', { rid, code: ec.code });
@@ -75,6 +82,15 @@ notifications.post('/orgs/:org/notifications/test', requireAdmin, requireProdHos
     await registrar(c, { recipient_masked, status: 'failed', error: 'unverified' });
     log('info', 'notificacion.prueba_sin_verificar', { rid, recipient_masked });
     throw new ApiError('conflict', 'Ese contacto aún no está verificado: no le enviamos nada real', { reason: 'unverified' });
+  }
+
+  // B5: fuera de la ventana de 24 h, Kapso acepta el texto (200) y Meta lo tira después con 131047: sería un ok:true
+  // falso. No se llama a Kapso; queda la fila failed/window_closed como la de unverified (no cuenta para los topes) y el
+  // FRONT pide al contacto que escriba primero. En el sandbox (KAPSO_SANDBOX='1') no se exige.
+  if (!ventanaAbierta(c.env, contacto.wa_last_inbound_at)) {
+    await registrar(c, { recipient_masked, status: 'failed', error: 'window_closed' });
+    log('info', 'notificacion.prueba_ventana_cerrada', { rid, recipient_masked });
+    throw new ApiError('conflict', MENSAJE_VENTANA, { reason: 'window_closed' });
   }
 
   const desde = new Date(Date.now() - 3600_000).toISOString();

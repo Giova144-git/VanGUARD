@@ -1,8 +1,9 @@
-// apps/web/src/lib/marca.ts  (dueño: FRONT, P0) · texto literal de S01 §01.1: no se reescribe
+// apps/web/src/lib/marca.ts  (dueño: FRONT, P0) · textos literales: no se reescriben. El oneliner es el de
+// platanus-hack-project.jsonc («project-oneliner-spanish»); index.html lo repite en su <meta name="description">.
 export const MARCA = {
   nombre: 'VanGUARD',
   oneliner:
-    'Conecta tu Supabase, tu Cloudflare y tu repo de GitHub: una IA audita todo tu ecosistema, detecta puntos débiles y ataques, y te avisa al instante por WhatsApp o llamada.',
+    'Conecta tu repo de GitHub, tu Supabase y tu Cloudflare: VanGUARD audita tu ecosistema, revisa cada push y te avisa al instante por WhatsApp con el arreglo listo para tu IA.',
   portada:
     'Encontramos lo que un atacante vería en tu Supabase, tu Cloudflare y tu código, te avisamos en segundos cuando alguien lo intenta y te damos el arreglo.',
   frases: [

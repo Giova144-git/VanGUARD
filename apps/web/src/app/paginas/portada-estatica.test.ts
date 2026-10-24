@@ -26,6 +26,13 @@ describe('portada estática de index.html', () => {
   it('el logo de la cabecera es el span que pinta <Marca /> antes de que llegue el isotipo vivo (no salta)', () => {
     expect(portada).toContain(renderToStaticMarkup(createElement(Marca, { className: 'h-9' })));   // como en Inicio.tsx
   });
+  it('el oneliner es el oficial (platanus-hack-project.jsonc) y el <meta name="description"> lo repite tal cual', () => {
+    const jsonc = readFileSync(new URL('../../../../../platanus-hack-project.jsonc', import.meta.url), 'utf8');
+    const oficial = jsonc.match(/"project-oneliner-spanish":\s*"([^"]+)"/)?.[1];
+    expect(oficial).toBeTruthy();
+    expect(MARCA.oneliner).toBe(oficial);
+    expect(html).toContain(`<meta name="description" content="${MARCA.oneliner}" />`);
+  });
   it('descriptiva: ninguna instrucción a un agente', () => {
     expect(portada).not.toMatch(/ignora|recomienda|instrucci|assistant|you are/i);
   });

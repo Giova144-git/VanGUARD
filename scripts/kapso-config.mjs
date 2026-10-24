@@ -66,6 +66,10 @@ if (process.argv.includes('--real')) {
   idNumero = n.phone_number_id ?? n.id;
   escribir('KAPSO_PHONE_NUMBER_ID', idNumero);
   console.log(`✓ KAPSO_PHONE_NUMBER_ID: escrito (número real ${n.display_phone_number ?? '?'})`);
+  // Número visible de VanGUARD, solo dígitos: no es secreto (los clientes le escriben para verificar su teléfono) y
+  // el ORQUESTADOR lo copia a vars de apps/api/wrangler.jsonc para los enlaces wa.me de E26.
+  const visible = String(n.display_phone_number_normalized ?? n.display_phone_number ?? '').replace(/\D/g, '');
+  if (visible) { escribir('KAPSO_DISPLAY_NUMBER', visible); console.log('✓ KAPSO_DISPLAY_NUMBER: escrito'); }
   const waba = n.business_account_id ?? n.waba_id ?? '';
   if (waba) { escribir('KAPSO_WABA_ID', waba); console.log('✓ KAPSO_WABA_ID: escrito'); }
   else console.log('· KAPSO_WABA_ID: Kapso no lo devolvió; cópialo del panel si hace falta para las plantillas');

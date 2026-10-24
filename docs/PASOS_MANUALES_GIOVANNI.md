@@ -175,6 +175,7 @@ Qué cambia en el `.env` de la raíz:
 | `KAPSO_API_KEY` | **Cambia:** la key del proyecto de la cuenta nueva |
 | `KAPSO_PHONE_NUMBER_ID` | **Cambia:** lo escribe el script (déjala como está; `--real` la pisa) |
 | `KAPSO_WABA_ID` | **Nueva:** la escribe el script |
+| `KAPSO_DISPLAY_NUMBER` | **Nueva:** el número visible de VanGUARD, solo dígitos; la escribe el script. No es secreto: avísame y lo pongo yo en `wrangler.jsonc` (no va con el script de secretos) |
 | `KAPSO_WEBHOOK_SECRET` | **Se rota:** bórrale el valor (deja `KAPSO_WEBHOOK_SECRET=`) y el script genera uno nuevo. Así el webhook de la cuenta vieja deja de servir |
 | `KAPSO_TEST_TO` | No cambia |
 

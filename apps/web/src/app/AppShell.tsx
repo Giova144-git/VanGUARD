@@ -1,7 +1,7 @@
 // Cascarón (S14 §14.5): riel con módulos en orden fijo, cabecera de 56 px y una sola fila de estado global.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
-import { Check, ChevronsUpDown, Clock, LogOut, PanelLeft, Siren, TriangleAlert, WifiOff } from 'lucide-react';
+import { Check, ChevronsUpDown, Clock, LogOut, PanelLeft, Search, Siren, TriangleAlert, WifiOff } from 'lucide-react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { Module, Overview } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
@@ -9,10 +9,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/componentes/ui/sheet';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { MarcaNumero, MarcasContador } from '@/componentes/vg/MarcasContador';
+import { PaletaComandos } from '@/componentes/vg/PaletaComandos';
+import { ESPERA_G_MS, leerTecla } from '@/lib/atajos';
 import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { cuando } from '@/lib/formato';
 import { MARCA } from '@/lib/marca';
-import { NAV, entradaNav, type EntradaNav } from '@/lib/nav';
+import { NAV, entradaNav, type EntradaNav, type IdNav } from '@/lib/nav';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { useOrg } from './guardas';
@@ -185,6 +187,26 @@ export default function AppShell() {
     return () => window.removeEventListener('keydown', tecla);
   }, [alternar]);
 
+  // «g» + letra y Ctrl+K (P1, §14.5). La lógica pura vive en lib/atajos.ts; aquí solo el temporizador de la «g».
+  const navegar = useNavigate();
+  const [paleta, setPaleta] = useState(false);
+  const irA = useCallback((id: IdNav) => navegar(`/o/${org.id}/${id}`), [navegar, org.id]);
+  useEffect(() => {
+    let pendiente = false;
+    let reloj: ReturnType<typeof setTimeout> | undefined;
+    const tecla = (e: KeyboardEvent) => {
+      if (paleta || e.defaultPrevented) return;                               // la paleta maneja sus propias teclas
+      const r = leerTecla(e, pendiente);
+      clearTimeout(reloj);
+      pendiente = r.gPendiente;
+      if (pendiente) reloj = setTimeout(() => { pendiente = false; }, ESPERA_G_MS);
+      if (r.accion?.tipo === 'paleta') { e.preventDefault(); setPaleta(true); }
+      else if (r.accion?.tipo === 'ir') { e.preventDefault(); irA(r.accion.destino); }
+    };
+    window.addEventListener('keydown', tecla);
+    return () => { clearTimeout(reloj); window.removeEventListener('keydown', tecla); };
+  }, [paleta, irA]);
+
   return (
     <div className="flex min-h-svh bg-background">
       <aside className={cn('sticky top-0 hidden h-svh shrink-0 border-r bg-sidebar transition-[width] md:block', compacto ? 'w-[4.5rem]' : 'w-60')}>
@@ -201,6 +223,9 @@ export default function AppShell() {
         <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/95 px-3 backdrop-blur md:px-4">
           <Button variant="fantasma" size="icono" onClick={alternar} aria-label="Mostrar u ocultar el menú (Ctrl+B)"><PanelLeft className="size-5" /></Button>
           <h1 className="flex-1 truncate text-[17px] font-semibold">{vista}</h1>
+          <Button variant="fantasma" size="icono" onClick={() => setPaleta(true)} aria-label="Ir a una pantalla (Ctrl+K)" title="Ir a… (Ctrl+K)">
+            <Search className="size-5" />
+          </Button>
           {org.puedeEscribir ? null : <Etiqueta texto="Demo · solo lectura" rol="info" />}
           {/* «IA en pausa» no trae acción al lado: neutra (L3). */}
           {overview.data?.ai?.enabled === false ? <Etiqueta texto="IA en pausa" rol="neutra" /> : null}
@@ -210,6 +235,7 @@ export default function AppShell() {
           <Outlet />
         </main>
       </div>
+      <PaletaComandos abierta={paleta} onCambio={setPaleta} alIr={irA} />
     </div>
   );
 }

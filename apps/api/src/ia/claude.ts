@@ -433,3 +433,88 @@ export async function pedirTextoAlerta(env: CloudflareBindings, p: { org_id: str
   return llamarIA(env, { org_id: p.org_id, ruta: 'alert_text', sistema: SISTEMA_ALERTA, esquema: AlertTextIA,
     datos: p.hechos, timeoutMs: p.timeoutMs });
 }
+
+// ── Rutas de texto de DeepWiki (packages/deepwiki/LEEME.md, punto 7; ruta de ai_usage en 0010) ──────────────────────
+// Mismo orden que llamarIA: IA_CORTE → vg_ai_status → vg_ai_reserve → llamada → vg_ai_settle; nunca lanza. Sin NUCLEO ni
+// esquema JSON: la salida es Markdown del motor, cuyo system ya marca el repo como dato no confiable (<repo_*>) y que
+// redacta y sanea lo que devuelve (sin HTML, enlaces ni URLs; Mermaid con lista blanca). El modelo lo elige el motor
+// (modeloPara con los de la corrida) y max_tokens es el suyo, acotado por el plan de la ruta.
+export type RutaWiki = 'wiki_triage' | 'wiki_area' | 'wiki_sintesis';
+type PlanTexto = { effort: 'low' | 'medium'; max_tokens: number; timeoutMs: number; retries: number };
+// max_tokens = MAX_TOKENS_SALIDA del motor (4.000, 1.500 y 6.000): el techo con que el motor corta antes de pagar.
+// Sin reintentos del SDK: los reintenta la cola (y el timeout queda por debajo de los 5 min de la marca de síntesis).
+const PLAN_WIKI: Record<RutaWiki, PlanTexto> = {
+  wiki_triage:   { effort: 'low', max_tokens: 4000, timeoutMs: 60_000, retries: 0 },
+  wiki_area:     { effort: 'low', max_tokens: 1500, timeoutMs: 60_000, retries: 0 },
+  wiki_sintesis: { effort: 'medium', max_tokens: 6000, timeoutMs: 120_000, retries: 0 },
+};
+// Escalera (11.3): la wiki es opcional y la síntesis va con Sonnet; en minimal no corre.
+const WIKI_POR_NIVEL: Record<Nivel, boolean> = { normal: true, reduced: true, minimal: false };
+const MODELOS_WIKI: ReadonlySet<string> = new Set<Modelo>(['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5']);
+
+export type UsoTexto = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number;
+  cache_creation_input_tokens: number };
+// stop_reason max_tokens o refusal vuelve con ok: el motor los convierte en avisos o en su documento de respaldo.
+// reintentar: el ritmo por minuto o un 429 de rate limit se liberan solos (la cola reintenta en vez de fallar).
+export type ResultadoTexto =
+  | { ok: true; texto: string; model: string; uso: UsoTexto; stop_reason: string | null; cost_usd: number }
+  | { ok: false; code: Fallo; reintentar?: boolean };
+
+export async function llamarIATexto(env: CloudflareBindings, p: { org_id: string; ruta: RutaWiki; modelo: string;
+  sistema: string; usuario: string; maxTokens: number; timeoutMs?: number }): Promise<ResultadoTexto> {
+  if (env.IA_CORTE === '1') return { ok: false, code: 'disabled' };
+  if (!env.ANTHROPIC_API_KEY) return { ok: false, code: 'disabled' };
+  const plan = PLAN_WIKI[p.ruta];
+  if (!plan || !MODELOS_WIKI.has(p.modelo)) return { ok: false, code: 'invalid' };
+  const modelo = p.modelo as Modelo;
+  const max_tokens = Math.min(plan.max_tokens, Math.max(1, Math.floor(p.maxTokens) || plan.max_tokens));
+  const st = await estadoIA(env, p.org_id);
+  if (!st || !st.enabled) return { ok: false, code: 'disabled' };
+  if (st.level === 'off' || !WIKI_POR_NIVEL[st.level]) return { ok: false, code: 'budget' };
+  if (st.calls_1m >= RITMO_POR_MINUTO) return { ok: false, code: 'budget', reintentar: true };
+
+  // Peor caso con la misma cota que llamarIA (2 caracteres por token, sin count_tokens)
+  const entrada = Math.ceil((p.sistema.length + p.usuario.length) / 2);
+  if (modelo === 'claude-haiku-5-5' && entrada > TOPE_HAIKU_TOKENS) return { ok: false, code: 'invalid' };
+  const peor = peorCasoUSD(modelo, entrada, max_tokens, false);
+  if (peor > TOPE_PETICION_USD) return { ok: false, code: 'budget' };
+  const rv = await reservarIA(env, p.org_id, p.ruta, modelo, peor);
+  if (!rv?.ok || !rv.usage_id) {
+    if (rv?.code === 'disabled') return { ok: false, code: 'disabled' };
+    return rv?.scope === 'rate' ? { ok: false, code: 'budget', reintentar: true } : { ok: false, code: 'budget' };
+  }
+  const reserva = rv.usage_id;
+
+  let msg: Anthropic.Message;
+  try {
+    const ai = (cliente ??= new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 0 }));
+    // Sin temperature, top_p, top_k, tool_choice ni tools (11.2, 11.11). El system del motor es estable: punto de caché.
+    const cuerpo = { model: modelo, max_tokens,
+      system: [{ type: 'text', text: p.sistema, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: p.usuario }], output_config: { effort: plan.effort } } as any;   // output_config: cast puntual
+    msg = await ai.messages.create(cuerpo, { timeout: p.timeoutMs ?? plan.timeoutMs, maxRetries: plan.retries }) as Anthropic.Message;
+  } catch (e) {
+    const status = e instanceof Anthropic.APIError && typeof e.status === 'number' ? e.status : null;
+    const es4xx = status !== null && status < 500;
+    await liquidarIA(env, reserva, { cost: es4xx ? 0 : null, stop: es4xx ? 'error_4xx' : 'error_transient' });
+    log('warn', 'ia.error', { ruta: p.ruta, model: modelo, usage_id: reserva, status,
+      error_type: e instanceof Anthropic.APIError ? e.type : null, tipo: e instanceof Error ? e.name : 'desconocido' });
+    const code = falloProveedor(e, status);
+    const ritmo = status === 429 && !(e instanceof Error && SIN_SALDO.test(e.message));
+    return ritmo ? { ok: false, code, reintentar: true } : { ok: false, code };
+  }
+
+  const u = msg.usage as UsoMensaje;
+  const costo = costoMensajeUSD(msg.model, u);
+  const refusal = msg.stop_reason === 'refusal' ? (msg.stop_details?.category ?? 'unknown') : null;
+  await liquidarIA(env, reserva, { input: u.input_tokens, cache_read: u.cache_read_input_tokens,
+    cache_write: u.cache_creation_input_tokens, output: u.output_tokens, cost: costo, stop: msg.stop_reason ?? 'unknown',
+    refusal, request_id: msg.id });
+  log('info', 'ia.llamada', { ruta: p.ruta, model: msg.model, usage_id: reserva, request_id: msg.id,
+    stop_reason: msg.stop_reason, refusal, input_tokens: u.input_tokens ?? 0, output_tokens: u.output_tokens ?? 0,
+    cache_read: u.cache_read_input_tokens ?? 0, cache_write: u.cache_creation_input_tokens ?? 0, cost_usd: costo });
+  const texto = msg.content.flatMap((bl) => (bl.type === 'text' ? [bl.text] : [])).join('');   // sin bloques thinking
+  return { ok: true, texto, model: msg.model, stop_reason: msg.stop_reason ?? null, cost_usd: costo,
+    uso: { input_tokens: u.input_tokens ?? 0, output_tokens: u.output_tokens ?? 0,
+      cache_read_input_tokens: u.cache_read_input_tokens ?? 0, cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0 } };
+}

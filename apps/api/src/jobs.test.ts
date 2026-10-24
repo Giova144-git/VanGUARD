@@ -10,6 +10,9 @@ vi.mock('./lib/db.ts', () => ({ db: () => estado.client }));
 vi.mock('./lib/credentials.ts', () => ({
   withSecret: async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn('tok-de-prueba'),
 }));
+// Pasos 'wiki': aquí solo el enrutado y los reintentos de la cola; el consumidor se prueba en wiki/pasos.test.ts.
+const wiki = vi.hoisted(() => ({ paso: vi.fn(), dlq: vi.fn() }));
+vi.mock('./wiki/pasos.ts', () => ({ pasoWiki: wiki.paso, cierreWikiDlq: wiki.dlq }));
 const { cierreDlq, colaEnSerie, conConexion, registrarPaso, runJob, siguientePaso, pasosDe, REINTENTOS } = await import('./jobs.ts');
 const { ProviderError } = await import('./lib/http.ts');
 const { pasoRepo } = await import('./scans/repo-paso.ts');
@@ -588,6 +591,48 @@ describe('cierreDlq', () => {
   });
 });
 
+const RUN_WIKI = '3a110000-0000-4000-8000-000000000001';
+describe('kind wiki (DeepWiki)', () => {
+  const wmsg = (paso: 'arbol' | 'triage' = 'arbol') =>
+    mensajeDoble({ v: 1, kind: 'wiki', org_id: ORG, wiki_run_id: RUN_WIKI, paso });
+  beforeEach(() => { wiki.paso.mockReset(); wiki.dlq.mockReset(); });
+
+  it('runJob pasa el mensaje y attempts a pasoWiki; ack → ack, sin tocar scan_runs', async () => {
+    wiki.paso.mockResolvedValue('ack');
+    const d = envDoble();
+    const m = Object.assign(wmsg('triage'), { attempts: 3 });
+    await runJob(d.env, m);
+    expect(wiki.paso).toHaveBeenCalledWith(d.env, m.body, 3);
+    expect(m.ack).toHaveBeenCalled(); expect(m.retry).not.toHaveBeenCalled();
+    expect(doble.ops).toEqual([]);
+    expect(doble.rpcs).toEqual([]);
+  });
+
+  it('{ retry } → m.retry con ese delaySeconds y sin ack; si pasoWiki lanza → retry a 10 s', async () => {
+    wiki.paso.mockResolvedValueOnce({ retry: 120 });
+    const m1 = wmsg();
+    await runJob(envDoble().env, m1);
+    expect(m1.retry).toHaveBeenCalledWith({ delaySeconds: 120 }); expect(m1.ack).not.toHaveBeenCalled();
+    wiki.paso.mockRejectedValueOnce(new TypeError('boom'));
+    const m2 = wmsg();
+    await runJob(envDoble().env, m2);
+    expect(m2.retry).toHaveBeenCalledWith({ delaySeconds: 10 }); expect(m2.ack).not.toHaveBeenCalled();
+  });
+
+  it('cierreDlq de un mensaje wiki → cierreWikiDlq (ack o retry), nunca el cierre de auditorías', async () => {
+    wiki.dlq.mockResolvedValueOnce('ack').mockResolvedValueOnce({ retry: 30 });
+    const m1 = wmsg();
+    await cierreDlq(envDoble().env, m1);
+    expect(wiki.dlq).toHaveBeenCalledWith(expect.anything(), m1.body);
+    expect(m1.ack).toHaveBeenCalled();
+    const m2 = wmsg();
+    await cierreDlq(envDoble().env, m2);
+    expect(m2.retry).toHaveBeenCalledWith({ delaySeconds: 30 });
+    expect(wiki.paso).not.toHaveBeenCalled();
+    expect(doble.ops).toEqual([]);
+  });
+});
+
 // Hallazgo 3: el doble de dev-node corre la cadena en serie, cada paso entero antes del siguiente. Además imita los
 // reintentos de Workers Queues: attempts+1 tras delaySeconds, max_retries 3 y luego la DLQ.
 describe('colaEnSerie (dev-node)', () => {
@@ -708,6 +753,24 @@ describe('colaEnSerie (dev-node)', () => {
     expect(fallas).toEqual([expect.any(TypeError)]);
     expect(paso('cloudflare')).toMatchObject({ status: 'done' });
     expect(estadoScan).toBe('succeeded');
+  });
+
+  it('un paso wiki que pide retry vuelve con attempts+1 tras su delay; agotado max_retries, al cierre wiki de la DLQ', async () => {
+    vi.useFakeTimers();
+    const vistos: { intento: number; t: number }[] = [];
+    const t0 = Date.now();
+    wiki.paso.mockReset().mockImplementation(async (_e: unknown, _b: unknown, intento: number) => {
+      vistos.push({ intento, t: Date.now() - t0 });
+      return { retry: 120 };
+    });
+    wiki.dlq.mockReset().mockResolvedValue('ack');
+    const { cola, drenar, fallas } = montar();
+    await cola.send({ v: 1, kind: 'wiki', org_id: ORG, wiki_run_id: RUN_WIKI, paso: 'area', area: 'src' });
+    await drenar(600_000);
+    expect(vistos).toEqual([{ intento: 1, t: 0 }, { intento: 2, t: 120_000 }, { intento: 3, t: 240_000 }, { intento: 4, t: 360_000 }]);
+    expect(wiki.dlq).toHaveBeenCalledOnce();
+    expect(wiki.dlq.mock.calls[0]?.[1]).toMatchObject({ kind: 'wiki', paso: 'area', area: 'src' });
+    expect(fallas).toEqual([]);
   });
 
   it('una fuente que no logra escribir steps[i] ni en su paso ni en la DLQ → el cierre forzado la deja failed y recalcula', async () => {

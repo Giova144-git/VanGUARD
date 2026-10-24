@@ -3,18 +3,23 @@ import { db } from './lib/db.ts';
 import { ProviderError } from './lib/http.ts';
 import { log } from './lib/log.ts';
 import { conexionActiva } from './scans/comun.ts';
+import { cierreWikiDlq, pasoWiki, type RespuestaCola } from './wiki/pasos.ts';
 
 // Cola vg-jobs (S15 15.8): un mensaje = un paso = una invocación (max_batch_size 1). Solo ids, nunca tokens.
 export type Paso = 'supabase' | 'cloudflare' | 'repo' | 'zip' | 'psi' | 'puntaje' | 'resumen_ia';
 // Dependencias compactas que el paso repo pasa a su continuación de OSV: [ecosistema, paquete, versión, dev 0/1].
 export type DepCompacta = [string, string, string, 0 | 1];
+// DeepWiki (wiki/pasos.ts): un paso por mensaje; `area` solo con paso 'area' (nombre del área, no es un secreto).
+export type PasoWiki = 'arbol' | 'triage' | 'area' | 'sintesis';
 
 export type JobMsg =
   | { v: 1; kind: 'scan'; scan_run_id: string; org_id: string; paso: Paso; cursor?: string; deps?: DepCompacta[] }
   | { v: 1; kind: 'escalate'; org_id: string; incident_id: string; level: number }
-  | { v: 1; kind: 'eval'; org_id: string };
+  | { v: 1; kind: 'eval'; org_id: string }
+  | { v: 1; kind: 'wiki'; org_id: string; wiki_run_id: string; paso: PasoWiki; area?: string };
 
 export type MsgScan = Extract<JobMsg, { kind: 'scan' }>;
+export type MsgWiki = Extract<JobMsg, { kind: 'wiki' }>;
 
 // Lo que devuelve cada paso. `continuar` re-encola el mismo paso con cursor, en una invocación nueva (regla 3).
 // connection_id: la conexión cuyo token usó el paso; con error_code 'unauthorized', guarded la marca revoked (§07.5). Si
@@ -250,9 +255,25 @@ export async function guarded(env: CloudflareBindings, m: Message<JobMsg>, b: Ms
   m.ack();
 }
 
+// DeepWiki: wiki/pasos.ts decide ack o retry (sus transitorios se reintentan hasta MAX_REINTENTOS_COLA y en la última
+// entrega la corrida falla con su código; lo que revienta sin decidir va a la DLQ, que la deja failed con 'dlq').
+// Si algo lanza fuera de lo previsto, retry: sin escritura no hay ack.
+async function correrWiki(env: CloudflareBindings, m: Message<JobMsg>, b: MsgWiki, dlq: boolean) {
+  let r: RespuestaCola;
+  try {
+    r = dlq ? await cierreWikiDlq(env, b) : await pasoWiki(env, b, m.attempts);
+  } catch (e) {
+    log('error', 'wiki.excepcion', { name: (e as Error)?.name, dlq });
+    r = { retry: 10 };
+  }
+  if (r === 'ack') m.ack();
+  else m.retry({ delaySeconds: r.retry });
+}
+
 export async function runJob(env: CloudflareBindings, m: Message<JobMsg>) {
   const b = m.body;
   if (b?.kind === 'scan') { await guarded(env, m, b); return; }
+  if (b?.kind === 'wiki') { await correrWiki(env, m, b, false); return; }
   // escalate (P1) y eval (plan B de la ingesta) aún no tienen manejador: no se reintentan.
   log('warn', 'job.sin_manejador', { kind: b?.kind ?? null });
   m.ack();
@@ -264,6 +285,7 @@ export async function runJob(env: CloudflareBindings, m: Message<JobMsg>) {
 export async function cierreDlq(env: CloudflareBindings, m: Message<JobMsg>) {
   const b = m.body;
   log('warn', 'job.dlq', { kind: b?.kind ?? null, intentos: m.attempts });
+  if (b?.kind === 'wiki') { await correrWiki(env, m, b, true); return; }
   if (b?.kind === 'scan') {
     try {
       const scan = await leerScan(env, b);

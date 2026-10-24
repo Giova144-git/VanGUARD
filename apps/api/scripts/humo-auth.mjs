@@ -2,7 +2,7 @@
 //   SUPABASE_URL=… SUPABASE_PUBLISHABLE_KEY=sb_publishable_… node scripts/humo-auth.mjs
 // Solo usa la clave PUBLICABLE (pública por diseño, aplica RLS). Comprueba:
 //   (1) signInAnonymously da un JWT con is_anonymous=true y rol authenticated;
-//   (2) join_demo_org() une la sesión como viewer a la org de demo;
+//   (2) E4 POST /api/demo/join une la sesión como viewer a la org de demo, y la RPC join_demo_org está revocada (0008d);
 //   (3) el canal privado org:<demo> llega a SUBSCRIBED y recibe un broadcast
 //       (se dispara aparte con realtime.send o con un cambio en scan_runs/findings/incidents de la demo);
 //   (4) un canal público es rechazado («Allow public access» OFF);
@@ -13,6 +13,7 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const ESPERA_MS = Number(process.env.HUMO_ESPERA_MS || 45_000);
+const API = process.env.HUMO_API || 'https://officialvanguard.com';   // E4 de la API desplegada (o http://localhost:8787)
 const ORG_IDOR_A = '00000000-0000-4000-a000-00000000a001';
 if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) { console.log('MAL faltan SUPABASE_URL o SUPABASE_PUBLISHABLE_KEY'); process.exit(1); }
 
@@ -35,8 +36,12 @@ try {
   const claims = JSON.parse(Buffer.from(data.session.access_token.split('.')[1], 'base64url').toString());
   ok('JWT con is_anonymous=true y rol authenticated', claims.is_anonymous === true && claims.role === 'authenticated');
 
-  const { data: demo, error: ej } = await sb.rpc('join_demo_org');
-  ok('join_demo_org devuelve la org de demo', !ej && typeof demo === 'string');
+  // «Ver demo» por la vía principal: E4 de la API (el FRONT hace lo mismo). La RPC join_demo_org quedó revocada (0008d).
+  const r4 = await fetch(`${API}/api/demo/join`, { method: 'POST', headers: { authorization: `Bearer ${data.session.access_token}` } });
+  const demo = (await r4.json().catch(() => null))?.org_id;
+  ok(`E4 POST /api/demo/join → ${r4.status} con la org de demo`, r4.status === 200 && typeof demo === 'string');
+  const { error: ej } = await sb.rpc('join_demo_org');
+  ok('la RPC join_demo_org ya no es ejecutable por authenticated (42501)', ej?.code === '42501');
   // Informativo: en este proyecto authenticated no tiene SELECT en las tablas de public (los datos van por la API);
   // si algún día se concede, RLS debe dejar ver solo la org de demo.
   const { data: orgs, error: eo } = await sb.from('orgs').select('id, is_demo');

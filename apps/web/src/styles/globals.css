@@ -11,14 +11,14 @@
   --popover:#FFFFFF; --popover-foreground:#17181B; --muted:#DDD8CE; --muted-foreground:#54595F;
   --texto-3:#6B7078; --border:#CFC9BC; --input:#CFC9BC; --borde-fuerte:#807A6E;  /* #938C7E no llegaba a 3:1 */
   --mal:#B91C1C; --aviso:#9A4708; --bien:#126D34; --info:#1D4ED8;                  /* aviso y bien oscurecidos: 4,5:1 sobre muted */
-  --marca:#7C3AED; --marca-texto:#FFFFFF;
+  --marca:#046C4E; --marca-texto:#FFFFFF;   /* verde esmeralda (antes violeta), distinto del verde de «bien» */
 }
 .dark {                                   /* oscuro (por defecto) */
   --background:#0A0A0A; --foreground:#FFFFFF; --card:#232327; --card-foreground:#FFFFFF;
   --popover:#232327; --popover-foreground:#FFFFFF; --muted:#303036; --muted-foreground:#A8AEB9;
   --texto-3:#7C828C; --border:#3C3C43; --input:#3C3C43; --borde-fuerte:#797982;  /* #5E5E69 no llegaba a 3:1 */
   --mal:#FF6F8E; --aviso:#F59E0B; --bien:#4ADE80; --info:#60A5FA;
-  --marca:#A78BFA; --marca-texto:#0A0A0A;
+  --marca:#10B981; --marca-texto:#0A0A0A;   /* esmeralda: más azulado que --bien (#4ADE80) */
 }
 :root, .dark {
   --primary:var(--info); --primary-foreground:var(--card); --ring:var(--info); --destructive:var(--mal);

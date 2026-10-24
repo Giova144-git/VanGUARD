@@ -16,6 +16,7 @@ import { scans } from './scans.ts';
 import { traffic } from './traffic.ts';
 import { wiki } from './wiki.ts';
 import { health } from './health.ts';
+import { ia } from './ia.ts';
 import { me } from './me.ts';
 import { orgs } from './orgs.ts';
 
@@ -40,3 +41,4 @@ rutas.route('/', wiki);
 rutas.route('/', exportRuta);
 rutas.route('/', perf);
 rutas.route('/', revision);
+rutas.route('/', ia);

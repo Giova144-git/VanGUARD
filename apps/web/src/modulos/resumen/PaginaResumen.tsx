@@ -46,16 +46,18 @@ function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
   );
 }
 
-function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones }: {
+function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones, puedeEscribir }: {
   org: string; modulo: Module; proveedor: 'supabase' | 'cloudflare' | 'github'; icono: LucideIcon; conexiones: ConnectionPublic[] | undefined;
+  puedeEscribir: boolean;
 }) {
   const navegar = useNavigate();
   const estado = useEstadoModulo(org, modulo);
   const c = conexiones?.find((x) => x.provider === proveedor && x.kind === 'read');
   const e = entradaNav(modulo)!;
   if (conexiones && !c) return (
+    // El viewer no puede conectar nada: el botón va apagado con su motivo, como en PantallaModulo.
     <BotonGrande icono={Icono} titulo={`Conectar ${NOMBRE[modulo]}`} descripcion={e.descripcion}
-      onClick={() => navegar(`/o/${org}/connections/${proveedor}`)} />
+      deshabilitado={puedeEscribir ? undefined : SOLO_LECTURA} onClick={() => navegar(`/o/${org}/connections/${proveedor}`)} />
   );
   const chapa = c ? chapaEstado(c) : null;
   return (
@@ -103,7 +105,7 @@ export default function PaginaResumen() {
 
       <section className="flex flex-wrap items-end justify-between gap-6 rounded-xl border bg-card p-5" aria-label="Puntaje">
         {/* Sin `o` pinta la misma estructura con «—»: la sección no crece al llegar el dato (L7). */}
-        <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={`/o/${org.id}/connections`} />
+        <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} />
         <div className="flex flex-col items-start gap-2">
           <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
             disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
@@ -140,9 +142,9 @@ export default function PaginaResumen() {
       <section className="flex flex-col gap-3" aria-label="Tu ecosistema">
         <h3 className="text-[17px] font-semibold">Tu ecosistema</h3>
         <div className="grid gap-3 lg:grid-cols-3">
-          <TarjetaVertical org={org.id} modulo="supabase" proveedor="supabase" icono={Database} conexiones={conexiones.data} />
-          <TarjetaVertical org={org.id} modulo="cloudflare" proveedor="cloudflare" icono={Cloud} conexiones={conexiones.data} />
-          <TarjetaVertical org={org.id} modulo="codebase" proveedor="github" icono={GitBranch} conexiones={conexiones.data} />
+          <TarjetaVertical org={org.id} modulo="supabase" proveedor="supabase" icono={Database} conexiones={conexiones.data} puedeEscribir={org.puedeEscribir} />
+          <TarjetaVertical org={org.id} modulo="cloudflare" proveedor="cloudflare" icono={Cloud} conexiones={conexiones.data} puedeEscribir={org.puedeEscribir} />
+          <TarjetaVertical org={org.id} modulo="codebase" proveedor="github" icono={GitBranch} conexiones={conexiones.data} puedeEscribir={org.puedeEscribir} />
         </div>
       </section>
 

@@ -23,7 +23,7 @@ import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
-import { PINTA_PASO, estadoPaso, estadoScan, textoPaso } from './pasos';
+import { PINTA_PASO, estadoPaso, estadoScan, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
 const ORDEN_SEV: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -86,6 +86,7 @@ function Pasos({ run }: { run: ScanRun }) {
         const t = textoPaso(s.name);
         const e = estadoPaso(run, s);
         const p = PINTA_PASO[e];
+        const nota = notaPaso(s);
         const prov = t.modulo ? PROVEEDOR[t.modulo] : undefined;
         // L3: el ámbar de «No pudimos revisarlo» va con su acción (abrir el módulo); sin módulo (resumen con IA), neutro.
         const rol = e === 'error' && !t.modulo ? 'neutra' : p.rol;
@@ -93,8 +94,9 @@ function Pasos({ run }: { run: ScanRun }) {
           <li key={s.name} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
             <PuntoEstado rol={rol} hueco={p.hueco} girando={p.girando} />
             <div className="flex min-w-0 flex-1 flex-col">
-              <span className="text-[15px] font-medium">{t.nombre}{s.findings != null && e === 'hecho' ? <span className="text-muted-foreground"> · {s.findings} {s.findings === 1 ? 'hallazgo' : 'hallazgos'}</span> : null}</span>
+              <span className="text-[15px] font-medium">{t.nombre}{s.findings != null && (e === 'hecho' || e === 'en_parte') ? <span className="text-muted-foreground"> · {s.findings} {s.findings === 1 ? 'hallazgo' : 'hallazgos'}</span> : null}</span>
               <span className="text-[12.5px] text-texto-3">{t.detalle}</span>
+              {nota ? <span className="text-[12.5px] text-muted-foreground">{nota}</span> : null}
             </div>
             <span className="text-sm text-muted-foreground">{p.texto}</span>
             {e === 'sin_mirar' && prov ? <Link to={`/o/${org.id}/connections/${prov}`} className="inline-flex items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4"><KeyRound className="size-3.5" />Sin conexión · Conectar</Link> : null}
@@ -161,7 +163,7 @@ function Corrida({ id }: { id: string }) {
   if (!run) return <p className="text-texto-3" aria-busy="true">—</p>;
   const est = estadoScan(run.status);
   // `in` también da true con «__proto__» o «constructor»: textoPaso usa Object.hasOwn y, si no, el texto crudo.
-  const actual = typeof run.step === 'string' && run.step ? textoPaso(run.step).nombre : null;
+  const actual = textoPasoActual(run.step);
   const terminada = run.status === 'succeeded';
   const ordenados = [...(hallazgos.data ?? [])].sort((a, b) => orden(a.severity) - orden(b.severity));
 
@@ -182,7 +184,7 @@ function Corrida({ id }: { id: string }) {
       {run.status === 'failed' ? (
         <div className="flex flex-col gap-3">
           {/* ApiError para que mensajeDe muestre el `run.error` del servidor (con un Error suelto saldría «Algo falló»). */}
-          <ErrorBloque error={new ApiError(0, 'run_failed', run.error ?? 'La auditoría falló')} />
+          <ErrorBloque error={new ApiError(0, 'run_failed', textoFallo(run.error))} />
           <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>
           {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
         </div>

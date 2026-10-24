@@ -8,7 +8,8 @@ import { z } from 'zod';
 import { fixtures as fx, ConnectionPublic } from '@vanguard/contracts';
 import { OrgDePrueba, SOLO_LECTURA, type OrgActual } from '@/app/guardas';
 import { TINTE } from '@/lib/severidad';
-import { VistaPrevia } from './AnalizarZip';
+import { ApiError } from '@/lib/errores';
+import { VistaPrevia, textoEnvio } from './AnalizarZip';
 import PaginaCodebase from './PaginaCodebase';
 import type { Analisis } from './zip/tipos';
 
@@ -130,3 +131,22 @@ describe('VistaPrevia', () => {
     expect(html).toContain('No encontramos secretos ni archivos .env subidos.');
   });
 });
+
+describe('textoEnvio · errores de E23 (POST …/scans/:id/zip-result)', () => {
+  const err = (status: number, code: string, message: string, reason?: string) =>
+    new ApiError(status, code, message, undefined, reason ? { reason } : undefined);
+  it('cada 409 dice qué hacer: volver a pulsar «Subir resultado» (cada envío abre una auditoría nueva)', () => {
+    for (const r of ['not_waiting', 'expired', 'not_zip']) expect(textoEnvio(err(409, 'conflict', 'x', r))).toMatch(/«Subir resultado» otra vez/);
+    expect(textoEnvio(err(409, 'conflict', 'Mensaje del servidor', '__proto__'))).toBe('Mensaje del servidor');
+  });
+  it('413: demasiados resultados; 422: el secreto sin tapar o la forma, nunca «Revisa los campos marcados»', () => {
+    expect(textoEnvio(err(413, 'invalid_body', 'El cuerpo de la petición pasa de 1 MB'))).toBe('Hay demasiados resultados para enviarlos');
+    expect(textoEnvio(err(422, 'invalid_body', 'El resultado trae algo que parece un secreto sin enmascarar', 'looks_like_secret'))).toMatch(/secreto sin tapar/);
+    expect(textoEnvio(err(422, 'invalid_body', 'Revisa los campos marcados'))).toBe('El resultado no tiene la forma que esperábamos: vuelve a elegir el ZIP');
+  });
+  it('429 con el texto del cupo del servidor; sin ApiError, «Algo falló»', () => {
+    expect(textoEnvio(err(429, 'rate_limited', 'Ya analizaste 20 ZIP hoy'))).toBe('Ya analizaste 20 ZIP hoy');
+    expect(textoEnvio(new Error('x'))).toBe('Algo falló');
+  });
+});
+

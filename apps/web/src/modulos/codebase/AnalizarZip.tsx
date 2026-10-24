@@ -17,7 +17,7 @@ import { textoErrorZip } from '@/lib/errores-escaneo';
 import { SEP, bytes, miles } from '@/lib/formato';
 import { subirZip } from '@/lib/mutaciones';
 import { porQueImporta } from '@/lib/reglas-texto';
-import { severidad } from '@/lib/severidad';
+import { deMapa, severidad } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { ErrorZip, analizarZipLocal, nombreSeguro, validarZip } from './zip-local';
 import type { Analisis, CodigoZip, FaseZip } from './zip/tipos';
@@ -46,9 +46,23 @@ type Estado =
 
 const plural = (n: number, uno: string, varios: string) => `${miles(n)} ${n === 1 ? uno : varios}`;
 
-function textoEnvio(e: unknown): string {
-  if (esApiError(e) && e.status === 413) return 'Hay demasiados resultados para enviarlos';
-  if (esApiError(e) && e.status === 429) return e.message || mensajeDe(e);    // el cupo de ZIP del día lo explica el servidor
+// E23 (rutas/scans.ts): 409 con details.reason, 413 por el bodyLimit de 1 MB y 422 si el ZipResult no pasa zod o el
+// cable trampa de la base ve un secreto sin tapar. Cada «Subir resultado» abre una auditoría nueva (E11), así que la
+// salida de los 409 es volver a pulsarlo. El 422 de zod llega con «Revisa los campos marcados», que aquí no dice nada.
+const RAZON_409: Record<string, string> = {
+  not_waiting: 'Esa auditoría ya no esperaba el resultado: pulsa «Subir resultado» otra vez',
+  expired: 'Pasaron más de 15 minutos desde que empezó el envío: pulsa «Subir resultado» otra vez',
+  not_zip: 'Esa auditoría no es de un ZIP: pulsa «Subir resultado» otra vez',
+};
+export function textoEnvio(e: unknown): string {
+  if (!esApiError(e)) return mensajeDe(e);
+  const razon = e.details?.reason;
+  if (e.status === 413) return 'Hay demasiados resultados para enviarlos';
+  if (e.status === 409) return deMapa(RAZON_409, razon, mensajeDe(e));
+  if (e.status === 422) return razon === 'looks_like_secret'
+    ? 'Algo del resultado parecía un secreto sin tapar y no guardamos nada. Vuelve a elegir el ZIP; si se repite, avísanos.'
+    : 'El resultado no tiene la forma que esperábamos: vuelve a elegir el ZIP';
+  if (e.status === 429) return e.message || mensajeDe(e);    // el cupo de ZIP del día lo explica el servidor
   return mensajeDe(e);
 }
 

@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VanGUARD · Identidad</title>
+<link rel="icon" href="logo/favicon-dark.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@200..800&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<script src="mark-data.js"></script>
+<style>
+  :root {
+    --ink: #0A0A0A;
+    --paper: #F7F7F5;
+    --bone: #EDEDEA;
+    --bg: var(--ink);
+    --fg: var(--bone);
+    --muted: #7A7A76;
+    --rule: #1E1E1C;
+    --card: #111110;
+  }
+  :root[data-theme="light"] {
+    --bg: var(--paper);
+    --fg: #121211;
+    --muted: #6A6A65;
+    --rule: #E4E4E0;
+    --card: #FFFFFF;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { background: var(--bg); }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 300 15px/1.6 "Geist", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    transition: background .5s, color .5s;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  header.top {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 28px 0; font: 400 11px/1 "Geist Mono", monospace; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  button {
+    color: var(--fg); background: none; cursor: pointer;
+    border: 1px solid var(--rule); border-radius: 999px; padding: 9px 16px;
+    letter-spacing: .12em; text-transform: uppercase; font: 400 11px/1 "Geist Mono", monospace;
+    transition: border-color .2s, background .2s;
+  }
+  button:hover { border-color: var(--muted); }
+  button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
+  /* ---------- Marca ---------- */
+  .vg { display: block; width: 100%; height: auto; overflow: visible; fill: currentColor; }
+  .vg .eye { transform-box: view-box; transform-origin: 100px 60px; }
+  .vg .look { transform-box: view-box; transform-origin: 104px 60px; }
+  /* Al reabrir, la pupila se estrecha un poco y se relaja, como al recibir luz. */
+  .vg .pupil { transform-box: view-box; transform-origin: 104px 100px; }
+  .vg.react .pupil { animation: vg-react 1.4s cubic-bezier(.33,0,.2,1) .26s; }
+  @keyframes vg-react { 30% { transform: scaleX(.84); } }
+  .vg .iris { transition: fill .4s; }
+
+  .vg.draw .ink { stroke-dasharray: 1; stroke-dashoffset: 1; animation: vg-draw var(--dur) cubic-bezier(.6,0,.3,1) var(--delay) forwards; }
+  @keyframes vg-draw { to { stroke-dashoffset: 0; } }
+  /* Terminado el trazado, las máscaras sobran y recortarían las puntas. */
+  .vg:not(.draw) .inked { mask: none; }
+
+
+  .vg.scan .look { animation: vg-scan 2.6s cubic-bezier(.45,0,.55,1) infinite; }
+  @keyframes vg-scan { 0%, 100% { transform: translateX(-14px); } 50% { transform: translateX(14px); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .vg *, .vg { animation: none !important; transition: none !important; stroke-dashoffset: 0 !important; }
+  }
+
+  /* ---------- Hero ---------- */
+  .hero { min-height: 74vh; display: grid; place-items: center; text-align: center; padding: 32px 0 24px; }
+  #hero-mark { width: min(440px, 78vw); margin: 0 auto; }
+  .word {
+    font-weight: 300; letter-spacing: .42em; text-indent: .42em; font-size: clamp(18px, 3vw, 26px);
+    margin-top: 40px;
+  }
+  .word b { font-weight: 650; }
+  .tag { color: var(--muted); font-size: 13px; margin-top: 12px; letter-spacing: .02em; }
+  .controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 40px; }
+
+  /* ---------- Secciones ---------- */
+  section { border-top: 1px solid var(--rule); padding: 72px 0; }
+  h2 {
+    font: 400 11px/1 "Geist Mono", monospace; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 36px; display: flex; gap: 16px;
+  }
+  h2 span { color: var(--fg); }
+  p.note { color: var(--muted); max-width: 600px; margin-bottom: 40px; }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .tile {
+    aspect-ratio: 4/3; border-radius: 4px; display: grid; place-items: center; position: relative;
+    border: 1px solid var(--rule);
+  }
+  .tile > div:first-child { width: 58%; }
+  .tile small {
+    position: absolute; left: 14px; bottom: 12px; font: 400 10px/1 "Geist Mono", monospace;
+    letter-spacing: .12em; text-transform: uppercase; opacity: .55;
+  }
+  .t-ink { background: var(--ink); color: var(--bone); }
+  .t-paper { background: var(--paper); color: #121211; }
+
+  .sizes { display: flex; align-items: flex-end; gap: 40px; flex-wrap: wrap; }
+  .sizes figure { display: grid; gap: 12px; justify-items: start; }
+  .sizes figcaption { font: 400 10px/1 "Geist Mono", monospace; color: var(--muted); letter-spacing: .1em; }
+
+  .lockups { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .lockup { border: 1px solid var(--rule); border-radius: 4px; padding: 56px 32px; display: grid; place-items: center; }
+  .lockup img { width: min(100%, 420px); height: auto; }
+  .files { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .file { border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; color: inherit; text-decoration: none; }
+  .file div { height: 120px; display: grid; place-items: center; padding: 20px; }
+  .file img { max-width: 100%; max-height: 64px; }
+  .file p { padding: 10px 12px; font: 400 10.5px/1.4 "Geist Mono", monospace; color: var(--muted); border-top: 1px solid var(--rule); word-break: break-all; }
+  .file:hover p { color: var(--fg); }
+  code { font: 400 .92em "Geist Mono", monospace; }
+
+  .construct { display: grid; place-items: center; background: var(--card); border: 1px solid var(--rule); border-radius: 4px; padding: 48px 16px; }
+  .construct svg { width: min(680px, 100%); overflow: visible; }
+  .construct .ghost { fill: var(--fg); opacity: .14; }
+  .construct .axis { fill: none; stroke: var(--fg); opacity: .7; stroke-width: .35; stroke-dasharray: 1.2 1.2; }
+  .construct .pt { fill: var(--fg); }
+  .construct text { font: 400 3.4px "Geist Mono", monospace; fill: var(--muted); }
+
+  .tokens { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .swatch { border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+  .swatch div { height: 96px; }
+  .swatch p { padding: 12px 14px; font: 400 11px/1.7 "Geist Mono", monospace; color: var(--muted); }
+  .swatch p b { color: var(--fg); font-weight: 400; display: block; }
+
+  footer { border-top: 1px solid var(--rule); padding: 32px 0 48px; color: var(--muted); font: 400 11px/1 "Geist Mono", monospace; letter-spacing: .1em; }
+
+  @media (max-width: 560px) {
+    section { padding: 56px 0; }
+    .sizes { gap: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span>VanGUARD — Identidad v0.4</span>
+    <button id="theme" type="button">Claro</button>
+  </header>
+
+  <div class="hero">
+    <div>
+      <div id="hero-mark"></div>
+      <div class="word">VAN<b>GUARD</b></div>
+      <p class="tag">Vigilancia continua para tu producto.</p>
+      <div class="controls">
+        <button type="button" data-act="draw">Trazar</button>
+        <button type="button" data-act="blink">Parpadear</button>
+        <button type="button" data-act="scan" aria-pressed="false">Escanear</button>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <h2>01 <span>Concepto</span></h2>
+    <p class="note">Un ojo de pupila rasgada, hecho de trazos pesados con remates cortados en bisel. La G se escribe de un solo gesto: el ala superior, el párpado, el párpado inferior y la cuña del travesaño. La V es la pupila y va por encima de la G: dos hojas que la cruzan, abriéndole un hueco, y se cierran en una punta bajo el párpado. Un vigía que no parpadea.</p>
+    <div class="construct">
+      <svg id="construct" viewBox="-4 -6 208 124" aria-hidden="true"></svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>02 <span>Variantes</span></h2>
+    <div class="grid">
+      <div class="tile t-ink"><div data-mark></div><small>Principal · tinta</small></div>
+      <div class="tile t-paper"><div data-mark></div><small>Principal · papel</small></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>03 <span>Escalas</span></h2>
+    <p class="note">Por debajo de 64 px se usa la versión compacta: más peso en cada trazo.</p>
+    <div class="sizes" id="sizes"></div>
+  </section>
+
+  <section>
+    <h2>04 <span>Logo con nombre</span></h2>
+    <p class="note">El nombre va en trazos (Geist 300 + 650, espaciado 0,42 em), a la derecha del símbolo y centrado en la línea de las esquinas del ojo. No se recompone a mano: se usa el archivo.</p>
+    <div class="lockups">
+      <div class="lockup t-ink"><img src="logo/vanguard-logo-on-dark.svg" alt="VanGUARD"></div>
+      <div class="lockup t-paper"><img src="logo/vanguard-logo-on-light.svg" alt="VanGUARD"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>05 <span>Archivos</span></h2>
+    <p class="note">Todo en <code>brand/logo/</code>. Sin sufijo usan <code>currentColor</code> (toman el color del texto); <code>-on-dark</code> es hueso para fondos oscuros y <code>-on-light</code> es tinta para fondos claros.</p>
+    <div class="files" id="files"></div>
+  </section>
+
+  <section>
+    <h2>06 <span>Color y tipo</span></h2>
+    <div class="tokens">
+      <div class="swatch"><div style="background:#0A0A0A"></div><p><b>Tinta</b>#0A0A0A</p></div>
+      <div class="swatch"><div style="background:#F7F7F5"></div><p><b>Papel</b>#F7F7F5</p></div>
+      <div class="swatch"><div style="background:#EDEDEA"></div><p><b>Hueso</b>#EDEDEA · logo sobre tinta</p></div>
+      <div class="swatch"><div style="display:grid;place-items:center;font-size:40px;font-weight:250;letter-spacing:.1em">Aa</div><p><b>Geist 300 / 650</b>Geist Mono para datos</p></div>
+    </div>
+  </section>
+
+  <footer>Mueve el cursor: la pupila te sigue.</footer>
+</div>
+
+<script>
+  const M = window.VG_MARK;
+  // Orden y tiempos del trazado: la G de un solo gesto y luego la pupila.
+  // rev: el eje se recorre al revés para que el gesto sea continuo.
+  const DRAW = {
+    'wing':    { delay: 0,    dur: .45, rev: true },
+    'lid-top': { delay: .4,   dur: .6,  rev: true },
+    'lid-low': { delay: .95,  dur: .7 },
+    'bar':     { delay: 1.6,  dur: .4 },
+    'iris-l':  { delay: 1.9,  dur: .75 },
+    'iris-r':  { delay: 1.9,  dur: .75 },
+  };
+  let uid = 0;
+
+
+  function reverseAxis(d) {
+    const n = d.match(/-?[\d.]+/g);
+    return `M${n[6]} ${n[7]} C${n[4]} ${n[5]} ${n[2]} ${n[3]} ${n[0]} ${n[1]}`;
+  }
+
+  function mark({ compact = false, animate = false, extra = '' } = {}) {
+    const k = uid++;
+    const shapes = compact ? M.compact : M.shapes;
+    const gap = M.gap * (compact ? 1.3 : 1);
+    let defs = '';
+    const path = (s, cls, style = '') => {
+      if (!animate) return `<path class="${cls}" d="${s.d}"${style}/>`;
+      const t = DRAW[s.id], id = `vg-m-${k}-${s.id}`;
+      if (!defs.includes(`id="${id}"`)) defs += `<mask id="${id}" maskUnits="userSpaceOnUse" x="-20" y="-20" width="240" height="160">
+        <path class="ink" d="${t.rev ? reverseAxis(s.axis) : s.axis}" pathLength="1" fill="none" stroke="#fff" stroke-width="24"
+          style="--delay:${t.delay}s;--dur:${t.dur}s"/></mask>`;
+      const frames = !compact && M.blink.lids[s.id];
+      const d = frames ? frames[0] : s.d;
+      return `<path class="${cls} inked" d="${d}" mask="url(#${id})"${style}${frames ? ` data-blink="${s.id}"` : ''}/>`;
+    };
+    const G = shapes.filter(s => !s.iris), V = shapes.filter(s => s.iris);
+    const parts = G.map(s => path(s, 'part')).join('');
+    const iris = V.map(s => path(s, 'iris')).join('');
+    // La V va encima: abre un hueco en la G que se mueve con ella.
+    const knock = V.map(s => path(s, 'ko')).join('');
+    // Al cerrar el ojo, la pupila (y su hueco) se recortan hasta la línea del párpado.
+    const clip = `vg-clip-${k}`;
+    if (animate) defs += `<clipPath id="${clip}"><path d="${M.blink.clip[0]}" data-blink="clip"/></clipPath>`;
+    const clipped = inner => animate ? `<g clip-path="url(#${clip})"><g class="pupil">${inner}</g></g>` : inner;
+    defs += `<mask id="vg-over-${k}" maskUnits="userSpaceOnUse" x="-20" y="-20" width="240" height="160">
+      <rect x="-20" y="-20" width="240" height="160" fill="#fff"/>
+      ${clipped(`<g class="look" fill="#000" stroke="#000" stroke-width="${gap}" stroke-linejoin="round">${knock}</g>`)}</mask>`;
+    return `<svg class="vg ${extra}" viewBox="${M.viewBox}" role="img" aria-label="VanGUARD">
+      <g class="eye"><g mask="url(#vg-over-${k})">${parts}</g>${clipped(`<g class="look">${iris}</g>`)}</g>
+      <defs>${defs}</defs></svg>`;
+  }
+
+  document.getElementById('hero-mark').innerHTML = mark({ animate: true, extra: 'draw' });
+  document.querySelectorAll('[data-mark]').forEach(el => {
+    el.innerHTML = mark({ compact: el.dataset.mark === 'compact' });
+  });
+  const FILES = [
+    ['vanguard-logo-on-dark.svg', 'ink'], ['vanguard-logo-on-light.svg', 'paper'], ['vanguard-logo.svg', 'paper'],
+    ['vanguard-mark-on-dark.svg', 'ink'], ['vanguard-mark-on-light.svg', 'paper'], ['vanguard-mark.svg', 'paper'],
+    ['vanguard-mark-compact-on-dark.svg', 'ink'], ['vanguard-mark-compact-on-light.svg', 'paper'], ['vanguard-mark-compact.svg', 'paper'],
+    ['favicon-dark.svg', 'paper'], ['favicon-light.svg', 'ink'],
+  ];
+  document.getElementById('files').innerHTML = FILES.map(([f, bg]) =>
+    `<a class="file" href="logo/${f}" download><div class="t-${bg}"><img src="logo/${f}" alt=""></div><p>${f}</p></a>`
+  ).join('');
+  const sizes = [16, 24, 32, 48, 96, 192];
+  document.getElementById('sizes').innerHTML = sizes.map(w =>
+    `<figure><div style="width:${w}px">${mark({ compact: w < 64 })}</div><figcaption>${w}px</figcaption></figure>`
+  ).join('');
+
+  // Construcción: la marca en fantasma con los ejes de cada trazo encima.
+  const ends = M.shapes.flatMap(s => {
+    const n = s.axis.match(/-?[\d.]+/g).map(Number);
+    return [[n[0], n[1]], [n[6], n[7]]];
+  });
+  document.getElementById('construct').innerHTML =
+    M.shapes.map(s => `<path class="ghost" d="${s.d}"/>`).join('') +
+    M.shapes.map(s => `<path class="axis" d="${s.axis}"/>`).join('') +
+    ends.map(([x, y]) => `<circle class="pt" cx="${x}" cy="${y}" r=".9"/>`).join('') +
+    `<text x="0" y="-1">6 trazos · eje cúbico + perfil de grosor + bisel</text>
+     <text x="150" y="20">ala</text>
+     <text x="140" y="74">cuña</text>
+     <text x="108" y="113">punta de la pupila</text>`;
+
+  const hero = document.querySelector('#hero-mark .vg');
+  const looks = hero.querySelectorAll('.look');
+  const calm = matchMedia('(prefers-reduced-motion: reduce)');
+
+  // Quita .draw cuando termina el último trazo.
+  hero.addEventListener('animationend', e => {
+    if (e.animationName === 'vg-draw' && e.target.closest('mask').id.endsWith('iris-r')) hero.classList.remove('draw');
+  });
+
+  function restart(cls) {
+    hero.classList.remove(cls); void hero.getBoundingClientRect(); hero.classList.add(cls);
+  }
+
+  // ---------- Mirada ----------
+  // La pupila se mueve en dos ejes dentro del ojo con un resorte amortiguado: sigue al
+  // cursor con suavidad y, si nadie la mira, hace sacadas (saltos rápidos) a puntos al azar.
+  const RANGE = { x: 17, up: 8, down: 6 };
+  const gaze = { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0, k: .07, damp: .74 };
+  let lastPointer = 0;
+
+  function aim(nx, ny, quick) {
+    const m = Math.hypot(nx, ny);
+    if (m > 1) { nx /= m; ny /= m; }   // dentro de una elipse, no de un rectángulo
+    gaze.tx = nx * RANGE.x;
+    gaze.ty = ny * (ny < 0 ? RANGE.up : RANGE.down);
+    Object.assign(gaze, quick ? { k: .22, damp: .6 } : { k: .07, damp: .74 });
+  }
+
+  function gazeLoop() {
+    gaze.vx = (gaze.vx + (gaze.tx - gaze.x) * gaze.k) * gaze.damp;
+    gaze.vy = (gaze.vy + (gaze.ty - gaze.y) * gaze.k) * gaze.damp;
+    gaze.x += gaze.vx; gaze.y += gaze.vy;
+    // Al mirar de lado la pupila se ve un poco de perfil.
+    const squash = 1 - .1 * Math.min(1, Math.abs(gaze.x) / RANGE.x);
+    const t = `translate(${gaze.x.toFixed(2)}px, ${gaze.y.toFixed(2)}px) scaleX(${squash.toFixed(3)})`;
+    looks.forEach(g => { g.style.transform = t; });
+    requestAnimationFrame(gazeLoop);
+  }
+  if (!calm.matches) requestAnimationFrame(gazeLoop);
+
+  window.addEventListener('pointermove', e => {
+    lastPointer = performance.now();
+    const box = hero.getBoundingClientRect();
+    const nx = (e.clientX - (box.left + box.width / 2)) / (window.innerWidth / 2);
+    const ny = (e.clientY - (box.top + box.height / 2)) / (window.innerHeight / 2);
+    aim(nx * 1.4, ny * 1.4, false);
+  });
+  document.addEventListener('pointerleave', () => aim(0, 0, false));
+
+  function saccade() {
+    const a = Math.random() * Math.PI * 2, r = Math.random() < .3 ? 0 : .35 + Math.random() * .55;
+    aim(Math.cos(a) * r, Math.sin(a) * r * .8, true);
+  }
+  (function idle() {
+    if (performance.now() - lastPointer > 2500) saccade();
+    setTimeout(idle, 900 + Math.random() * 2200);
+  })();
+
+  // ---------- Parpadeo ----------
+  // Los cuadros vienen precalculados de build-mark.py (forma de cada párpado y recorte de
+  // la pupila). Se reproducen con requestAnimationFrame interpolando entre cuadros vecinos,
+  // así el movimiento es continuo a cualquier frecuencia de pantalla.
+  const NUM = /-?\d+(?:\.\d+)?/g;
+  const tracks = [...hero.querySelectorAll('[data-blink]')].map(el => {
+    const id = el.dataset.blink;
+    const frames = id === 'clip' ? M.blink.clip : M.blink.lids[id];
+    return { el, rest: frames[0], tpl: frames[0].split(NUM), nums: frames.map(f => f.match(NUM).map(Number)) };
+  });
+  let blinking = 0;
+
+  function blink() {
+    if (calm.matches || blinking) return;
+    const t0 = performance.now(), dur = M.blink.dur * 1000;
+    restart('react');
+    blinking = requestAnimationFrame(function step(now) {
+      const f = Math.min(1, (now - t0) / dur);
+      for (const tr of tracks) {
+        const pos = f * (tr.nums.length - 1), i = Math.min(Math.floor(pos), tr.nums.length - 2), a = pos - i;
+        const A = tr.nums[i], B = tr.nums[i + 1];
+        let d = tr.tpl[0];
+        for (let j = 0; j < A.length; j++) d += (A[j] + (B[j] - A[j]) * a).toFixed(2) + tr.tpl[j + 1];
+        tr.el.setAttribute('d', f < 1 ? d : tr.rest);
+      }
+      // A veces la mirada cambia mientras el ojo está cerrado, como en un parpadeo real.
+      if (f > .3 && f < .32 && performance.now() - lastPointer > 2500 && Math.random() < .5) saccade();
+      blinking = f < 1 ? requestAnimationFrame(step) : 0;
+    });
+  }
+
+  // Intervalos irregulares y, de vez en cuando, un parpadeo doble.
+  function scheduleBlink() {
+    setTimeout(() => {
+      blink();
+      if (Math.random() < .2) setTimeout(blink, M.blink.dur * 1000 + 160);
+      scheduleBlink();
+    }, 3500 + Math.random() * 5500);
+  }
+  setTimeout(scheduleBlink, 3600);
+
+  document.querySelectorAll('[data-act]').forEach(btn => btn.addEventListener('click', () => {
+    const act = btn.dataset.act;
+    if (act === 'draw') { aim(0, 0, false); restart('draw'); }
+    if (act === 'blink') blink();
+    if (act === 'scan') {
+      const on = hero.classList.toggle(act);
+      btn.setAttribute('aria-pressed', on);
+    }
+  }));
+
+  const themeBtn = document.getElementById('theme');
+  themeBtn.addEventListener('click', () => {
+    const light = document.documentElement.dataset.theme !== 'light';
+    document.documentElement.dataset.theme = light ? 'light' : 'dark';
+    themeBtn.textContent = light ? 'Oscuro' : 'Claro';
+  });
+</script>
+</body>
+</html>

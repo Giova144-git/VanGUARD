@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.137.0",
     "@supabase/supabase-js": "2.118.0",
     "@vanguard/contracts": "workspace:*",
     "@vanguard/core": "workspace:*",

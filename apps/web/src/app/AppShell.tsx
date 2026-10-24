@@ -80,7 +80,7 @@ function SelectorOrg({ compacto }: { compacto: boolean }) {
           <DropdownMenuItem key={o.id} onSelect={() => navegar(`/o/${o.id}`)}>
             <span className="flex-1 truncate">{o.name}</span>
             {o.is_demo ? <Etiqueta texto="Demo" rol="info" /> : null}
-            {o.id === org.id ? <Check className="size-4 text-info" /> : null}
+            {o.id === org.id ? <Check className="size-4 text-foreground" /> : null}
           </DropdownMenuItem>
         ))}
         {org.me.user.is_anonymous ? null : <DropdownMenuItem onSelect={() => navegar('/start')}>Crear organización</DropdownMenuItem>}
@@ -158,7 +158,7 @@ function FilaEstado({ overview, fallos, sinConexiones }: { overview: UseQueryRes
     <div className="flex flex-wrap items-center gap-3 border-b bg-info-relleno px-4 py-2.5 md:px-6">
       <TriangleAlert className="size-5 shrink-0 text-info" />
       <span className="flex-1 text-sm font-medium">Conecta tu primer servicio</span>
-      <Link to="connections" className="text-sm font-semibold text-info underline underline-offset-4">Conectar</Link>
+      <Link to="connections" className="text-sm font-semibold text-foreground underline underline-offset-4">Conectar</Link>
     </div>
   );
   return <div role="status" aria-live="polite">{contenido}</div>;

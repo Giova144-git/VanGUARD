@@ -54,7 +54,7 @@ function AvisoQuitada({ q }: { q: Quitada }) {
   return (
     <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-4 py-3 text-sm">
       <span className="font-medium">Quitado · {cuando(q.en)}</span>
-      {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-info underline underline-offset-4">
+      {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-4">
         Revoca también el token en {q.nombre}<ExternalLink className="size-3.5" /></a> : null}
     </div>
   );
@@ -107,7 +107,7 @@ function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: 
 }
 
 export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
-  proveedor: Exclude<Provider, 'ingest'>; conexiones: ConnectionPublic[]; descripcion: string; icono: React.ComponentType<{ className?: string }>;
+  proveedor: Exclude<Provider, 'ingest'>; conexiones: ConnectionPublic[]; descripcion: string; icono: React.ComponentType<{ className?: string; strokeWidth?: number }>;
 }) {
   const org = useOrg();
   const navegar = useNavigate();
@@ -119,7 +119,7 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
   return (
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-labelledby={`tarjeta-${proveedor}`}>
       <div className="flex items-center gap-3">
-        <span className="flex size-10 items-center justify-center rounded-lg bg-info-relleno text-info"><Icono className="size-5" /></span>
+        <span className="flex size-10 items-center justify-center rounded-lg bg-muted text-foreground"><Icono className="size-5" strokeWidth={1.5} /></span>
         <div className="flex min-w-0 flex-1 flex-col">
           <h3 id={`tarjeta-${proveedor}`} className="text-[17px] font-semibold">{g.nombre}</h3>
           <p className="text-sm text-muted-foreground">{descripcion}</p>

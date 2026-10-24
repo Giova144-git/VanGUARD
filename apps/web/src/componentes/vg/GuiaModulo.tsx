@@ -11,7 +11,7 @@ export function GuiaModulo({ id }: { id: IdNav }) {
       <ol className="flex flex-col gap-3">
         {g.pasos.map((p, i) => (
           <li key={i} className="flex gap-3 text-[15px] leading-relaxed">
-            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-info-relleno text-sm font-semibold text-info tabular-nums">{i + 1}</span>
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground tabular-nums">{i + 1}</span>
             <span className="pt-0.5 text-muted-foreground">{p}</span>
           </li>
         ))}

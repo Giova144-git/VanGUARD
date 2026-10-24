@@ -15,24 +15,21 @@
            Textos literales de lib/marca.ts (un test lo comprueba). -->
       <div id="portada-estatica" class="flex min-h-svh flex-col">
         <header class="mx-auto flex w-full max-w-5xl items-center px-4 py-5 md:px-6">
-          <span class="flex items-center gap-2">
-            <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-info-relleno text-marca"></span>
-            <span class="text-[17px] font-semibold tracking-tight">Van<span class="text-marca">GUARD</span></span>
-          </span>
+          <span role="img" aria-label="VanGUARD" class="logo-vg logo-vg-nombre h-7"></span>
         </header>
         <main class="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-10 px-4 py-8 md:px-6 md:py-16">
           <section class="flex max-w-3xl flex-col gap-5">
-            <h1 class="text-4xl font-semibold tracking-tight md:text-5xl">VanGUARD</h1>
+            <h1 class="text-4xl font-light tracking-tight md:text-5xl">VanGUARD</h1>
             <p class="text-lg leading-relaxed text-muted-foreground md:text-xl">Encontramos lo que un atacante vería en tu Supabase, tu Cloudflare y tu código, te avisamos en segundos cuando alguien lo intenta y te damos el arreglo.</p>
             <div class="mt-2 flex flex-wrap gap-3">
-              <a href="/demo" class="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring border-transparent bg-marca text-marca-texto hover:opacity-90 h-14 px-5">Ver demo en vivo</a>
-              <a href="/login" class="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring bg-info-relleno text-info border-info hover:bg-info/15 h-14 px-5">Entrar</a>
+              <a href="/demo" class="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-full border font-mono text-[13px] font-medium uppercase tracking-[0.06em] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring border-transparent bg-marca text-marca-texto hover:opacity-90 h-14 px-5">Ver demo en vivo</a>
+              <a href="/login" class="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-full border font-mono text-[13px] font-medium uppercase tracking-[0.06em] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring bg-transparent text-foreground border-foreground hover:bg-muted h-14 px-5">Entrar</a>
             </div>
           </section>
           <section class="grid gap-3 md:grid-cols-3" aria-label="Qué hace VanGUARD">
-            <div class="flex flex-col gap-3 rounded-xl border bg-card p-5"><span class="flex size-10 items-center justify-center rounded-lg bg-info-relleno text-info"></span><p class="text-[15px] leading-relaxed">Somos una herramienta digital que protege tu producto.</p></div>
-            <div class="flex flex-col gap-3 rounded-xl border bg-card p-5"><span class="flex size-10 items-center justify-center rounded-lg bg-info-relleno text-info"></span><p class="text-[15px] leading-relaxed">Analizamos tu sistema contra los puntos débiles existentes y los corregimos.</p></div>
-            <div class="flex flex-col gap-3 rounded-xl border bg-card p-5"><span class="flex size-10 items-center justify-center rounded-lg bg-info-relleno text-info"></span><p class="text-[15px] leading-relaxed">Evaluamos tu ecosistema con inteligencia artificial y blindamos tu producto en tiempo real.</p></div>
+            <div class="flex flex-col gap-3 rounded-xl border bg-card p-5"><span class="flex size-10 items-center justify-center rounded-lg bg-muted text-foreground"><span class="logo-vg logo-vg-compacto h-4" aria-hidden="true"></span></span><p class="text-[15px] leading-relaxed">Somos una herramienta digital que protege tu producto.</p></div>
+            <div class="flex flex-col gap-3 rounded-xl border bg-card p-5"><span class="flex size-10 items-center justify-center rounded-lg bg-muted text-foreground"></span><p class="text-[15px] leading-relaxed">Analizamos tu sistema contra los puntos débiles existentes y los corregimos.</p></div>
+            <div class="flex flex-col gap-3 rounded-xl border bg-card p-5"><span class="flex size-10 items-center justify-center rounded-lg bg-muted text-foreground"></span><p class="text-[15px] leading-relaxed">Evaluamos tu ecosistema con inteligencia artificial y blindamos tu producto en tiempo real.</p></div>
           </section>
         </main>
         <footer class="mx-auto flex w-full max-w-5xl flex-wrap items-center gap-x-4 gap-y-1 px-4 py-6 text-[12.5px] text-texto-3 md:px-6">

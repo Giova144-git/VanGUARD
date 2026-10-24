@@ -119,7 +119,7 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
           <ul className="flex flex-wrap gap-2">
             {refs.map((r) => (
               <li key={r.href}><a href={r.href} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 font-mono text-[13px] text-info underline underline-offset-4">{r.id}<ExternalLink className="size-3.5" /></a></li>
+                className="inline-flex items-center gap-1 font-mono text-[13px] text-foreground underline underline-offset-4">{r.id}<ExternalLink className="size-3.5" /></a></li>
             ))}
           </ul>
         ) : null}

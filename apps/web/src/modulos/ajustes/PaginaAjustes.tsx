@@ -34,7 +34,7 @@ function Interruptor({ activo, onCambio, etiqueta }: { activo: boolean; onCambio
   return (
     <button type="button" role="switch" aria-checked={activo} aria-label={etiqueta} onClick={() => onCambio(!activo)}
       className={cn('relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        activo ? 'border-info bg-info-relleno' : 'bg-muted')}>
+        activo ? 'border-foreground bg-muted' : 'bg-muted')}>
       <span className={cn('inline-block size-5 rounded-full transition-transform', activo ? 'translate-x-6 bg-info' : 'translate-x-1 bg-borde-fuerte')} />
     </button>
   );
@@ -161,7 +161,7 @@ function Contactos({ org }: { org: string }) {
           return (
           <li key={f.clave} className="flex flex-col gap-3 rounded-xl border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="flex size-7 items-center justify-center rounded-full bg-info-relleno text-sm font-semibold text-info tabular-nums" role="img" aria-label={`Prioridad ${i + 1}`}>{i + 1}</span>
+              <span className="flex size-7 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground tabular-nums" role="img" aria-label={`Prioridad ${i + 1}`}>{i + 1}</span>
               <Etiqueta texto={verificado ? 'Verificado' : 'Sin verificar'} rol={verificado ? 'bien' : 'aviso'} />
               <span className="flex-1" />
               <Button variant="fantasma" size="icono" disabled={i === 0} onClick={() => mover(i, -1)} aria-label="Subir prioridad"><ArrowUp /></Button>

@@ -17,7 +17,7 @@ export function SectorPlegable({ titulo, icono: Icono, defaultOpen = false, recu
   return (
     <CollapsiblePrimitive.Root open={abierto} onOpenChange={cambiar} className="rounded-xl border bg-card">
       <CollapsiblePrimitive.Trigger className="flex min-h-14 w-full items-center gap-3 px-5 text-left text-[17px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        {Icono ? <Icono className="size-5 text-info" /> : null}
+        {Icono ? <Icono className="size-5 text-muted-foreground" strokeWidth={1.5} /> : null}
         <span className="flex-1">{titulo}</span>
         <ChevronDown className={cn('size-5 text-texto-3 transition-transform', abierto && 'rotate-180')} />
       </CollapsiblePrimitive.Trigger>

@@ -18,6 +18,14 @@ describe.each([['claro', ':root'], ['oscuro', '.dark']])('contraste del tema %s'
     expect(contraste(t['marca-texto']!, t.marca!)).toBeGreaterThanOrEqual(4.5);
     for (const f of fondos) expect(contraste(t.marca!, t[f]!), `marca sobre ${f}`).toBeGreaterThanOrEqual(4.5);
   });
+  it('marca monocroma (brand/README.md): es el color del texto y su texto es el fondo; nunca un color de estado', () => {
+    expect(t.marca!.toUpperCase()).toBe(t.foreground!.toUpperCase());
+    expect(t['marca-texto']!.toUpperCase()).toBe(t.background!.toUpperCase());
+    for (const rol of ['mal', 'aviso', 'bien', 'info']) expect(t.marca!.toUpperCase(), rol).not.toBe(t[rol]!.toUpperCase());
+  });
+  it('texto secundario (muted-foreground) ≥ 4,5:1 contra background, card y muted', () => {
+    for (const f of fondos) expect(contraste(t['muted-foreground']!, t[f]!), `muted-foreground sobre ${f}`).toBeGreaterThanOrEqual(4.5);
+  });
   it.each(['texto-3', 'borde-fuerte'])('%s ≥ 3:1 contra background, card y muted', (rol) => {
     for (const f of fondos) expect(contraste(t[rol]!, t[f]!), `${rol} sobre ${f}`).toBeGreaterThanOrEqual(3);
   });

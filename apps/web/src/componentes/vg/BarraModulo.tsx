@@ -8,7 +8,7 @@ export function BarraModulo({ titulo, descripcion, contador, extra }: { titulo: 
     <div className="flex flex-wrap items-start gap-4">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex items-center gap-3">
-          <h2 className="text-[22px] font-semibold">{titulo}</h2>
+          <h2 className="text-[22px] font-light tracking-tight">{titulo}</h2>
           {contador !== undefined ? <MarcasContador contador={contador} grande /> : null}
         </div>
         {descripcion ? <p className="text-[15px] text-muted-foreground">{descripcion}</p> : null}

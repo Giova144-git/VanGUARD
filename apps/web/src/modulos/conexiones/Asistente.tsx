@@ -28,11 +28,11 @@ function Pasos({ proveedor }: { proveedor: Provider }) {
     <ol className="flex flex-col gap-4">
       {g.pasos.map((p, i) => (
         <li key={i} className="flex gap-3">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-info-relleno text-sm font-semibold text-info tabular-nums">{i + 1}</span>
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground tabular-nums">{i + 1}</span>
           <div className="flex flex-col gap-2 pt-1">
             <p className="text-[15px] leading-relaxed">{p.texto}</p>
             {p.enlace ? <a href={p.enlace.href} target="_blank" rel="noopener noreferrer"
-              className="inline-flex w-fit items-center gap-1.5 text-sm font-semibold text-info underline underline-offset-4">
+              className="inline-flex w-fit items-center gap-1.5 text-sm font-semibold text-foreground underline underline-offset-4">
               {p.enlace.texto}<ExternalLink className="size-3.5" /></a> : null}
           </div>
         </li>

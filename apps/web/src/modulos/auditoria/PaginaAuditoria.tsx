@@ -62,7 +62,7 @@ function Lanzar() {
           disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
         <p className="text-[15px] text-muted-foreground">Revisamos Supabase, Cloudflare y tu repo, y Claude resume lo más urgente. Tarda unos minutos.</p>
         {error ? <p role="alert" className="text-sm text-mal">{error}{ultima ? <> · <Link className="underline" to={aUltima}>Mira la última</Link></> : null}</p> : null}
-        {ultima ? <Link to={aUltima} className="text-sm font-medium text-info underline underline-offset-4">Ver la última auditoría ({cuando(ultima.finished_at)})</Link> : null}
+        {ultima ? <Link to={aUltima} className="text-sm font-medium text-foreground underline underline-offset-4">Ver la última auditoría ({cuando(ultima.finished_at)})</Link> : null}
       </section>
       <GuiaModulo id="audit" />
     </div>
@@ -97,8 +97,8 @@ function Pasos({ run }: { run: ScanRun }) {
               <span className="text-[12.5px] text-texto-3">{t.detalle}</span>
             </div>
             <span className="text-sm text-muted-foreground">{p.texto}</span>
-            {e === 'sin_mirar' && prov ? <Link to={`/o/${org.id}/connections/${prov}`} className="inline-flex items-center gap-1 text-sm font-medium text-info underline underline-offset-4"><KeyRound className="size-3.5" />Sin conexión · Conectar</Link> : null}
-            {e === 'error' && t.modulo ? <Link to={`/o/${org.id}/${t.modulo}`} className="inline-flex items-center gap-1 text-sm font-medium text-info underline underline-offset-4">Abrir {entradaNav(t.modulo)?.nombre}<ChevronRight className="size-3.5" /></Link> : null}
+            {e === 'sin_mirar' && prov ? <Link to={`/o/${org.id}/connections/${prov}`} className="inline-flex items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4"><KeyRound className="size-3.5" />Sin conexión · Conectar</Link> : null}
+            {e === 'error' && t.modulo ? <Link to={`/o/${org.id}/${t.modulo}`} className="inline-flex items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4">Abrir {entradaNav(t.modulo)?.nombre}<ChevronRight className="size-3.5" /></Link> : null}
           </li>
         );
       })}
@@ -122,7 +122,7 @@ function Resumen({ run, porId }: { run: ScanRun; porId: Map<string, Finding> }) 
         <ol className="flex flex-col gap-2">
           {s.top.map((t) => (
             <li key={t.finding_id} className="flex flex-col gap-0.5">
-              <Link to={`?finding=${encodeURIComponent(t.finding_id)}`} className="inline-flex w-fit items-center gap-1 text-[15px] font-medium text-info underline underline-offset-4">
+              <Link to={`?finding=${encodeURIComponent(t.finding_id)}`} className="inline-flex w-fit items-center gap-1 text-[15px] font-medium text-foreground underline underline-offset-4">
                 {porId.get(t.finding_id)?.title ?? 'Ver hallazgo'}<ChevronRight className="size-4" /></Link>
               <span className="text-sm text-muted-foreground">{t.por_que}</span>
             </li>
@@ -206,7 +206,7 @@ function Corrida({ id }: { id: string }) {
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground">{f.resource}</span>
                 </div>
-                <Link to={`?finding=${encodeURIComponent(f.id)}`} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info hover:bg-info/15">Ver y corregir<ChevronRight className="size-4" /></Link>
+                <Link to={`?finding=${encodeURIComponent(f.id)}`} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">Ver y corregir<ChevronRight className="size-4" /></Link>
               </li>
             ))}
           </ul>

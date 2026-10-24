@@ -20,12 +20,13 @@ export const rolVisible = (rol: Rol, acciones: unknown[]): Rol =>
 // El color nunca es la única señal (S14 §14.6): el punto lleva nombre para el lector.
 const nombreRol = (rol: Rol) => (rol === 'mal' ? 'Urgente' : rol === 'aviso' ? 'Aviso' : undefined);
 
-const enlace = 'inline-flex h-11 items-center gap-1 rounded-lg border px-4 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring';
+// Mismo lenguaje que button.tsx (brand/README.md): píldora, mono en mayúsculas y, el principal, en monocromo.
+const enlace = 'inline-flex h-11 items-center gap-1 rounded-full border px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
 export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; puedeEscribir: boolean }) {
   const org = useOrg();
   const loc = useLocation();
-  const estilo = accion.principal ? 'border-info bg-info-relleno text-info hover:bg-info/15' : 'bg-card hover:bg-muted';
+  const estilo = accion.principal ? 'border-foreground bg-transparent text-foreground hover:bg-muted' : 'bg-card hover:bg-muted';
   switch (accion.clase) {
     case 'prompt': {
       const id = typeof accion.args?.finding_id === 'string' ? accion.args.finding_id : null;

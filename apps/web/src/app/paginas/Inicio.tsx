@@ -1,12 +1,13 @@
 // Portada (S14 §14.9): sin llamadas a la API ni a Supabase, para que siga en 200 aunque caiga el BACK.
 import { Link } from 'react-router';
-import { Eye, ShieldCheck, Sparkles } from 'lucide-react';
+import { Eye, Sparkles } from 'lucide-react';
 import { Button } from '@/componentes/ui/button';
 import { COMMIT, REPO_JUECES } from '@/lib/env';
 import { MARCA } from '@/lib/marca';
 import { Marca } from '../Marca';
 
-const ICONOS = [ShieldCheck, Eye, Sparkles];
+// La primera tarjeta lleva el símbolo (el ojo VG) en lugar del escudo; las demás, iconos de trazo fino (brand/README.md).
+const ICONOS = [null, Eye, Sparkles];
 
 export default function Inicio() {
   return (
@@ -16,7 +17,7 @@ export default function Inicio() {
       </header>
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-10 px-4 py-8 md:px-6 md:py-16">
         <section className="flex max-w-3xl flex-col gap-5">
-          <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">{MARCA.nombre}</h1>
+          <h1 className="text-4xl font-light tracking-tight md:text-5xl">{MARCA.nombre}</h1>
           <p className="text-lg leading-relaxed text-muted-foreground md:text-xl">{MARCA.portada}</p>
           <div className="mt-2 flex flex-wrap gap-3">
             <Button asChild variant="marca" size="grande"><Link to="/demo">Ver demo en vivo</Link></Button>
@@ -25,10 +26,12 @@ export default function Inicio() {
         </section>
         <section className="grid gap-3 md:grid-cols-3" aria-label="Qué hace VanGUARD">
           {MARCA.frases.map((f, i) => {
-            const Icono = ICONOS[i] ?? ShieldCheck;
+            const Icono = ICONOS[i];
             return (
               <div key={f} className="flex flex-col gap-3 rounded-xl border bg-card p-5">
-                <span className="flex size-10 items-center justify-center rounded-lg bg-info-relleno text-info"><Icono className="size-5" /></span>
+                <span className="flex size-10 items-center justify-center rounded-lg bg-muted text-foreground">
+                  {Icono ? <Icono className="size-5" strokeWidth={1.5} /> : <span className="logo-vg logo-vg-compacto h-4" aria-hidden />}
+                </span>
                 <p className="text-[15px] leading-relaxed">{f}</p>
               </div>
             );

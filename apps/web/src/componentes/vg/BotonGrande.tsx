@@ -20,7 +20,7 @@ export function BotonGrande({ titulo, descripcion, icono: Icono, estado, ocupado
     <div className={cn('flex flex-col gap-1', className)}>
       <button type="button" onClick={onClick} disabled={!!deshabilitado} aria-busy={ocupado || undefined}
         className="flex min-h-16 w-full items-center gap-4 rounded-xl border bg-card px-4 py-3 text-left transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 disabled:hover:bg-card">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-info-relleno text-info">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
           {ocupado ? <Spinner className="size-5" /> : <Icono className="size-6" />}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">

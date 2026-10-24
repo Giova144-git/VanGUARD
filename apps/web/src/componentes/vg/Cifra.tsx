@@ -12,7 +12,7 @@ export function Cifra({ etiqueta, n, de, unidad, decimales, sub, rol, href, valo
   const r: Rol = n == null ? 'neutra' : (rol === 'mal' || rol === 'aviso') && !href && !accion ? 'neutra' : rol ?? 'neutra';
   const cuerpo = (
     <>
-      <span className="text-[12.5px] font-medium text-muted-foreground">{etiqueta}</span>
+      <span className="font-mono text-[12.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{etiqueta}</span>
       <span className={cn('text-3xl font-semibold tabular-nums', r === 'neutra' ? (n == null ? 'text-texto-3' : 'text-foreground') : TEXTO_ROL[r])}>
         {valor ?? cifra({ n, de, unidad, decimales })}
       </span>

@@ -56,7 +56,7 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
         : est && !est.ok ? <Etiqueta texto={deMapa(ERROR_ESTADO, est.error, 'No pudimos leer')} rol={est.error === 'limite_api' ? 'neutra' : 'mal'} /> : null}
       {arreglo ? (
         <Link to={`/o/${org.id}/connections/${proveedor}`}
-          className="inline-flex h-11 items-center gap-1 rounded-lg border border-mal-borde bg-mal-relleno px-4 text-sm font-medium text-mal outline-none hover:bg-mal/15 focus-visible:ring-2 focus-visible:ring-ring">
+          className="inline-flex h-11 items-center gap-1 rounded-full border border-mal-borde bg-mal-relleno px-4 font-mono text-[13px] uppercase tracking-[0.06em] font-medium text-mal outline-none hover:bg-mal/15 focus-visible:ring-2 focus-visible:ring-ring">
           {arreglo}<ChevronRight className="size-4" /></Link>
       ) : null}
       <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`}>{est ? cuando(est.hora) : '—'}</span>

@@ -39,7 +39,7 @@ function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
         <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(item.title)}</span>
         <span className="truncate font-mono text-[13px] text-muted-foreground">{item.resource}</span>
       </div>
-      <Link to={href} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info hover:bg-info/15">
+      <Link to={href} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">
         {item.kind === 'incident' ? 'Ver incidente' : 'Ver y corregir'}<ChevronRight className="size-4" />
       </Link>
     </li>
@@ -60,7 +60,7 @@ function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones }: {
   const chapa = c ? chapaEstado(c) : null;
   return (
     <Link to={`/o/${org}/${modulo}`} className="flex min-h-16 items-center gap-4 rounded-xl border bg-card px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-info-relleno text-info"><Icono className="size-6" /></span>
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground"><Icono className="size-6" strokeWidth={1.5} /></span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="text-base font-semibold">{NOMBRE[modulo]}</span>
         {chapa ? <Etiqueta texto={chapa.texto} rol={chapa.rol} className="w-fit" /> : <span className="text-texto-3">—</span>}
@@ -110,7 +110,7 @@ export default function PaginaResumen() {
           {errorAuditar ? <span role="alert" className="max-w-xs text-sm text-mal">{errorAuditar}</span> : null}
           {o?.last_scan ? (
             <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}
-              <Link to={`/o/${org.id}/audit/${encodeURIComponent(o.last_scan.id)}`} className="font-medium text-info underline underline-offset-4">Ver</Link></span>
+              <Link to={`/o/${org.id}/audit/${encodeURIComponent(o.last_scan.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver</Link></span>
           ) : null}
         </div>
       </section>

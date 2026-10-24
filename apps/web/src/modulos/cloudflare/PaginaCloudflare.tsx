@@ -24,7 +24,7 @@ export default function PaginaCloudflare() {
   // «Ver incidente» solo si hay un incidente abierto con resource = 'ip:'+ip; si no, sin acción ni color.
   const verIncidente = (ip: string) => {
     const i = abiertos.find((x) => x.resource === `ip:${ip}`);
-    return i ? <Link to={`/o/${org.id}/incidents/${encodeURIComponent(i.id)}`} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info">
+    return i ? <Link to={`/o/${org.id}/incidents/${encodeURIComponent(i.id)}`} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">
       Ver incidente<ChevronRight className="size-4" /></Link> : null;
   };
   return (

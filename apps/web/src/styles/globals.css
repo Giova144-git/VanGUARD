@@ -4,21 +4,23 @@
 @import "@fontsource-variable/geist-mono";
 @custom-variant dark (&:is(.dark *));
 
-/* Tokens de S14 §14.6. Si un par no pasa el test de contraste, se cambia el hex aquí, nunca en el componente. */
-:root {                                   /* claro */
-  --radius: 0.75rem;
-  --background:#EAE6DE; --foreground:#17181B; --card:#FFFFFF; --card-foreground:#17181B;
-  --popover:#FFFFFF; --popover-foreground:#17181B; --muted:#DDD8CE; --muted-foreground:#54595F;
-  --texto-3:#6B7078; --border:#CFC9BC; --input:#CFC9BC; --borde-fuerte:#807A6E;  /* #938C7E no llegaba a 3:1 */
-  --mal:#B91C1C; --aviso:#9A4708; --bien:#126D34; --info:#1D4ED8;                  /* aviso y bien oscurecidos: 4,5:1 sobre muted */
-  --marca:#046C4E; --marca-texto:#FFFFFF;   /* verde esmeralda (antes violeta), distinto del verde de «bien» */
+/* Tokens de S14 §14.6 con la identidad de brand/README.md: monocromo tinta / papel / hueso; el color queda solo para
+   los estados (mal, aviso, bien, info). Si un par no pasa el test de contraste, se cambia el hex aquí, nunca en el
+   componente. */
+:root {                                   /* claro: tinta sobre papel */
+  --radius: 0.25rem;                      /* tarjetas de 4 px; los botones van en píldora (button.tsx) */
+  --background:#F7F7F5; --foreground:#0A0A0A; --card:#FFFFFF; --card-foreground:#0A0A0A;
+  --popover:#FFFFFF; --popover-foreground:#0A0A0A; --muted:#ECECE8; --muted-foreground:#5E5E59;
+  --texto-3:#7A7A74; --border:#E4E4E0; --input:#CFCFCA; --borde-fuerte:#84847E;  /* #8A8A84 no llegaba a 3:1 sobre muted */
+  --mal:#B91C1C; --aviso:#9A4708; --bien:#126D34; --info:#1D4ED8;                  /* estados: 4,5:1 sobre muted */
+  --marca:#0A0A0A; --marca-texto:#F7F7F5;   /* la marca es tinta: el sólido de L5 es tinta con texto papel */
 }
-.dark {                                   /* oscuro (por defecto) */
-  --background:#0A0A0A; --foreground:#FFFFFF; --card:#232327; --card-foreground:#FFFFFF;
-  --popover:#232327; --popover-foreground:#FFFFFF; --muted:#303036; --muted-foreground:#A8AEB9;
-  --texto-3:#7C828C; --border:#3C3C43; --input:#3C3C43; --borde-fuerte:#797982;  /* #5E5E69 no llegaba a 3:1 */
+.dark {                                   /* oscuro (por defecto): hueso sobre tinta */
+  --background:#0A0A0A; --foreground:#EDEDEA; --card:#111110; --card-foreground:#EDEDEA;
+  --popover:#111110; --popover-foreground:#EDEDEA; --muted:#1C1C1A; --muted-foreground:#8C8C87;  /* #7A7A76 de la guía no llegaba a 4,5:1 sobre card */
+  --texto-3:#73736E; --border:#1E1E1C; --input:#33332F; --borde-fuerte:#73736E;
   --mal:#FF6F8E; --aviso:#F59E0B; --bien:#4ADE80; --info:#60A5FA;
-  --marca:#10B981; --marca-texto:#0A0A0A;   /* esmeralda: más azulado que --bien (#4ADE80) */
+  --marca:#EDEDEA; --marca-texto:#0A0A0A;   /* hueso: el sólido de L5 es hueso con texto tinta */
 }
 :root, .dark {
   --primary:var(--info); --primary-foreground:var(--card); --ring:var(--info); --destructive:var(--mal);
@@ -26,7 +28,7 @@
   --aviso-relleno:color-mix(in srgb, var(--aviso) 10%, var(--card)); --aviso-borde:color-mix(in srgb, var(--aviso) 45%, var(--card));
   --bien-relleno:color-mix(in srgb, var(--bien) 10%, var(--card));   --info-relleno:color-mix(in srgb, var(--info) 10%, var(--card));
   --sidebar:var(--background); --sidebar-foreground:var(--foreground); --sidebar-primary:var(--info);
-  --sidebar-primary-foreground:var(--card); --sidebar-accent:var(--info-relleno); --sidebar-accent-foreground:var(--info);
+  --sidebar-primary-foreground:var(--card); --sidebar-accent:var(--muted); --sidebar-accent-foreground:var(--foreground);  /* monocromo: la pantalla activa no es un estado */
   --sidebar-border:var(--border); --sidebar-ring:var(--info);
   --chart-1:var(--muted-foreground); --chart-2:var(--aviso); --chart-3:var(--mal); --chart-4:var(--info); --chart-5:var(--bien);
 }
@@ -49,8 +51,8 @@
   --color-sidebar-border:var(--sidebar-border); --color-sidebar-ring:var(--sidebar-ring);
   --color-chart-1:var(--chart-1); --color-chart-2:var(--chart-2); --color-chart-3:var(--chart-3);
   --color-chart-4:var(--chart-4); --color-chart-5:var(--chart-5);
-  --radius-sm:calc(var(--radius) - 4px); --radius-md:calc(var(--radius) - 2px);
-  --radius-lg:var(--radius); --radius-xl:calc(var(--radius) + 4px);
+  --radius-sm:calc(var(--radius) - 2px); --radius-md:calc(var(--radius) - 1px);
+  --radius-lg:var(--radius); --radius-xl:var(--radius);   /* rounded-xl de las tarjetas = 4 px (guía de la marca) */
   --font-sans:"Geist Variable", system-ui, sans-serif; --font-mono:"Geist Mono Variable", ui-monospace, monospace;
 }
 @layer base {
@@ -59,6 +61,16 @@
   * { @apply border-border; }
   body { @apply bg-background text-foreground font-sans antialiased; }
   :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+}
+/* Logo (brand/logo/*.svg, copiados en public/marca/): máscara sobre currentColor, así toma el color del texto (hueso
+   sobre oscuro, tinta sobre claro) sin meter sus 20 KB de trazos en el bundle ni repetir ids de <mask>. */
+@layer components {
+  .logo-vg { display: inline-block; flex-shrink: 0; background-color: currentColor;
+    -webkit-mask: var(--logo-vg) center / contain no-repeat; mask: var(--logo-vg) center / contain no-repeat; }
+  .logo-vg-nombre { --logo-vg: url(/marca/logo.svg); aspect-ratio: 724.9 / 118; }      /* símbolo + nombre (≥ 160 px) */
+  .logo-vg-simbolo { --logo-vg: url(/marca/simbolo.svg); aspect-ratio: 200 / 118; }    /* solo el ojo (≥ 64 px) */
+  .logo-vg-compacto { --logo-vg: url(/marca/simbolo-compacto.svg); aspect-ratio: 200 / 118; }   /* < 64 px */
+  @media (forced-colors: active) { .logo-vg { forced-color-adjust: none; background-color: CanvasText; } }
 }
 /* Los tamaños en px de S14 §14.6 no siguen a la raíz: en presentación se pasan a rem (a 16 px se ven igual).
    Fuera de @layer a propósito: dentro, la capa utilities les ganaría. */

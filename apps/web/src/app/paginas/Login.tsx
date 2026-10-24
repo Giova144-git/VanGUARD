@@ -90,7 +90,7 @@ export default function Login() {
       <Link to="/" aria-label="Volver al inicio"><Marca /></Link>
       <div className="flex flex-col gap-2">
         <h1 className="text-[22px] font-semibold">Entra a tu panel</h1>
-        <p className="text-[15px] text-muted-foreground">¿Solo quieres mirar? <Link to="/demo" className="font-medium text-info underline underline-offset-4">Ver la demo sin cuenta</Link></p>
+        <p className="text-[15px] text-muted-foreground">¿Solo quieres mirar? <Link to="/demo" className="font-medium text-foreground underline underline-offset-4">Ver la demo sin cuenta</Link></p>
       </div>
       <Tabs defaultValue="entrar">
         <TabsList className="w-full">

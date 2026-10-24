@@ -28,7 +28,7 @@ export function PuntajeBlindaje({ score = null, band = null, coverage, enlaceCon
       <span className="min-h-[1.5em] text-[15px] text-muted-foreground">
         {coverage?.missing.length ? <>
           Falta: {coverage.missing.map((m) => deMapa(NOMBRE_MODULO, m, String(m))).join(', ')} ·{' '}
-          <Link to={enlaceConectar} className="font-medium text-info underline underline-offset-4">Conectar</Link>
+          <Link to={enlaceConectar} className="font-medium text-foreground underline underline-offset-4">Conectar</Link>
         </> : null}
       </span>
     </div>

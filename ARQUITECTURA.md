@@ -241,6 +241,30 @@ Archivos: `apps/api/src/rutas/actions.ts`, `apps/api/src/actions/block-ip.ts`, `
 
 ---
 
+## 7 bis. Revisión de código en cada push y pull request
+
+Comprobado en producción el 24-oct-2026: un push con una clave falsa nueva llegó por WhatsApp, entregado, a los 9,4 s.
+
+- **Disparador:** un webhook de repositorio que el usuario pega en GitHub, `POST /webhooks/github/:id` (E47). Cada
+  configuración tiene su secreto `vgw_…`, sellado como el resto de credenciales y visible una sola vez al activar.
+  La firma `X-Hub-Signature-256` se verifica con HMAC sobre el cuerpo crudo; un id inexistente y una firma mala dan
+  el mismo 401, y fuera del host real se rechaza. `apps/api/src/rutas/webhooks-github.ts`.
+- **Eventos:** push a la rama vigilada (un merge llega como push) y `pull_request` opened, synchronize, reopened y
+  ready_for_review contra ella. Un PR de un fork se revisa solo en la app, sin aviso, con tope de 10 por hora y
+  configuración. El push que fusiona un PR ya avisado no repite el aviso (`push_commits`).
+- **Qué revisa:** `GET compare base...head` en formato diff con el PAT de solo lectura (Contents: Read). Los escáneres
+  puros de core corren sobre las líneas añadidas (claves, tokens y `.env` subidos), hasta 128 KB; si se pasa, la
+  revisión queda parcial y avisa igual. «Nuevo» = regla + huella del valor que no estaba abierta. Sin IA.
+  `packages/core/src/revision/diff.ts`, `apps/api/src/revision/pasos.ts` (pasos `diff` y `aviso` en `vg-jobs`).
+- **Aviso:** WhatsApp con texto fijo, sin texto de la IA ni del autor del push, a los contactos verificados, si la peor
+  severidad nueva llega al umbral que la org elige en Ajustes → «Avisos» (`alert_prefs`). Cupo propio de 3 avisos por
+  hora (10 en la org de demo), uno por revisión y contacto, y la ventana de 24 h de Meta. La llamada se guarda como
+  preferencia y la UI la marca «Próximamente». `packages/core/src/templates/revision.ts`.
+- **Registro aparte:** `code_reviews`, no `scan_runs`, para que una revisión no pase por «última auditoría» en el
+  Resumen. Tablas `code_review_configs`, `code_reviews` y `alert_prefs` (`supabase/migrations/0013_revision_codigo.sql`).
+- **Tiempos medidos** (push fe58c0e, 1 archivo, 13 líneas): webhook → diff terminado, 2,6 s (el paso `diff` en sí,
+  ~1,1 s); → WhatsApp enviado, 8,6 s; → entregado, 9,4 s. Unos 6 s son la espera de la cola entre los dos mensajes.
+
 ## 8. Realtime privado por org, con polling de respaldo
 
 Base: `supabase/migrations/0008b_realtime.sql`.
@@ -427,6 +451,7 @@ las respuestas de WhatsApp.
 | Cruce hallazgo → página de la wiki en la interfaz | `paginaDeRuta` existe en `packages/deepwiki`, la web no lo usa |
 | Pruebas unitarias dentro del build de Workers Builds | Hoy el build corre lints y `tsc`; `pnpm test` se corre aparte |
 | Workflow `vg-scan` en vez de la cola | No se usa; `wrangler.jsonc` lo deja condicionado a una prueba de humo |
+| Revisión de código, lo que falta | Dependencias con OSV y `.gitignore` en el diff (B6), «Generar otro secreto» (hoy, si se pierde el `vgw_`, hay que borrar la configuración), revisión manual (E50) y bajar la espera de la cola entre `diff` y `aviso` (`max_batch_timeout`; hoy ~6 s de los 9,4) |
 | Adelgazar el bundle del Worker | Hoy ≈ 3,3 MB (≈ 0,63 MB gzip). El arranque lo domina parsear el script, no evaluar dependencias: cargar el SDK de Anthropic y deepwiki con `import()` no lo mejoró y se revirtió (12ca323). Pesos medidos: `@anthropic-ai/sdk` 946 KiB (36 %), `@supabase/auth-js` 351, `apps/api` 338, zod 183, core 147, storage-js 111, postgrest-js 108, realtime-js + phoenix 144, deepwiki 90. Palancas: `fetch` directo a `/v1/messages` en vez del SDK (≈ −900 KiB) y `postgrest-js` solo en vez de supabase-js entero (≈ −600 KiB; el servidor solo usa auth para `getClaims`). El Startup Time de Workers Builds varía 37–70 ms con el mismo bundle: medir con varias muestras |
 
 ---

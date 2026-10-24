@@ -1,12 +1,14 @@
 // Tabla de rutas (S14 §14.4), react-router 7.18.4 en modo data router. El router se crea una vez, fuera del árbol.
 // La portada es la única página que no va en lazy: así no arrastra Recharts ni el cascarón (dogfooding de §10).
 import { createBrowserRouter, type RouteObject } from 'react-router';
+import { conRecarga } from '@/lib/recarga';
 import ErrorRuta from './ErrorRuta';
 import Inicio from './paginas/Inicio';
 import NoEncontrada from './paginas/NoEncontrada';     // estática: ya la importan ErrorRuta y guardas
 
+// conRecarga: si el chunk ya no existe tras un despliegue, recarga una vez en vez de caer en ErrorRuta.
 const pagina = (cargar: () => Promise<{ default: React.ComponentType }>) =>
-  async () => ({ Component: (await cargar()).default });
+  async () => ({ Component: (await conRecarga(cargar)).default });
 
 const rutas: RouteObject[] = [
   { path: '/', element: <Inicio />, errorElement: <ErrorRuta /> },

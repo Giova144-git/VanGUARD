@@ -8,6 +8,7 @@ vi.mock('../ia/claude.ts', () => ({ pedirResumen: vi.fn() }));
 const cloudflare = await import('./cloudflare.ts');
 const supabase = await import('./supabase.ts');
 const repo = await import('./repo-paso.ts');
+const zip = await import('./zip-paso.ts');
 const indice = await import('./index.ts');
 
 describe('registro de pasos de vg-jobs', () => {
@@ -15,6 +16,7 @@ describe('registro de pasos de vg-jobs', () => {
     expect(registrados.get('cloudflare')).toBe(cloudflare.pasoCloudflare);
     expect(registrados.get('supabase')).toBe(supabase.pasoSupabase);
     expect(registrados.get('repo')).toBe(repo.pasoRepo);
+    expect(registrados.get('zip')).toBe(zip.pasoZip);
     expect(registrados.get('puntaje')).toBe(indice.pasoPuntaje);
     expect(registrados.get('resumen_ia')).toBe(indice.pasoResumen);
     expect('pasoCloudflare' in indice).toBe(false);

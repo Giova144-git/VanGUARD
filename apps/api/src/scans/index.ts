@@ -8,6 +8,7 @@ import { pasoCloudflare } from './cloudflare.ts';
 import { calcularCobertura } from './cobertura.ts';
 import { pasoRepo } from './repo-paso.ts';
 import { pasoSupabase } from './supabase.ts';
+import { pasoZip } from './zip-paso.ts';
 
 // Registro de los pasos de la cola vg-jobs (S15 15.8). worker.ts y dev-node.ts importan este archivo por su efecto.
 
@@ -60,4 +61,5 @@ registrarPaso('supabase', pasoSupabase);
 registrarPaso('resumen_ia', pasoResumen);
 registrarPaso('cloudflare', pasoCloudflare);
 registrarPaso('repo', pasoRepo);
+registrarPaso('zip', pasoZip);
 registrarPaso('puntaje', pasoPuntaje);

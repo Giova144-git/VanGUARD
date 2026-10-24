@@ -129,6 +129,8 @@ describe('cadena de pasos', () => {
     expect(siguientePaso('full_audit', 'resumen_ia')).toBeNull();
     expect(siguientePaso('repo', 'repo')).toBe('puntaje');
     expect(siguientePaso('zip', 'zip')).toBe('puntaje');
+    expect(pasosDe('zip')).toEqual(['zip', 'resumen_ia']);
+    expect(REINTENTOS.zip).toBe(1);   // como repo: el paso zip solo habla con la base y con OSV (F-18)
   });
 });
 

@@ -55,7 +55,8 @@ export function siguientePaso(kind: ScanKind, paso: Paso): Paso | null {
 export const primerPaso = (kind: ScanKind): Paso => (pasosDe(kind)[0] ?? 'puntaje') as Paso;
 
 const PROGRESO: Record<Paso, number> = { supabase: 30, cloudflare: 45, repo: 75, zip: 75, psi: 85, puntaje: 90, resumen_ia: 95 };
-export const REINTENTOS: Record<Paso, number> = { supabase: 2, cloudflare: 2, repo: 1, zip: 0, psi: 1, puntaje: 1, resumen_ia: 1 };
+// zip: 1 como repo (el ZIP ya no se abre en el servidor, F-18: el paso solo habla con la base y con OSV).
+export const REINTENTOS: Record<Paso, number> = { supabase: 2, cloudflare: 2, repo: 1, zip: 1, psi: 1, puntaje: 1, resumen_ia: 1 };
 const TRANSITORIO = new Set(['unavailable', 'timeout', 'rate_limited']);
 // Proveedor de la conexión que usa cada paso de fuente (el mismo que pasa a conexionActiva): ante un 401 sin
 // connection_id (p. ej. pasoSupabase lo lanza después de withSecret), guarded revoca esa conexión.

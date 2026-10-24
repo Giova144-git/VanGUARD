@@ -1,9 +1,9 @@
 // /o/:orgId/settings (S14 §14.18). WhatsApp primero (A8): «Probar WhatsApp» es P0 y no se recorta; la llamada es P1.
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, LogOut, MessageCircle, Phone, Plus, Save, Trash2 } from 'lucide-react';
-import type { AiUsage, Contact } from '@vanguard/contracts';
+import type { AiUsage, AlertPrefsIn, Contact, UmbralAviso } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
 import { Spinner } from '@/componentes/ui/spinner';
@@ -12,15 +12,18 @@ import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { BotonCopiar } from '@/componentes/vg/BotonCopiar';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
+import { Interruptor } from '@/componentes/vg/Interruptor';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { useOrg } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { armarContactos, normalizarTelefono, type FilaContacto } from '@/lib/contactos';
-import { useContactos, useOverview } from '@/lib/consultas';
+import { useContactos, useOverview, usePrefsAvisos } from '@/lib/consultas';
 import { COMMIT, REPO_JUECES } from '@/lib/env';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { SANDBOX_KAPSO } from '@/lib/guias';
-import { useGuardarContactos, useProbarCanal } from '@/lib/mutaciones';
+import { useGuardarContactos, useGuardarPrefsAvisos, useProbarCanal } from '@/lib/mutaciones';
+import { TEXTO_UMBRAL, UMBRALES } from '@/lib/revision';
 import { deMapa } from '@/lib/severidad';
 import { supabase } from '@/lib/supabase';
 import { aplicarPresentacion, aplicarTema, leerPresentacion, leerTema, type Tema } from '@/lib/tema';
@@ -30,15 +33,6 @@ import { cn } from '@/lib/utils';
 const LLAMADA_LISTA = false;
 const NIVEL_IA: Record<AiUsage['level'], string> = { normal: 'normal', reduced: 'síntesis con Sonnet', minimal: 'solo Haiku', off: 'apagada' };
 
-function Interruptor({ activo, onCambio, etiqueta }: { activo: boolean; onCambio: (v: boolean) => void; etiqueta: string }) {
-  return (
-    <button type="button" role="switch" aria-checked={activo} aria-label={etiqueta} onClick={() => onCambio(!activo)}
-      className={cn('relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        activo ? 'border-foreground bg-muted' : 'bg-muted')}>
-      <span className={cn('inline-block size-5 rounded-full transition-transform', activo ? 'translate-x-6 bg-info' : 'translate-x-1 bg-borde-fuerte')} />
-    </button>
-  );
-}
 
 const aFila = (c: Contact): FilaContacto => ({ clave: c.id, id: c.id, name: c.name, phone: c.phone_e164, whatsapp: c.whatsapp, voice: c.voice, verified_at: c.verified_at });
 
@@ -50,7 +44,7 @@ function ProbarCanal({ org, canal, deshabilitado }: { org: string; canal: 'whats
     if (e.status === 409 && e.details?.reason === 'unverified') return 'Ese contacto aún no está verificado: no le enviamos nada real';
     if (e.status === 403) return 'Solo disponible en officialvanguard.com';
     if (e.status === 429) return 'Llegaste al tope de avisos de esta hora';
-    if (e.status === 502) return `El proveedor no respondió (${String(e.details?.provider_code ?? 'sin código')})`;
+    if (e.status === 502) return `El proveedor no respondió (${sinBidi(String(e.details?.provider_code ?? 'sin código'))})`;
     return e.message;
   };
   return (
@@ -81,7 +75,7 @@ function enlaceWa(u: string): string | null {
 export function Verificar({ c, esperando, alAbrir }: { c: Contact; esperando: boolean; alAbrir: () => void }) {   // exportada para el arnés de XSS
   if (!c.verificacion) return null;
   const enlace = enlaceWa(c.verificacion.enlace);
-  const orden = <code className="rounded bg-muted px-1.5 font-mono text-[13px]">VERIFICAR {c.verificacion.codigo}</code>;
+  const orden = <code className="rounded bg-muted px-1.5 font-mono text-[13px]">VERIFICAR {sinBidi(c.verificacion.codigo)}</code>;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
       <p className="text-sm text-muted-foreground">Solo enviamos alertas a teléfonos que confirman ser suyos.</p>
@@ -120,7 +114,7 @@ function Contactos({ org }: { org: string }) {
   useEffect(() => {
     if (!espera) return;
     if (q.data?.find((c) => c.id === espera.id)?.verified_at) {
-      setAviso({ texto: `${espera.nombre} quedó verificado: ya le enviamos alertas reales.`, bien: true });
+      setAviso({ texto: `${sinBidi(espera.nombre)} quedó verificado: ya le enviamos alertas reales.`, bien: true });
       setEspera(null);
       return;
     }
@@ -203,6 +197,56 @@ function Contactos({ org }: { org: string }) {
   );
 }
 
+// Avisos de la revisión de código (E48/E49, asignaciones/revision-codigo.md §6.2). Si E48 da 404 (aún sin desplegar),
+// el bloque no se pinta y queda solo «Ataques en vivo».
+const SELECTOR = 'h-12 w-full max-w-xs rounded-lg border border-input bg-card px-3 text-[15px] outline-none focus-visible:border-info focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60';
+
+function AvisosRevision({ org, puedeEscribir }: { org: string; puedeEscribir: boolean }) {
+  const q = usePrefsAvisos(org);
+  const guardar = useGuardarPrefsAvisos(org);
+  const [borrador, setBorrador] = useState<AlertPrefsIn | null>(null);
+  const [guardado, setGuardado] = useState<string | null>(null);
+  if (q.isError && esApiError(q.error) && q.error.status === 404) return null;
+  if (q.isError) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
+  const p = q.data;
+  if (!p) return <p className="text-texto-3" aria-busy="true">—</p>;
+  const v: AlertPrefsIn = borrador ?? { review_whatsapp_min: p.review_whatsapp_min, review_voice_min: p.review_voice_min };
+  const cambiado = v.review_whatsapp_min !== p.review_whatsapp_min || v.review_voice_min !== p.review_voice_min;
+  const selector = (campo: keyof AlertPrefsIn, etiqueta: string, extra?: ReactNode) => (
+    <div className="flex flex-col gap-2">
+      <label htmlFor={`aviso-${campo}`} className="flex flex-wrap items-center gap-2 text-[15px]">{etiqueta}{extra}</label>
+      {puedeEscribir ? (
+        <select id={`aviso-${campo}`} className={SELECTOR} value={v[campo]} disabled={guardar.isPending}
+          onChange={(e) => { setGuardado(null); setBorrador({ ...v, [campo]: e.target.value as UmbralAviso }); }}>
+          {UMBRALES.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+        </select>
+      ) : <p id={`aviso-${campo}`} className="text-[15px] font-semibold">{deMapa(TEXTO_UMBRAL, v[campo], '—')}</p>}
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-4">
+      <h4 className="text-[15px] font-semibold">Revisión de código</h4>
+      {selector('review_whatsapp_min', 'Avisar por WhatsApp a los contactos con WhatsApp activado cuando la revisión encuentre algo nuevo de severidad…')}
+      {selector('review_voice_min', 'Llamar cuando sea de severidad…', p.voice_available ? null : <Etiqueta texto="Próximamente" />)}
+      {p.voice_available ? null : <p className="text-sm text-muted-foreground">Guardamos tu preferencia. Mientras no haya llamadas, lo que pase este umbral también te llega por WhatsApp.</p>}
+      {v.review_whatsapp_min === 'off' && v.review_voice_min === 'off'
+        ? <p className="text-sm font-medium">No recibirás avisos de la revisión de código; quedan en la app.</p> : null}
+      <p className="text-sm text-muted-foreground">
+        Solo reciben los contactos con WhatsApp verificados ({p.whatsapp_ready_contacts} ahora). Fuera de la ventana de 24 h de WhatsApp
+        el aviso queda en la app. Como mucho 3 avisos de revisión por hora (10 en la org de demo), aparte de los de ataques.
+      </p>
+      {puedeEscribir ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <BotonAccion icono={Save} tam="grande" variante="principal" ocupado={guardar.isPending} disabled={!cambiado}
+            onClick={() => guardar.mutate(v, { onSuccess: () => { setBorrador(null); setGuardado(new Date().toISOString()); } })}>Guardar</BotonAccion>
+          {guardar.isError ? <span role="alert" className="text-sm text-mal">{mensajeDe(guardar.error)}</span>
+            : guardado ? <span role="status" className="text-sm text-bien">Guardado · {cuando(guardado)}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ModoPresentacion() {
   const [si, setSi] = useState(leerPresentacion);
   return (
@@ -231,6 +275,19 @@ export default function PaginaAjustes() {
   const navegar = useNavigate();
   const ia = useOverview(org.id).data?.ai;
   const salir = async () => { await supabase.auth.signOut(); qc.clear(); navegar('/', { replace: true }); };
+  const { hash } = useLocation();
+  // «Cambiar» en la tarjeta de la revisión de código llega con #avisos: react-router no baja solo al ancla. Los contactos
+  // de arriba cargan después y empujan la sección, así que se vuelve a bajar unas veces en 1,5 s (no si el usuario ya se
+  // movió con la rueda o el dedo).
+  useEffect(() => {
+    if (hash !== '#avisos') return;
+    const bajar = () => document.getElementById('avisos')?.scrollIntoView({ block: 'start' });
+    const ts = [0, 300, 800, 1500].map((ms) => setTimeout(bajar, ms));
+    const parar = () => ts.forEach(clearTimeout);
+    window.addEventListener('wheel', parar, { once: true, passive: true });
+    window.addEventListener('touchstart', parar, { once: true, passive: true });
+    return () => { parar(); window.removeEventListener('wheel', parar); window.removeEventListener('touchstart', parar); };
+  }, [hash]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -241,16 +298,20 @@ export default function PaginaAjustes() {
         {org.puedeEscribir ? <Contactos org={org.id} /> : <p className="text-sm text-muted-foreground">Los contactos solo los ve un administrador.</p>}
       </section>
 
-      <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-canales">
-        <h3 id="t-canales" className="text-[17px] font-semibold">Canales por severidad</h3>
-        <ul className="flex flex-col gap-2 text-[15px]">
+      <section id="avisos" className="flex scroll-mt-20 flex-col gap-5 rounded-xl border bg-card p-5" aria-labelledby="t-avisos">
+        <h3 id="t-avisos" className="text-[17px] font-semibold">Avisos</h3>
+        <AvisosRevision org={org.id} puedeEscribir={org.puedeEscribir} />
+        <div className="flex flex-col gap-3">
+          <h4 className="text-[15px] font-semibold">Ataques en vivo</h4>
+          <ul className="flex flex-col gap-2 text-[15px]">
           {/* Solo lectura: sin acción al lado, sin rojo (L3). */}
-          <li><span className="font-semibold">Crítica</span> · en la app + WhatsApp a todos · llamada: próximamente</li>
-          <li><span className="font-semibold">Alta</span> · en la app + WhatsApp</li>
-          <li><span className="font-semibold">Media, Baja e Info</span> · en la app</li>
-        </ul>
-        <p className="text-sm text-muted-foreground">Topes por hora: 2 llamadas y 10 WhatsApp (en la org de demo, 6 y 30).</p>
-        <p className="text-sm text-muted-foreground">Leído no es confirmado: confirma con «Lo estoy viendo».</p>
+            <li><span className="font-semibold">Crítica</span> · en la app + WhatsApp a todos · llamada: próximamente</li>
+            <li><span className="font-semibold">Alta</span> · en la app + WhatsApp</li>
+            <li><span className="font-semibold">Media, Baja e Info</span> · en la app</li>
+          </ul>
+          <p className="text-sm text-muted-foreground">Topes por hora: 2 llamadas y 10 WhatsApp (en la org de demo, 6 y 30).</p>
+          <p className="text-sm text-muted-foreground">Leído no es confirmado: confirma con «Lo estoy viendo».</p>
+        </div>
       </section>
 
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-ia">
@@ -264,9 +325,9 @@ export default function PaginaAjustes() {
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-org">
         <h3 id="t-org" className="text-[17px] font-semibold">Organización y sesión</h3>
         <dl className="grid gap-x-6 gap-y-1 text-[15px] sm:grid-cols-[auto_1fr]">
-          <dt className="text-muted-foreground">Organización</dt><dd>{org.name}</dd>
+          <dt className="text-muted-foreground">Organización</dt><dd>{sinBidi(org.name)}</dd>
           <dt className="text-muted-foreground">Tu rol</dt><dd>{org.role === 'owner' ? 'Dueño' : org.role === 'admin' ? 'Admin' : 'Solo lectura'}</dd>
-          <dt className="text-muted-foreground">Tu correo</dt><dd>{org.me.user.email ?? 'Invitado · demo'}</dd>
+          <dt className="text-muted-foreground">Tu correo</dt><dd>{org.me.user.email ? <bdi dir="ltr">{sinBidi(org.me.user.email)}</bdi> : 'Invitado · demo'}</dd>
         </dl>
         <SelectorTema />
         <ModoPresentacion />

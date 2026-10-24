@@ -1,7 +1,7 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
-  Contact, ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult,
+  AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -118,6 +118,40 @@ export function useGuardarContactos(org: string) {
     gcTime: 60_000,
     mutationFn: (lista: ContactIn[]) => api(`/api/orgs/${org}/contacts`, { method: 'PUT', body: lista, esquema: z.array(Contact) }),
     onSuccess: (r) => qc.setQueryData(['org', org, 'contacts'], r),
+  });
+}
+
+// E46: activar o apagar la revisión de código. El alta trae webhook_secret, que se ve UNA sola vez (§6.1). El onSuccess
+// de las opciones (corre aunque la tarjeta ya se haya desmontado, a diferencia del de mutate()) lo deja en un contenedor
+// en memoria por org y la tarjeta lo toma una vez con tomarSecreto(): si el admin cambia de pantalla justo al activar, lo
+// encuentra al volver. gcTime 0 y reset() lo sacan del MutationCache; nunca va a storage, a la URL ni a la caché de
+// consultas (la config de la respuesta entra sin el secreto y E45 no lo trae). La mutación no espera el refetch de E45.
+const secretos = new Map<string, string>();
+export function tomarSecreto(org: string): string | null {
+  const s = secretos.get(org) ?? null;
+  secretos.delete(org);
+  return s;
+}
+export const opcionesGuardarRevision = (org: string, qc: QueryClient) => ({
+  gcTime: 0,
+  mutationFn: (body: CodeReviewPut) => api(`/api/orgs/${org}/code-review`, { method: 'PUT', body, esquema: CodeReviewSaved }),
+  onSuccess: (r: CodeReviewSaved) => {
+    if (typeof r.webhook_secret === 'string') secretos.set(org, r.webhook_secret);
+    qc.setQueryData<CodeReviewState>(['org', org, 'revision'], (s) => (s && r.config ? { ...s, config: r.config } : s));
+  },
+  onSettled: () => { void qc.invalidateQueries({ queryKey: ['org', org, 'revision'] }); },
+});
+export function useGuardarRevision(org: string) {
+  const qc = useQueryClient();
+  return useMutation(opcionesGuardarRevision(org, qc));
+}
+
+// E49: umbrales de aviso de la revisión de código (WhatsApp y llamada).
+export function useGuardarPrefsAvisos(org: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AlertPrefsIn) => api(`/api/orgs/${org}/alert-prefs`, { method: 'PUT', body, esquema: AlertPrefs }),
+    onSuccess: (r) => qc.setQueryData(['org', org, 'alert-prefs'], r),
   });
 }
 

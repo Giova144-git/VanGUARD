@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixtures as fx, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
+import { fixtures as fx, AlertPrefs, CodeReviewSaved, CodeReviewState, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
 import type { ApiError } from '../errores';
 import { fixtureFetch, simularAtaque } from './router';
 
@@ -327,5 +327,50 @@ describe('ZIP analizado en el navegador (E11 zip y E23)', () => {
     const e = await pedirLimpio(destino(DEMO, sexto), 'POST', resultado()).then(() => null, (x: unknown) => x as ApiError);
     expect(e).toMatchObject({ status: 429, code: 'budget_exceeded' });
     expect(await pedirLimpio<ScanRun>(`/api/orgs/${DEMO}/scans/${sexto}`)).toMatchObject({ status: 'queued', step: 'waiting_result' });
+  });
+});
+
+describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo.md §6.3)', () => {
+  it('la demo arranca conectada con sus dos revisiones y el hallazgo del push se abre con ?finding=', async () => {
+    const s = CodeReviewState.parse(await pedir(`/api/orgs/${DEMO}/code-review`));
+    expect(s).toMatchObject({ available: true, config: { state: 'connected' } });
+    expect(s.recent).toHaveLength(2);
+    expect(await pedir<Finding>(`/api/orgs/${DEMO}/findings/${fx.hallazgoRevision.id}`)).toMatchObject({ rule_id: 'CB_SECRET_STRIPE_LIVE' });
+  });
+
+  it('el alta da el secreto vgw_ UNA vez; E45 nunca lo trae; la 3.ª consulta simula el ping; rotar es P1 (400)', async () => {
+    const org = nueva;   // el tope de 3 orgs por dueño ya lo gastan los otros casos
+    expect(await pedir(`/api/orgs/${org}/code-review`)).toMatchObject({ available: false, reason: 'sin_conexion', config: null });
+    const gh = (await pedir<ConnectionCreated>(`/api/orgs/${org}/connections`, 'POST', { provider: 'github', pat: 'github_pat_prueba', repo_full_name: 'mi-equipo/web' })).connection.id;
+    expect(await pedir(`/api/orgs/${org}/code-review`)).toMatchObject({ available: true, reason: null, config: null });
+
+    const alta = CodeReviewSaved.parse(await pedir(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: true }));
+    expect(alta.webhook_secret).toMatch(/^vgw_[A-Za-z0-9_-]{43}$/);
+    expect(alta.config).toMatchObject({ state: 'waiting_ping', secret_last4: alta.webhook_secret!.slice(-4) });
+    const leer = () => pedir<CodeReviewState>(`/api/orgs/${org}/code-review`);
+    expect(JSON.stringify(await leer())).not.toContain(alta.webhook_secret);
+    await leer();
+    expect((await leer()).config).toMatchObject({ state: 'connected', hook_events: ['pull_request', 'push'] });
+
+    expect(await pedir(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: false })).toMatchObject({ webhook_secret: null, config: { state: 'off' } });
+    expect(await fallo(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: gh, enabled: true, rotate_secret: true })).toMatchObject({ status: 400 });
+    expect(await fallo(`/api/orgs/${org}/code-review`, 'PUT', { connection_id: NADA, enabled: true })).toMatchObject({ status: 404 });
+  });
+
+  it('el anónimo de la demo ve el estado sin la URL del webhook y no puede activarla ni cambiar los avisos', async () => {
+    sesion.tipo = 'anonima';
+    const s = await pedir<CodeReviewState>(`/api/orgs/${DEMO}/code-review`);
+    expect(s.config?.webhook_url).toBeNull();
+    expect(await fallo(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: s.config!.connection_id, enabled: false })).toMatchObject({ status: 403 });
+    expect(await fallo(`/api/orgs/${DEMO}/alert-prefs`, 'PUT', { review_whatsapp_min: 'off', review_voice_min: 'off' })).toMatchObject({ status: 403 });
+  });
+
+  it('avisos: «Alta o más» y «Solo crítica» por defecto, sin llamadas; guardar devuelve lo guardado con su hora', async () => {
+    const antes = AlertPrefs.parse(await pedir(`/api/orgs/${DEMO}/alert-prefs`));
+    expect(antes).toMatchObject({ review_whatsapp_min: 'high', review_voice_min: 'critical', voice_available: false, updated_at: null });
+    const despues = AlertPrefs.parse(await pedir(`/api/orgs/${DEMO}/alert-prefs`, 'PUT', { review_whatsapp_min: 'medium', review_voice_min: 'off' }));
+    expect(despues).toMatchObject({ review_whatsapp_min: 'medium', review_voice_min: 'off' });
+    expect(despues.updated_at).not.toBeNull();
+    expect(await fallo(`/api/orgs/${DEMO}/alert-prefs`, 'PUT', { review_whatsapp_min: 'altisima', review_voice_min: 'off' })).toMatchObject({ status: 422 });
   });
 });

@@ -15,10 +15,10 @@ import { RealtimeChange } from '@vanguard/contracts';
 import { supabase } from './supabase';
 
 const MAPA: Record<string, string[]> = {
-  scan_runs: ['scan', 'overview'], findings: ['findings', 'finding', 'module', 'overview'],
-  incidents: ['incident', 'incidents', 'overview'], notifications: ['incident'],
+  scan_runs: ['scan', 'overview'], findings: ['findings', 'finding', 'module', 'overview', 'revision'],
+  incidents: ['incident', 'incidents', 'overview'], notifications: ['incident', 'revision'],   // revision: hallazgo y aviso de un push (E45)
 };
-export const TODO = ['overview', 'module', 'findings', 'finding', 'incidents', 'incident', 'scan'];
+export const TODO = ['overview', 'module', 'findings', 'finding', 'incidents', 'incident', 'scan', 'revision'];
 export const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];   // solo tras CLOSED; el último se repite
 export const ESTABLE_MS = 30_000;   // el backoff vuelve a 0 solo tras este tiempo seguido en SUBSCRIBED
 

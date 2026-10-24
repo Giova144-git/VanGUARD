@@ -1,7 +1,8 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, ScanCreate, ZipResult, type ActionPublic, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
+  fixtures as fx, AlertPrefsIn, CodeReviewPut, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
+  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
   type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
   type WikiRun, type ZipFinding,
 } from '@vanguard/contracts';
@@ -167,7 +168,10 @@ const hallazgosDe = (org: string) => {
   for (const [id, c] of zips) if (c.org === org) volcarZip(id, c);
   return delOrg(org);
 };
-const hallazgo = (org: string, id: string) => hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
+const hallazgo = (org: string, id: string) => {
+  if (id === fx.hallazgoRevision.id) revisionDe(org);   // ?finding= del WhatsApp puede llegar antes que E45, que lo añade
+  return hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
+};
 
 function listarHallazgos(org: string, q: URLSearchParams) {
   return structuredClone(hallazgosDe(org).filter((f) =>
@@ -504,6 +508,84 @@ function listarContactos(org: string) {
   return structuredClone(contactosDe(org));
 }
 function exigirAdmin() { if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura'); }
+
+// Revisión de código (E45/E46, asignaciones/revision-codigo.md §4.1 y §6.3). La org de demo arranca con el fixture
+// (webhook conectado y el push con la clave de Stripe); una org sin GitHub, con available:false. Tras activar, la 3.ª
+// consulta simula el ping de GitHub («Esperando a GitHub» → «Conectada»), como «VERIFICAR» en contactos.
+const revisiones = new Map<string, { estado: CodeReviewState; consultas: number; altaVista?: boolean }>();
+const revisionDe = (org: string) => {
+  if (!revisiones.has(org)) {
+    const demo = !vacia(org);
+    if (demo && !delOrg(org).some((f) => f.id === fx.hallazgoRevision.id)) delOrg(org).push(structuredClone(fx.hallazgoRevision as Finding));
+    revisiones.set(org, { consultas: 0, estado: demo ? structuredClone(fx.codeReviewState as CodeReviewState) : { available: false, reason: 'sin_conexion', config: null, recent: [] } });
+  }
+  return revisiones.get(org)!;
+};
+const githubDe = (org: string) => listaDe(org).find((c) => c.provider === 'github' && c.kind === 'read');
+// 'vgw_' + 32 bytes de getRandomValues en base64url sin relleno = 43 caracteres (CodeReviewSaved; §6.3).
+const secretoWebhook = () => 'vgw_' + btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function verRevision(org: string): CodeReviewState {
+  const r = revisionDe(org);
+  const gh = githubDe(org);
+  // La conexión puede cambiar en Conexiones: available y reason se recalculan siempre.
+  r.estado.available = gh?.status === 'active';
+  r.estado.reason = !gh ? 'sin_conexion' : gh.status !== 'active' ? 'conexion_inactiva' : null;
+  const c = r.estado.config;
+  if (c?.enabled && c.state === 'waiting_ping' && ++r.consultas >= 3) {
+    Object.assign(c, { state: 'connected', last_ping_at: new Date().toISOString(), hook_events: ['pull_request', 'push'] });
+  }
+  const copia = structuredClone(r.estado);
+  if (copia.config && tipoSesionFalsa() === 'anonima') copia.config.webhook_url = null;   // la URL solo la ve un admin
+  return copia;
+}
+function guardarRevision(org: string, body: unknown): CodeReviewSaved {
+  exigirAdmin();
+  const b = CodeReviewPut.safeParse(body);
+  if (!b.success) falla(422, 'invalid_body', 'Revisa los campos marcados');
+  const { connection_id, enabled, rotate_secret } = b.data!;
+  if (rotate_secret) falla(400, 'invalid_body', 'Generar otro secreto llega pronto');
+  const gh = githubDe(org);
+  if (!gh || gh.id !== connection_id) falla(404, 'not_found', 'Esa conexión no existe');
+  if (gh!.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
+  const r = revisionDe(org);
+  r.consultas = 0;
+  let secreto: string | null = null;
+  if (!r.estado.config) {
+    secreto = secretoWebhook();
+    const id = crypto.randomUUID();
+    const meta = gh!.meta as { repo_full_name?: unknown; default_branch?: unknown };
+    r.estado.config = { id, connection_id, repo_full_name: typeof meta.repo_full_name === 'string' ? meta.repo_full_name : 'equipo/repo',
+      branch: typeof meta.default_branch === 'string' ? meta.default_branch : 'main', enabled, state: enabled ? 'waiting_ping' : 'off',
+      webhook_url: `https://officialvanguard.com/webhooks/github/${id}`, secret_last4: secreto.slice(-4), hook_events: [],
+      last_ping_at: null, last_event_at: null, last_error: null };
+  } else if (enabled && esDemo(org) && !r.altaVista) {
+    // La demo arranca con la config hecha: la primera vez que se activa desde aquí hace de alta (codeReviewSaved, §6.3)
+    // para que se vean el secreto de una vez y «Esperando a GitHub» → «Conectada». El BACK real solo da el secreto al crear.
+    r.altaVista = true;
+    secreto = secretoWebhook();
+    Object.assign(r.estado.config, { ...fx.codeReviewSaved.config, enabled: true, secret_last4: secreto.slice(-4) });
+  } else {
+    const c = r.estado.config;
+    c.enabled = enabled;
+    c.state = !enabled ? 'off' : c.last_ping_at ? 'connected' : 'waiting_ping';
+  }
+  return { config: structuredClone(r.estado.config), webhook_secret: secreto };
+}
+
+// Preferencias de avisos (E48/E49). whatsapp_ready_contacts sale de los contactos (WhatsApp activado y verificados).
+const prefs = new Map<string, AlertPrefsIn & { updated_at: string | null }>();
+function verPrefs(org: string): AlertPrefs {
+  const p = prefs.get(org) ?? { review_whatsapp_min: fx.alertPrefs.review_whatsapp_min, review_voice_min: fx.alertPrefs.review_voice_min, updated_at: null };
+  return { ...p, voice_available: false, whatsapp_ready_contacts: contactosDe(org).filter((c) => c.whatsapp && c.verified_at).length };
+}
+function guardarPrefs(org: string, body: unknown): AlertPrefs {
+  exigirAdmin();
+  const b = AlertPrefsIn.safeParse(body);
+  if (!b.success) falla(422, 'invalid_body', 'Revisa los campos marcados');
+  prefs.set(org, { ...b.data!, updated_at: new Date().toISOString() });
+  return verPrefs(org);
+}
 function guardarContactos(org: string, body: unknown) {
   exigirAdmin();
   const lista = Array.isArray(body) ? body as Omit<ContactoFx, 'id' | 'verified_at'>[] : falla(422, 'invalid_body', 'Lista de contactos no válida');
@@ -614,6 +696,10 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                (m) => listarContactos(m[1]!)],
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
+  ['GET',  r(`${ORG}\\/code-review`),             (m) => verRevision(m[1]!)],
+  ['PUT',  r(`${ORG}\\/code-review`),             (m, b) => guardarRevision(m[1]!, b)],
+  ['GET',  r(`${ORG}\\/alert-prefs`),             (m) => verPrefs(m[1]!)],
+  ['PUT',  r(`${ORG}\\/alert-prefs`),             (m, b) => guardarPrefs(m[1]!, b)],
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],
   ['GET',  r(`${ORG}\\/ai\\/usage`),              (m) => usoIa(m[1]!)],
   ['GET',  r(`${ORG}\\/perf\\/runs`),             (m) => (vacia(m[1]!) ? [] : fx.perfRuns)],

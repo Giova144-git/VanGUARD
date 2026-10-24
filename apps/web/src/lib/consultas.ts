@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  AlertPrefs, CodeReviewState, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -154,4 +154,25 @@ export const useWikiRun = (org: string, id: string | null, lento = false) => use
 export const useWikiDoc = (org: string, id: string | null, listo: boolean) => useQuery({
   queryKey: ['org', org, 'wiki', 'doc', id], enabled: esId(id) && listo, staleTime: Infinity,
   queryFn: () => api(`/api/orgs/${org}/wiki/runs/${id}/doc`, { esquema: WikiDoc }),
+});
+
+// Revisión de código en cada push (E45, asignaciones/revision-codigo.md §6.1). Realtime (findings y notifications) la
+// refresca al momento; el sondeo es el respaldo, siempre con la pestaña visible: cada 5 s hasta `rapidoHasta` (al montar
+// o volver a la pestaña, y tras activar) o mientras haya una revisión en curso de menos de 2 min; si no, cada 30 s.
+// Un 404 (E45 aún sin desplegar) no se sondea: la tarjeta no se pinta. Los reintentos, los de main.tsx (solo 5xx). El cuerpo
+// se valida aquí con zod aunque api() en producción solo avise: un E45 o E48 fuera de contrato deja la consulta en error y
+// la tarjeta no se pinta, en vez de tumbar la página de Codebase en el render. La clave es 'revision' (no
+// 'code-review', que la espec propone): lint-seguridad lee «code» como un secreto en una clave de Query.
+const revisando = (s: CodeReviewState | undefined) => (s?.recent ?? []).some((r) =>
+  (r.status === 'queued' || r.status === 'running') && Date.now() - Date.parse(r.created_at) < 120_000);
+export const useRevisionCodigo = (org: string, rapidoHasta: number) => useQuery({
+  queryKey: ['org', org, 'revision'], refetchIntervalInBackground: false,
+  queryFn: async () => CodeReviewState.parse(await api(`/api/orgs/${org}/code-review`, { esquema: CodeReviewState })),
+  refetchInterval: (q) => (es404(q) ? false : Date.now() < rapidoHasta || revisando(q.state.data) ? 5_000 : 30_000),
+});
+
+// Preferencias de avisos (E48): las lee Ajustes y la tarjeta de la revisión (el umbral de WhatsApp). 404 → no se pinta.
+export const usePrefsAvisos = (org: string) => useQuery({
+  queryKey: ['org', org, 'alert-prefs'], refetchIntervalInBackground: false, staleTime: 30_000,
+  queryFn: async () => AlertPrefs.parse(await api(`/api/orgs/${org}/alert-prefs`, { esquema: AlertPrefs })),
 });

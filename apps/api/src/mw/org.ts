@@ -1,0 +1,25 @@
+import type { MiddlewareHandler } from 'hono';
+import { Role } from '@vanguard/contracts';
+import type { AppEnv } from '../env.ts';
+import { db } from '../lib/db.ts';
+import { ApiError } from '../lib/errors.ts';
+import { log } from '../lib/log.ts';
+
+// :org es orgs.id (uuid). Quien no es miembro recibe 404, no 403: no se confirma que la org exista (S15 15.3).
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const orgMember: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const org = c.req.param('org') ?? '';
+  if (!UUID.test(org)) throw new ApiError('not_found', 'Organización no encontrada');
+  const { data, error } = await db(c.env).from('org_members').select('role')
+    .eq('org_id', org).eq('user_id', c.get('userId')).maybeSingle();
+  if (error) {
+    log('error', 'org.miembro_error', { rid: c.get('rid'), code: error.code });
+    throw new ApiError('internal', 'No pudimos comprobar tu acceso a esta organización');
+  }
+  const role = Role.safeParse(data?.role);
+  if (!role.success) throw new ApiError('not_found', 'Organización no encontrada');
+  c.set('orgId', org);
+  c.set('role', role.data);
+  await next();
+};

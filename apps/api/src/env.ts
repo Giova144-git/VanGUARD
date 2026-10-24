@@ -4,6 +4,7 @@ import type { Role } from '@vanguard/contracts';
 export type Ctx = {
   rid: string;
   userId: string;
+  email: string | null;
   isAnon: boolean;
   orgId: string;
   role: Role;

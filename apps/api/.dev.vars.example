@@ -25,3 +25,7 @@ TWILIO_API_SECRET=
 TWILIO_FROM=
 PSI_API_KEY=
 VG_EDGE_SECRET=
+# Solo dev: PAT sbp_fc… de solo lectura para la prueba de humo del BACK (SQL read-only, advisors, permiso de métricas)
+SUPABASE_HUMO_PAT=
+# TEMPORAL (prueba de humo A7.7): se borra con la ruta POST /api/_humo
+VG_HUMO_TOKEN=

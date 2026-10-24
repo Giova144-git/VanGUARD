@@ -30,11 +30,11 @@ describe('E1 · GET /api/health', () => {
 });
 
 describe('errores con la forma fija del contrato', () => {
-  it('ruta inexistente → 404 not_found con request_id', async () => {
+  it('ruta /api privada sin sesión → 401 unauthorized con request_id', async () => {
     const r = await app.request('/api/nada', {}, envDoble().env);
-    expect(r.status).toBe(404);
+    expect(r.status).toBe(401);
     const b = ApiErrorBody.parse(await r.json());
-    expect(b.error.code).toBe('not_found');
+    expect(b.error.code).toBe('unauthorized');
     expect(b.error.request_id).toBe(r.headers.get('x-request-id'));
   });
 

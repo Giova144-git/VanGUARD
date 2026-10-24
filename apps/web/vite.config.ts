@@ -63,6 +63,15 @@ function zodSinJitPrimero(): Plugin {
   };
 }
 
+// El pie de la portada estática de index.html (§14.22) lleva la misma versión que el de Inicio.tsx: así React la
+// sustituye sin cambiar nada y quien no ejecuta JS ve qué commit está publicado.
+const REPO_JUECES = 'https://github.com/platanus-hack/platanus-hack-26-ve-team-22';   // = lib/env.ts
+function versionEnPortada(commit: string): Plugin {
+  const html = !/^[0-9a-f]{7}$/.test(commit) ? '<span class="font-mono">local</span>'   // solo hex: va dentro del HTML
+    : `<a class="font-mono underline underline-offset-2" href="${REPO_JUECES}/commit/${commit}" target="_blank" rel="noopener noreferrer">${commit}</a>`;
+  return { name: 'vg-version-portada', transformIndexHtml: (h) => h.replace('<!--vg-version-->', html) };
+}
+
 export default defineConfig(({ mode }) => {
   // Vite NO carga los .env en process.env mientras evalúa la config: todo sale de loadEnv (S03 §03.7).
   const env = loadEnv(mode, process.cwd(), 'VITE_');
@@ -75,7 +84,7 @@ export default defineConfig(({ mode }) => {
   const commit = (process.env.WORKERS_CI_COMMIT_SHA ?? 'local').slice(0, 7);
   return {
     define: { __VG_COMMIT__: JSON.stringify(commit) },                 // declarado en src/vite-env.d.ts; lo pinta el pie de la portada (§14.22)
-    plugins: [react(), tailwindcss(), cabecerasSeguridad(env.VITE_SUPABASE_URL || 'https://invalid.supabase.co'), zodSinJitPrimero()],
+    plugins: [react(), tailwindcss(), cabecerasSeguridad(env.VITE_SUPABASE_URL || 'https://invalid.supabase.co'), zodSinJitPrimero(), versionEnPortada(commit)],
     resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
     server: { port: 5173, proxy: Object.fromEntries(['/api', '/ingest', '/mcp'].map((p) => [p, { target: api, changeOrigin: true }])) },
     // Los fixtures no entran en el bundle (F-03) gracias a "sideEffects": false de packages/contracts/package.json.

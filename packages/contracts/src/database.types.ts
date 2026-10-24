@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0008b.
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0008h.
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -686,7 +686,7 @@ export type Database = {
           delivered_at: string | null
           error: string | null
           id: string
-          incident_id: string
+          incident_id: string | null
           org_id: string
           provider_id: string | null
           read_at: string | null
@@ -701,7 +701,7 @@ export type Database = {
           delivered_at?: string | null
           error?: string | null
           id?: string
-          incident_id: string
+          incident_id?: string | null
           org_id: string
           provider_id?: string | null
           read_at?: string | null
@@ -716,7 +716,7 @@ export type Database = {
           delivered_at?: string | null
           error?: string | null
           id?: string
-          incident_id?: string
+          incident_id?: string | null
           org_id?: string
           provider_id?: string | null
           read_at?: string | null

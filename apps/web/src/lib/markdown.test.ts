@@ -4,11 +4,15 @@ import { bloques, enLinea } from './markdown';
 
 describe('markdown seguro', () => {
   it('reconoce títulos, párrafos y listas del overview del fixture', () => {
-    const bs = bloques(fx.wikiDoc.overview_md);
+    // Lo esperado sale del propio texto del fixture: el test no se rompe si el ORQUESTADOR ajusta el contenido.
+    const md = fx.wikiDoc.overview_md;
+    const lineas = md.split('\n').map((l) => l.trim());
+    const bs = bloques(md);
     expect(bs[0]).toMatchObject({ t: 'h', nivel: 1 });
-    expect(bs.filter((b) => b.t === 'h' && b.nivel === 2)).toHaveLength(5);
-    expect(bs.some((b) => b.t === 'ul' && b.items.length === 6)).toBe(true);
-    expect(bs.some((b) => b.t === 'ol' && b.items.length === 5)).toBe(true);
+    expect(bs.filter((b) => b.t === 'h' && b.nivel === 2)).toHaveLength(lineas.filter((l) => /^##\s/.test(l)).length);
+    const items = (t: 'ul' | 'ol') => bs.flatMap((b) => (b.t === t ? b.items : [])).length;
+    expect(items('ul')).toBe(lineas.filter((l) => /^[-*]\s/.test(l)).length);
+    expect(items('ol')).toBe(lineas.filter((l) => /^\d{1,2}[.)]\s/.test(l)).length);
   });
   it('deja HTML, enlaces e imágenes como texto literal', () => {
     const malo = '<script>alert(1)</script> [x](javascript:alert(1)) ![i](https://evil.test/i.png)';

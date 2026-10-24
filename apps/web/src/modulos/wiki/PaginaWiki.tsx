@@ -21,6 +21,7 @@ import { useConexiones, useWikiDoc, useWikiRun, useWikiRuns } from '@/lib/consul
 import { mensajeDe } from '@/lib/errores';
 import { cuando, miles, usd } from '@/lib/formato';
 import { Markdown } from '@/lib/markdown';
+import { comoMarkdown, topeUsd } from './texto';
 import { useEstimarWiki, useGenerarWiki } from '@/lib/mutaciones';
 import { extraerRepo } from '@/lib/pre-guardas';
 import { cn } from '@/lib/utils';
@@ -29,8 +30,6 @@ const PASO: Record<WikiRun['steps'][number]['name'], string> = {
   arbol: 'Árbol del repo', triage: 'Elegir los archivos que importan', area: 'Explicar cada área', sintesis: 'Resumen para el directivo', fin: 'Listo',
 };
 const corto = (sha: string | null) => (sha ? sha.slice(0, 7) : '—');
-// Tope aceptado: la estimación × 1,5 redondeada a centavos, máximo 5 USD (WikiRunCreate.max_usd).
-export const topeUsd = (est: number) => Math.min(5, Math.max(0.01, Math.ceil(est * 1.5 * 100) / 100));
 
 function Estimacion({ e, alGenerar, alVer, ocupado }: { e: WikiEstimate; alGenerar: (force: boolean) => void; alVer: (id: string) => void; ocupado: boolean }) {
   return (
@@ -102,15 +101,6 @@ function Progreso({ run, alReintentar, puedeEscribir }: { run: WikiRun; alReinte
       ) : null}
     </section>
   );
-}
-
-// «Copiar como Markdown»: el documento entero, con el mapa en su valla mermaid y una sección por área.
-export function comoMarkdown(d: WikiDoc): string {
-  const partes = [d.overview_md.trim()];
-  if (d.mermaid) partes.push('```mermaid\n' + d.mermaid + '\n```');
-  for (const p of d.paginas) partes.push(`## ${p.titulo}\n\n${p.resumen_md.trim()}\n\nArchivos: ${p.archivos.map((a) => `\`${a}\``).join(', ')}`);
-  partes.push(`---\n${d.repo_full_name}@${d.branch} · ${d.commit_sha.slice(0, 7)} · generado ${d.generated_at} con ${d.models.fast} y ${d.models.smart}`);
-  return partes.join('\n\n');
 }
 
 function Documento({ d }: { d: WikiDoc }) {

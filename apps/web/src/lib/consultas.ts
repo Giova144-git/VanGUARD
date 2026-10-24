@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, ScanRun, Traffic,
+  Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -124,4 +124,10 @@ export const useExportMd = (org: string) => useQuery({
 export const useContactos = (org: string, habilitado: boolean) => useQuery({
   queryKey: ['org', org, 'contacts'], enabled: habilitado, refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/contacts`, { esquema: z.array(Contact) }),
+});
+
+// E24: repeticiones crudas para el histórico de solo lectura (P0-lite). Sin polling: las mediciones son sembradas.
+export const usePerfRuns = (org: string) => useQuery({
+  queryKey: ['org', org, 'perf'], staleTime: 60_000, refetchIntervalInBackground: false,
+  queryFn: () => api(`/api/orgs/${org}/perf/runs?limit=30`, { esquema: z.array(PerfRunExt) }),
 });

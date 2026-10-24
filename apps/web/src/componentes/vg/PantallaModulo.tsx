@@ -2,7 +2,7 @@
 // «Ahora» → secciones propias → «Revisado» → guía. Una sola para Supabase, Cloudflare y Codebase.
 import type { ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { KeyRound, RotateCw, X } from 'lucide-react';
+import { Gauge, KeyRound, RotateCw, X } from 'lucide-react';
 import type { EstadoModulo, Module, Provider } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
@@ -28,14 +28,15 @@ const ERROR_ESTADO: Record<NonNullable<EstadoModulo['error']>, string> = {
 };
 const NOMBRE_PROV: Record<Exclude<Provider, 'ingest'>, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', github: 'GitHub' };
 
-export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module; proveedor: Exclude<Provider, 'ingest'>; children?: ReactNode }) {
+// `proveedor = null` (Rendimiento, S14 §14.13): sin conexión propia; «Sin datos» = ninguna cifra con n → «Aún no medimos tu web».
+export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; children?: ReactNode }) {
   const org = useOrg();
   const navegar = useNavigate();
   const [params, setParams] = useSearchParams();
   const e = entradaNav(modulo)!;
   const q = useEstadoModulo(org.id, modulo);
   const conexiones = useConexiones(org.id);
-  const c = conexiones.data?.find((x) => x.provider === proveedor && x.kind === 'read');
+  const c = proveedor ? conexiones.data?.find((x) => x.provider === proveedor && x.kind === 'read') : undefined;
   const filtro = params.get('filtro');
   const est = q.data;
 
@@ -49,7 +50,15 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
     </>} />
   );
 
-  if (conexiones.data && !c) return (
+  if (!proveedor && est && est.cifras.every((x) => x.n == null)) return (
+    <div className="flex flex-col gap-6">
+      {barra}
+      <Vacio icono={Gauge} titulo="Aún no medimos tu web" texto={e.descripcion} />
+      <GuiaModulo id={modulo as IdNav} />
+    </div>
+  );
+
+  if (proveedor && conexiones.data && !c) return (
     <div className="flex flex-col gap-6">
       {barra}
       <Vacio icono={KeyRound} titulo={`Conecta ${NOMBRE_PROV[proveedor]} para ver este módulo`} texto={e.descripcion}

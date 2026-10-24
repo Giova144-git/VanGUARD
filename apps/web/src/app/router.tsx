@@ -1,18 +1,12 @@
 // Tabla de rutas (S14 §14.4), react-router 7.18.4 en modo data router. El router se crea una vez, fuera del árbol.
 // La portada es la única página que no va en lazy: así no arrastra Recharts ni el cascarón (dogfooding de §10).
 import { createBrowserRouter, type RouteObject } from 'react-router';
-import type { IdNav } from '@/lib/nav';
 import ErrorRuta from './ErrorRuta';
 import Inicio from './paginas/Inicio';
 import NoEncontrada from './paginas/NoEncontrada';     // estática: ya la importan ErrorRuta y guardas
 
 const pagina = (cargar: () => Promise<{ default: React.ComponentType }>) =>
   async () => ({ Component: (await cargar()).default });
-
-// Páginas de módulo que llegan en hitos siguientes (asignación del ORQUESTADOR, S14 §14.20).
-const EN_CAMINO: [string, IdNav, string][] = [
-  ['performance', 'performance', 'el hito 7 (Rendimiento)'],
-];
 
 const rutas: RouteObject[] = [
   { path: '/', element: <Inicio />, errorElement: <ErrorRuta /> },
@@ -36,16 +30,10 @@ const rutas: RouteObject[] = [
           { path: 'audit/:scanId', lazy: pagina(() => import('@/modulos/auditoria/PaginaAuditoria')), errorElement: <ErrorRuta /> },
           { path: 'incidents', lazy: pagina(() => import('@/modulos/incidentes/PaginaIncidentes')), errorElement: <ErrorRuta /> },
           { path: 'incidents/:incidentId', lazy: pagina(() => import('@/modulos/incidentes/PaginaIncidente')), errorElement: <ErrorRuta /> },
+          { path: 'performance', lazy: pagina(() => import('@/modulos/rendimiento/PaginaRendimiento')), errorElement: <ErrorRuta /> },
           { path: 'export', lazy: pagina(() => import('@/modulos/exportar/PaginaExportar')), errorElement: <ErrorRuta /> },
           { path: 'settings', lazy: pagina(() => import('@/modulos/ajustes/PaginaAjustes')), errorElement: <ErrorRuta /> },
           { path: 'findings/:findingId', lazy: pagina(() => import('@/modulos/hallazgos/PaginaHallazgo')), errorElement: <ErrorRuta /> },
-          ...EN_CAMINO.map(([path, id, hito]): RouteObject => ({
-            path, errorElement: <ErrorRuta />,
-            lazy: async () => {
-              const { default: PaginaEnCamino } = await import('./paginas/PaginaEnCamino');
-              return { Component: () => <PaginaEnCamino key={path} id={id} hito={hito} /> };
-            },
-          })),
           { path: '*', element: <NoEncontrada /> },
         ],
       },

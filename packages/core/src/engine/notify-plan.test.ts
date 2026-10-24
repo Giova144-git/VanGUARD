@@ -54,9 +54,12 @@ describe('planNotifications: casos de S15 15.13', () => {
     expect(plan(inc(), { storm: 'suppressed' })).toEqual([]);
     expect(planAvisos(inc(), C, NADA, CAPS, 'suppressed', AHORA).motivo).toBe('tormenta');
   });
-  it('reabierto critical sin subir → reopened_v1 y SIN llamada', () => {
-    expect(plan(inc({ is_new: false, reopened: true, prev_severity: 'critical' })))
-      .toEqual(['whatsapp:c1:reopened_v1:queued', 'whatsapp:c2:reopened_v1:queued']);
+  it('reabierto sin subir → [] (solo app y timeline, §12.3/§12.4; decisión del ORQUESTADOR) y sin llamada', () => {
+    for (const s of ['critical', 'high'] as const) {
+      const i = inc({ severity: s, is_new: false, reopened: true, prev_severity: s });
+      expect(plan(i), s).toEqual([]);
+      expect(planAvisos(i, C, NADA, CAPS, 'none', AHORA).motivo).toBe('reabierto');
+    }
   });
   it('medium (y low/info) → [] solo in-app', () => {
     for (const s of ['medium', 'low', 'info'] as const) {

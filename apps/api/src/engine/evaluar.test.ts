@@ -213,9 +213,10 @@ describe('evaluarEnVivo · ataque sqlmap (S15 15.9)', () => {
       { is_new: false, prev_severity: 'high', reopened: false }, 'rid-1');
   });
 
-  it('reaparece < 10 min después de resolverse: reabre el mismo y avisa con reopened (el despachador elige plantilla)', async () => {
+  it('reaparece < 10 min después de resolverse: reabre el mismo SIN aviso externo (§12.3/§12.4; queda en app y timeline)', async () => {
     sqlmap();
     await evaluar();
+    expect(estado.aviso).toHaveBeenCalledTimes(1);                          // el aviso del incidente nuevo
     incs[0]!.status = 'resolved';
     incs[0]!.resolved_at = Date.now();
     avanzar(5 * 60_000);
@@ -223,8 +224,7 @@ describe('evaluarEnVivo · ataque sqlmap (S15 15.9)', () => {
     await evaluar();
     expect(incs).toHaveLength(1);
     expect(incs[0]!.status).toBe('open');
-    expect(estado.aviso).toHaveBeenLastCalledWith(expect.anything(), ORG, incs[0]!.id,
-      { is_new: false, prev_severity: 'high', reopened: true }, 'rid-1');
+    expect(estado.aviso).toHaveBeenCalledTimes(1);                          // reabrir con la misma severidad no avisa
   });
 
   it('sin reglas disparadas (solo tráfico normal) no llama a vg_upsert_incident ni avisa', async () => {

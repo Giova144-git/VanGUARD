@@ -20,12 +20,12 @@ describe('subida de severidad y motivo de aviso', () => {
     expect(subioSeveridad('medium', 'high')).toBe(true);
     expect(subioSeveridad(null, 'critical')).toBe(false);
   });
-  it('nuevo > subió > reabierto; sin cambio → null', () => {
+  it('nuevo > subió; reabierto sin subir y sin cambio → null (reabrir no avisa fuera de la app, §12.3/§12.4)', () => {
     const b = { severity: 'high' as const, prev_severity: null, is_new: false, reopened: false };
     expect(motivoAviso({ ...b, is_new: true })).toBe('nuevo');
     expect(motivoAviso({ ...b, severity: 'critical', prev_severity: 'high' })).toBe('subio');
     expect(motivoAviso({ ...b, severity: 'critical', prev_severity: 'high', reopened: true })).toBe('subio');
-    expect(motivoAviso({ ...b, prev_severity: 'high', reopened: true })).toBe('reabierto');
+    expect(motivoAviso({ ...b, prev_severity: 'high', reopened: true })).toBeNull();
     expect(motivoAviso({ ...b, prev_severity: 'high' })).toBeNull();
     expect(motivoAviso({ ...b, severity: 'high', prev_severity: 'critical' })).toBeNull();
   });

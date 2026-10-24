@@ -35,12 +35,12 @@ export function paramsUpsertIncidente(inc: IncidenteEdgeConClave,
 /** high → critical (y cualquier subida): se compara por rango, nunca por texto ('critical' < 'high' alfabéticamente). */
 export const subioSeveridad = (prev: Severity | null, actual: Severity): boolean => prev !== null && rank(actual) > rank(prev);
 
-export type MotivoAviso = 'nuevo' | 'subio' | 'reabierto';
-/** Por qué la respuesta del upsert merece aviso externo (renotificación de §12.3), o null si no cambió nada que avisar. */
+export type MotivoAviso = 'nuevo' | 'subio';
+/** Por qué la respuesta del upsert merece aviso externo (renotificación de §12.3), o null si no cambió nada que avisar.
+ *  Reabrir sin subir de severidad no avisa (§12.3/§12.4, decisión del ORQUESTADOR): queda en la app y en la timeline. */
 export function motivoAviso(i: Pick<RespuestaUpsert, 'severity' | 'prev_severity' | 'is_new' | 'reopened'>): MotivoAviso | null {
   if (i.is_new) return 'nuevo';
-  if (subioSeveridad(i.prev_severity, i.severity)) return 'subio';
-  return i.reopened ? 'reabierto' : null;
+  return subioSeveridad(i.prev_severity, i.severity) ? 'subio' : null;
 }
 
 /** Espejo del cooldown de la RPC: ¿un incidente resuelto en `resolvedAt` se reabriría ahora en vez de abrir uno nuevo? */

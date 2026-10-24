@@ -70,6 +70,27 @@ try {
     ok(`B ${metodo} ${ruta.replace(ORG_A, 'A')} → 404`, r.status === 404);
   }
 
+  // Lo anterior lo corta orgMember (B no es miembro de A). Esto prueba el filtro .eq('org_id') de cada RUTA: B pide los
+  // ids de A por la ruta de SU org → 404, con el mismo texto que un id inexistente y que uno malformado (no se distingue
+  // «existe en otra org» de «no existe»). Recursos de A sembrados por supabase/seed/dev-idor.sql.
+  const RECURSOS_A = [
+    ['findings', '00000000-0000-4000-a000-0000000f0a01'], ['scans', '00000000-0000-4000-a000-0000000d0a01'],
+    ['incidents', '00000000-0000-4000-a000-0000000e0a01'],
+  ];
+  const cuerpo404 = async (r) => (r.status === 404 ? (await r.json().catch(() => null))?.error?.message ?? null : `status ${r.status}`);
+  for (const [recurso, id] of RECURSOS_A) {
+    const ajeno = await cuerpo404(await pedir(tb, 'GET', `/api/orgs/${ORG_B}/${recurso}/${id}`));
+    const inexistente = await cuerpo404(await pedir(tb, 'GET', `/api/orgs/${ORG_B}/${recurso}/00000000-0000-4000-a000-00000000ffff`));
+    const malformado = await cuerpo404(await pedir(tb, 'GET', `/api/orgs/${ORG_B}/${recurso}/no-es-un-uuid`));
+    ok(`B GET /api/orgs/B/${recurso}/<id de A> → 404 igual que inexistente y malformado`,
+      typeof ajeno === 'string' && !ajeno.startsWith('status') && ajeno === inexistente && ajeno === malformado);
+  }
+  for (const accion of ['ack', 'mute']) {
+    const r = await fetch(`${API}/api/orgs/${ORG_B}/incidents/00000000-0000-4000-a000-0000000e0a01/${accion}`, { method: 'POST',
+      headers: { authorization: `Bearer ${tb}`, 'content-type': 'application/json', origin: API }, body: JSON.stringify({ minutes: 60 }) });
+    ok(`B POST /api/orgs/B/incidents/<id de A>/${accion} → 404 (no toca el incidente de A)`, r.status === 404);
+  }
+
   // /api/me de cada uno solo lista su propia org; la lista de conexiones de B no trae nada de A.
   for (const [tok, propia, ajena, quien] of [[ta, ORG_A, ORG_B, 'A'], [tb, ORG_B, ORG_A, 'B']]) {
     const me = await (await pedir(tok, 'GET', '/api/me')).json();

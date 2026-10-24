@@ -27,7 +27,7 @@ export type Planned = {
   skipped_cap: boolean;                           // = status === 'skipped_cap' (forma de S15 15.9)
   p1: boolean;                                    // voz: el despachador P0 no la envía ni escribe fila
 };
-export type MotivoSinAvisos = 'sin_cambio' | 'muted' | 'severidad_baja' | 'tormenta' | 'sin_contactos';
+export type MotivoSinAvisos = 'sin_cambio' | 'reabierto' | 'muted' | 'severidad_baja' | 'tormenta' | 'sin_contactos';
 export type PlanAvisos = { envios: Planned[]; motivo: MotivoSinAvisos | null };
 export type OpcionesPlan = {
   fueraDeVentanaDemo?: boolean;                   // fueraDeVentanaDemo(org, app_config.demo_alertas_hasta)
@@ -56,7 +56,8 @@ export function planAvisos(i: IncidenteAviso, contacts: readonly ContactoAviso[]
   storm: Tormenta, now = new Date(), o: OpcionesPlan = {}): PlanAvisos {
   const subio = subioSeveridad(i.prev_severity, i.severity);
   const no = (motivo: MotivoSinAvisos): PlanAvisos => ({ envios: [], motivo });
-  if (!(i.is_new || subio || i.reopened)) return no('sin_cambio');
+  // Reabierto sin subir: sin avisos externos (§12.3/§12.4); si al reabrir sube, va incident_up_v1 (sin llamada, abajo).
+  if (!(i.is_new || subio)) return no(i.reopened ? 'reabierto' : 'sin_cambio');
   const silencio = i.muted_until ? Date.parse(i.muted_until) : NaN;
   if (Number.isFinite(silencio) && silencio > now.getTime()) return no('muted');
   if (rank(i.severity) < rank('high')) return no('severidad_baja');       // medium/low/info: solo in-app
@@ -65,7 +66,7 @@ export function planAvisos(i: IncidenteAviso, contacts: readonly ContactoAviso[]
   const byPrio = [...contacts].sort((a, b) => a.priority - b.priority);
   const conWa = byPrio.filter((c) => c.whatsapp);                         // filtrar ANTES de recortar
   const conVoz = byPrio.filter((c) => c.voice);
-  const tpl: PlantillaAviso = storm === 'first' ? 'storm_v1' : i.is_new ? 'incident_v1' : subio ? 'incident_up_v1' : 'reopened_v1';
+  const tpl: PlantillaAviso = storm === 'first' ? 'storm_v1' : i.is_new ? 'incident_v1' : 'incident_up_v1';
   const uso = { whatsapp: used1h.whatsapp, voice: used1h.voice };
   let global = o.usoGlobal?.voice ?? null;
   const topeGlobal = o.topeGlobal?.voice ?? TOPE_GLOBAL_LLAMADAS_HORA;

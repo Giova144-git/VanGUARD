@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertPrefs, CodeReviewState, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  AiUsage, AlertPrefs, CodeReviewState, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -175,4 +175,12 @@ export const useRevisionCodigo = (org: string, rapidoHasta: number) => useQuery(
 export const usePrefsAvisos = (org: string) => useQuery({
   queryKey: ['org', org, 'alert-prefs'], refetchIntervalInBackground: false, staleTime: 30_000,
   queryFn: async () => AlertPrefs.parse(await api(`/api/orgs/${org}/alert-prefs`, { esquema: AlertPrefs })),
+});
+
+// Gasto de IA de la org (E28, PLAN #13): solo owner y admin (`habilitado`); cada 30 s con la pestaña visible. Validado
+// con zod como E45: un cuerpo fuera de contrato no pinta el chip. Un 404 (E28 aún sin desplegar) deja de sondear.
+export const useUsoIA = (org: string, habilitado: boolean) => useQuery({
+  queryKey: ['org', org, 'ai'], enabled: habilitado, staleTime: 30_000, refetchIntervalInBackground: false,
+  queryFn: async () => AiUsage.parse(await api(`/api/orgs/${org}/ai/usage`, { esquema: AiUsage })),
+  refetchInterval: (q) => (es404(q) ? false : 30_000),
 });

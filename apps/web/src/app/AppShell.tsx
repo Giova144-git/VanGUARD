@@ -7,11 +7,12 @@ import type { Module, Overview, Role } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/componentes/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/componentes/ui/sheet';
+import { ChipGastoIA } from '@/componentes/vg/ChipGastoIA';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { MarcaNumero, MarcasContador } from '@/componentes/vg/MarcasContador';
 import { PaletaComandos } from '@/componentes/vg/PaletaComandos';
 import { ESPERA_G_MS, leerTecla } from '@/lib/atajos';
-import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
+import { useConexiones, useEstadoModulo, useOverview, useUsoIA } from '@/lib/consultas';
 import { cuando } from '@/lib/formato';
 import { MARCA } from '@/lib/marca';
 import { NAV, entradaNav, type EntradaNav, type IdNav } from '@/lib/nav';
@@ -212,6 +213,7 @@ export default function AppShell() {
     return () => { clearTimeout(reloj); window.removeEventListener('keydown', tecla); };
   }, [paleta, irA]);
 
+  const usoIA = useUsoIA(org.id, org.puedeEscribir);   // misma consulta que ChipGastoIA (se comparte por clave)
   return (
     <div className="flex min-h-svh bg-background">
       <aside className={cn('sticky top-0 hidden h-svh shrink-0 border-r bg-sidebar transition-[width] md:block', compacto ? 'w-[4.5rem]' : 'w-60')}>
@@ -232,8 +234,9 @@ export default function AppShell() {
             <Search className="size-5" />
           </Button>
           {org.puedeEscribir ? null : <Etiqueta texto="Demo · solo lectura" rol="info" />}
-          {/* «IA en pausa» no trae acción al lado: neutra (L3). */}
-          {overview.data?.ai?.enabled === false ? <Etiqueta texto="IA en pausa" rol="neutra" /> : null}
+          {/* «IA en pausa» no trae acción al lado: neutra (L3). La dice E5 (overview.ai) o, para admin, E28. */}
+          {overview.data?.ai?.enabled === false || usoIA.data?.enabled === false ? <Etiqueta texto="IA en pausa" rol="neutra" /> : null}
+          <ChipGastoIA org={org.id} puedeEscribir={org.puedeEscribir} />
         </header>
         <FilaEstado overview={overview} fallos={fallos} sinConexiones={conexiones.data?.length === 0} />
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-6">

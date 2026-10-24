@@ -280,8 +280,9 @@ export default function PaginaAjustes() {
   // de arriba cargan después y empujan la sección, así que se vuelve a bajar unas veces en 1,5 s (no si el usuario ya se
   // movió con la rueda o el dedo).
   useEffect(() => {
-    if (hash !== '#avisos') return;
-    const bajar = () => document.getElementById('avisos')?.scrollIntoView({ block: 'start' });
+    const ancla = hash === '#avisos' ? 'avisos' : hash === '#ia' ? 'ia' : null;   // #ia: el chip «Gasto IA hoy»
+    if (!ancla) return;
+    const bajar = () => document.getElementById(ancla)?.scrollIntoView({ block: 'start' });
     const ts = [0, 300, 800, 1500].map((ms) => setTimeout(bajar, ms));
     const parar = () => ts.forEach(clearTimeout);
     window.addEventListener('wheel', parar, { once: true, passive: true });
@@ -314,7 +315,7 @@ export default function PaginaAjustes() {
         </div>
       </section>
 
-      <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-ia">
+      <section id="ia" className="flex scroll-mt-20 flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-ia">
         <div className="flex flex-wrap items-center gap-2">
           <h3 id="t-ia" className="flex-1 text-[17px] font-semibold">IA</h3>
           {ia ? <Etiqueta texto={ia.enabled ? `IA encendida · ${deMapa(NIVEL_IA, ia.level, '—')}` : 'IA en pausa'} rol={ia.enabled ? 'info' : 'neutra'} /> : <span className="text-texto-3">—</span>}

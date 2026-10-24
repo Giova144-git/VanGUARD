@@ -10,7 +10,8 @@
 // Nunca imprime el JWT ni la clave: solo OK/MAL por caso.
 import { createClient } from '@supabase/supabase-js';
 
-const { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } = process.env;
+const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL;
+const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const ESPERA_MS = Number(process.env.HUMO_ESPERA_MS || 45_000);
 const ORG_IDOR_A = '00000000-0000-4000-a000-00000000a001';
 if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) { console.log('MAL faltan SUPABASE_URL o SUPABASE_PUBLISHABLE_KEY'); process.exit(1); }

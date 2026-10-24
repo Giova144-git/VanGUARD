@@ -1,6 +1,6 @@
 // test:idor (§15.13), contra accshmgmfrqrxubpuxcl. Se corre desde apps/api con:
 //   pnpm test:idor        (= node --env-file=.dev.vars test/idor.mjs)
-// Lee SUPABASE_URL, SUPABASE_SECRET_KEY, TEST_USER_A_PASSWORD y TEST_USER_B_PASSWORD del entorno (el chat no abre
+// Lee SUPABASE_URL, SUPABASE_SECRET_KEY, TEST_USER_A_PASSWORD, TEST_USER_B_PASSWORD y SUPABASE_PUBLISHABLE_KEY del entorno (el chat no abre
 // .dev.vars) e IDOR_API (por defecto https://officialvanguard.com; http://localhost:8787 con dev-node).
 // 1) crea o actualiza idor-a@vanguard.test e idor-b@vanguard.test (email_confirm) y sus membresías owner en las orgs
 //    IDOR A/B del seed dev-idor.sql; 2) inicia sesión con los dos; 3) B pide por id los recursos de A → 404 y sus
@@ -78,6 +78,18 @@ try {
   }
   const listaB = await (await pedir(tb, 'GET', `/api/orgs/${ORG_B}/connections`)).json();
   ok('las conexiones de B no traen ninguna de A', Array.isArray(listaB) && !listaB.some((c) => c.id === CONN_A));
+
+  // Decisión (a) del ORQUESTADOR: authenticated no tiene SELECT directo en public (todo va por la API). Con la clave
+  // publicable y la sesión de idor-a, un select directo a findings debe dar «permission denied» (42501).
+  const PUBLICABLE = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (PUBLICABLE) {
+    const pub = createClient(SUPABASE_URL, PUBLICABLE,
+      { ...opciones, global: { headers: { Authorization: `Bearer ${ta}` } } });
+    const { error } = await pub.from('findings').select('id').limit(1);
+    ok('select directo a findings con la sesión de A → permission denied', error?.code === '42501');
+  } else {
+    console.log('INFO sin SUPABASE_PUBLISHABLE_KEY ni VITE_SUPABASE_PUBLISHABLE_KEY: se salta la comprobación de lectura directa');
+  }
 } catch (e) {
   fallos++;
   console.log(`MAL error: ${e?.message ?? 'desconocido'}`);

@@ -10,6 +10,7 @@ export const ANALYZER = `core@${CORE_VERSION}`;
 export * from './key-guards.ts';
 export * from './redact.ts';
 export * from './untrusted.ts';
+export * from './export.ts';
 export * from './otp.ts';
 export * from './egress.ts';
 

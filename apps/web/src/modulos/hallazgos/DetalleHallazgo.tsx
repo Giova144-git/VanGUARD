@@ -20,6 +20,7 @@ import { usePatchHallazgo } from '@/lib/mutaciones';
 import { porQueImporta, referencias } from '@/lib/reglas-texto';
 import { deMapa, type Rol } from '@/lib/severidad';
 import { PromptCorreccion } from './PromptCorreccion';
+import { ResolverConMcp } from './ResolverConMcp';
 
 const MODULO: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
 const ESTADO: Record<FindingStatus, { texto: string; rol: Rol }> = {
@@ -109,6 +110,8 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
       <Acciones org={org} f={f} puedeEscribir={puedeEscribir} />
 
       <PromptCorreccion org={org} finding={f} puedeEscribir={puedeEscribir} />
+
+      {f.status === 'open' ? <ResolverConMcp org={org} findingId={f.id} /> : null}
 
       <section className="flex flex-col gap-2" aria-label="Evidencia">
         <h3 className="text-[15px] font-semibold">Evidencia</h3>

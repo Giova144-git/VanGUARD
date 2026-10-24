@@ -155,8 +155,8 @@ Tres de los cinco que permite la cuenta Free (`"triggers"` en `apps/api/wrangler
 
 | Cron | Qué hace hoy | Archivo |
 |---|---|---|
-| `* * * * *` (monitor por minuto) | `housekeeping`: cierra los incidentes del borde sin eventos de esa IP desde hace 15 min (RPC `vg_resolve_idle_incidents`, ≤ 200 por minuto) y retira de Cloudflare los bloqueos de IP caducados (≤ 5 por minuto, con reintentos 1, 2, 4… min; solo con `VG_ENV=production`) | `apps/api/src/engine/housekeeping.ts` |
-| `0 * * * *` (mantenimiento por hora) | Solo deja una línea de log. Ver hoja de ruta | `apps/api/src/cron.ts` |
+| `* * * * *` (monitor por minuto) | `housekeeping`: cierra los incidentes del borde sin eventos de esa IP desde hace 15 min (RPC `vg_resolve_idle_incidents`, ≤ 200 por minuto) y retira de Cloudflare los bloqueos de IP caducados (≤ 5 por minuto, con reintentos 1, 2, 4… min; solo con `VG_ENV=production`). Además, el vigilante (RPC `vg_vigilar_corridas`, migración `0011_vigilante.sql`, ≤ 50 filas por tabla) deja en `failed` las corridas de wiki sin avance desde hace 10 min y las auditorías sin avance desde hace 15 min, con un texto corto para reintentar y sin cobrar nada más | `apps/api/src/engine/housekeeping.ts` |
+| `0 * * * *` (mantenimiento por hora) | Solo deja una línea de log (el cierre de corridas atascadas lo hace el monitor por minuto) | `apps/api/src/cron.ts` |
 | `0 10 * * *` (re-auditoría diaria, 06:00 Caracas) | Solo deja una línea de log. Ver hoja de ruta | `apps/api/src/cron.ts` |
 
 El monitor por minuto corre **directo en el cron, sin cola**: con cola gastaría unas 13.000 operaciones al día de las
@@ -419,11 +419,10 @@ las respuestas de WhatsApp.
 | Llamada de voz (ElevenLabs/Twilio) | Sin código en `apps/api` |
 | Escalado de avisos (`kind: 'escalate'`) | El tipo existe en `JobMsg`; `runJob` lo descarta sin manejador (`jobs.ts`) |
 | Texto de alerta con IA (`alert_text`) | `pedirTextoAlerta` existe en `ia/claude.ts`, pero nadie lo llama: el WhatsApp usa la plantilla fija |
-| Cron por hora: cerrar auditorías atascadas más de 15 min | Hoy solo registra una línea (`cron.ts`) |
 | Cron diario: re-auditoría de orgs con `daily_audit` | Hoy solo registra una línea (`cron.ts`) |
 | Monitor de salud de Supabase en el cron por minuto | Anunciado en `cron.ts`, sin implementar |
 | Guardar en el servidor el resultado del ZIP | El análisis en el navegador está desplegado (`apps/web/src/modulos/codebase/AnalizarZip.tsx`, commit `8aa1922`) y muestra el resultado sin que el código salga de la máquina. Falta la parte de la API: crear el scan con `kind: zip` (E11), recibir el resultado (E23) y el paso `zip`, que hoy no está registrado (quedaría `skipped` con `no_implementado`) |
-| PageSpeed / Lighthouse (paso `psi`) | Sin registrar. La vista de Rendimiento lee la última fila de `perf_runs` (`apps/api/src/estado/modulo.ts`); esas filas se siembran a mano con mediciones de PageSpeed (`scripts/perf-medir.ts` → `demo/seed-perf.sql`, que en `main` aún no trae mediciones). El histórico E24 (`GET /api/orgs/:org/perf/runs`) que pide la web aún no existe en la API |
+| PageSpeed / Lighthouse (paso `psi`) | Sin registrar. La vista de Rendimiento lee la última fila de `perf_runs` (`apps/api/src/estado/modulo.ts`); esas filas se siembran a mano con mediciones de PageSpeed (`scripts/perf-medir.ts` → `demo/seed-perf.sql`, que en `main` aún no trae mediciones). El histórico E24 (`GET /api/orgs/:org/perf/runs`, commit `1bec15c`) ya responde, pero devuelve una lista vacía mientras `perf_runs` no tenga filas; la página lo muestra como «Aún no medimos tu web» |
 | Endpoint `/mcp` | Reservado en `run_worker_first`; no está montado (`app.ts`), responde 404 |
 | Cruce hallazgo → página de la wiki en la interfaz | `paginaDeRuta` existe en `packages/deepwiki`, la web no lo usa |
 | Pruebas unitarias dentro del build de Workers Builds | Hoy el build corre lints y `tsc`; `pnpm test` se corre aparte |

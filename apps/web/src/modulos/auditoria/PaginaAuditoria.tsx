@@ -165,9 +165,9 @@ function Corrida({ id }: { id: string }) {
         <p className="sr-only" aria-live="polite">{actual ? `Paso actual: ${actual}` : ''} {est.texto}</p>
       </section>
       {run.score != null && run.coverage ? (
-        // La banda la decide el servidor (L1): ScanRun no la trae, así que solo se usa la del overview si es esta corrida.
+        // La banda la decide el servidor (L1): la de la corrida; si es vieja y no la trae, la del overview si es esta misma; si no, neutra.
         <section className="rounded-xl border bg-card p-5"><PuntajeBlindaje score={run.score}
-          band={overview.data?.last_scan?.id === run.id ? overview.data.band : null}
+          band={run.band ?? (overview.data?.last_scan?.id === run.id ? overview.data.band : null)}
           coverage={run.coverage} enlaceConectar={`/o/${org.id}/connections`} /></section>
       ) : null}
       {run.status === 'failed' ? (

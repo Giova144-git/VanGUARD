@@ -6,7 +6,11 @@
 //   (3) el canal privado org:<demo> llega a SUBSCRIBED y recibe un broadcast
 //       (se dispara aparte con realtime.send o con un cambio en scan_runs/findings/incidents de la demo);
 //   (4) un canal público es rechazado («Allow public access» OFF);
-//   (5) el canal privado de otra org (IDOR A) es rechazado.
+//   (5) el canal privado de otra org (IDOR A) es rechazado;
+//   (6) si llega un broadcast, su payload es el mínimo de 0008e (sin la fila entera).
+// Con HUMO_DISPARAR=1 (y SUPABASE_SECRET_KEY en el entorno, p. ej. `node --env-file=.dev.vars`) el propio script dispara
+// el broadcast: inserta una auditoría failed de prueba en scan_runs de la demo (pasa por el trigger) y la borra al acabar.
+// La clave secreta solo se usa para eso; las comprobaciones (1)–(6) van con la publicable.
 // Nunca imprime el JWT ni la clave: solo OK/MAL por caso.
 import { createClient } from '@supabase/supabase-js';
 
@@ -59,10 +63,30 @@ try {
   const ajeno = await suscribir(`org:${ORG_IDOR_A}`, true);
   ok(`canal privado de otra org rechazado (${ajeno.estado})`, ajeno.estado !== 'SUBSCRIBED');
 
+  let disparo = null;
+  if (process.env.HUMO_DISPARAR === '1' && process.env.SUPABASE_SECRET_KEY) {
+    const admin = createClient(SUPABASE_URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    const { data: fila, error: ef } = await admin.from('scan_runs')
+      .insert({ org_id: demo, kind: 'full_audit', status: 'failed', error: 'humo-auth' }).select('id').single();
+    ok('disparo: auditoría de prueba insertada en la demo', !ef && !!fila);
+    if (fila) disparo = { admin, id: fila.id };
+  }
   console.log(`ESPERANDO broadcast en org:<demo> hasta ${ESPERA_MS / 1000} s…`);
   const t0 = Date.now();
   while (!recibido && Date.now() - t0 < ESPERA_MS) await new Promise((r) => setTimeout(r, 500));
+  if (disparo) await disparo.admin.from('scan_runs').delete().eq('id', disparo.id).eq('org_id', demo);
   ok('broadcast recibido en el canal privado', !!recibido);
+  // 0008e: el payload solo lleva table, operation y los ids (nunca la fila entera). Se imprimen los NOMBRES de lo que
+  // sobre, nunca los valores. El `id` de la raíz lo añade Realtime (id del mensaje en realtime.messages), no la fila.
+  if (recibido) {
+    const p = recibido.payload ?? {};
+    const sobra = [...Object.keys(p).filter((k) => !['table', 'operation', 'record', 'old_record'].includes(k)
+        && !(k === 'id' && p.id !== p.record?.id)),
+      ...Object.keys(p.record ?? {}).filter((k) => !['id', 'org_id'].includes(k)).map((k) => `record.${k}`),
+      ...(p.old_record != null ? ['old_record'] : [])];
+    ok(`payload mínimo {table, operation, record{id, org_id}}${sobra.length ? ` (sobran: ${sobra.join(', ')})` : ''}`,
+      sobra.length === 0 && typeof p.record?.id === 'string');
+  }
   await sb.removeAllChannels();
   await sb.auth.signOut();
 } catch (e) {

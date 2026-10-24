@@ -1,8 +1,9 @@
 // Inyección de prompts (S06 06.4 literal): cercado de datos externos, banderas deterministas de entrada y filtro de salida
 // de IA-1. Más el cercado del Markdown de export (S13 13.4: fenceMd, escapeMdInline). API canónica: no hay otra versión.
 // Todo texto se mira en NFKC (＜system＞ → <system>, U+00A0 → espacio) y, además, sin invisibles y sin comentarios /* */:
-// una bandera salta si casa en cualquiera de las tres variantes. Cuantificadores acotados: nada cuadrático.
-import { PATRONES_SECRETO } from './redact.ts';
+// una bandera salta si casa en cualquiera de las tres variantes. Cuantificadores acotados: nada cuadrático (las regex que
+// lo eran con texto hostil se prueban con su versión lineal, que da la misma respuesta: LINEAL, SECRETO y CONEXION).
+import { CONEXION_LINEAL, PATRONES_SECRETO, tapaPrivadas } from './redact.ts';
 export const CANARIO = 'VG-CANARIO-3F9A71C2';                                              // S11 capa 8
 export const DOMINIOS_OK = ['supabase.com', 'cloudflare.com', 'github.com', 'osv.dev', 'nvd.nist.gov']; // canónicas §8
 const BORRADO = new RegExp([
@@ -39,16 +40,30 @@ const PIPE_A_SHELL = new RegExp([
 // marcando, como el ZWJ del rango U+200B–U+200F de antes.
 const INVISIBLE = /(?!(?<=\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}\uFE0F]?)\u200D(?=\p{Extended_Pictographic})|(?<=[\p{Extended_Pictographic}#*0-9])[\uFE0E\uFE0F])[\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
 const INVISIBLES = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;                        // para la variante «limpia»
+const ROL_ETIQUETA = String.raw`<\/?\s*(system|assistant|user|human|datos_no_confiables|evidencia_no_confiable|instructions?)\b`;
+const ROL_PREFIJO = String.raw`(system|assistant|human)\s*:|\b(you are now|eres ahora|developer mode)\b`;
 export const PATRONES_INYECCION: ReadonlyArray<readonly [string, RegExp]> = [
   ['ignora_instrucciones', /\b(ignore|disregard|forget|override)\b.{0,40}\b(previous|above|prior|all|earlier)\b.{0,40}\b(instructions?|rules?|prompts?)\b|\b(ignora|olvida|omite|desobedece)\b.{0,40}\b(lo anterior|instrucciones|reglas)\b/i],
-  ['etiqueta_rol', /<\/?\s*(system|assistant|user|human|datos_no_confiables|evidencia_no_confiable|instructions?)\b[^>]*>/i],
-  ['prefijo_rol', /(^|\n)\s*(system|assistant|human)\s*:|\b(you are now|eres ahora|developer mode)\b/i],
+  ['etiqueta_rol', new RegExp(ROL_ETIQUETA + '[^>]*>', 'i')],
+  ['prefijo_rol', new RegExp(String.raw`(^|\n)\s*` + ROL_PREFIJO, 'i')],
   ['no_avisar', /\b(do not|don't|never|no)\s+(alert|notify|call|escalate|report|avises|alertes|llames|escales|notifiques|reportes)\b/i],
   ['pipe_a_shell', PIPE_A_SHELL],
   ['borrado', BORRADO],
   ['base64_largo', /[A-Za-z0-9+/]{120,}={0,2}/],
   ['invisible', INVISIBLE],
 ];
+// Dos de esas regex son cuadráticas con texto hostil: desde cada inicio, `[^>]*>` recorre hasta el final si no hay «>»
+// (`<system` repetido: 90 ms con 48 KB) y `(^|\n)\s*` recorre todos los blancos que siguen (`\n` repetido: 0,9 s con
+// 48 KB). Van en lineal y con la misma respuesta que su test():
+// - etiqueta_rol: ninguna etiqueta lleva otro «<», así que la primera es la que acaba antes; casa si detrás queda un «>».
+// - prefijo_rol: de los «\n» de un tramo de blancos basta el último (detrás solo quedan blancos sin \n hasta la palabra).
+const ETIQUETA_ROL = new RegExp(ROL_ETIQUETA, 'i');
+const PREFIJO_ROL = new RegExp(String.raw`(?:^\s*|\n[^\S\n]*)` + ROL_PREFIJO, 'i');
+const LINEAL: ReadonlyMap<string, (v: string) => boolean> = new Map([
+  ['etiqueta_rol', (v: string) => { const m = ETIQUETA_ROL.exec(v); return !!m && v.includes('>', m.index + m[0].length); }],
+  ['prefijo_rol', (v: string) => PREFIJO_ROL.test(v)],
+]);
+const casa = (id: string, re: RegExp, v: string) => LINEAL.get(id)?.(v) ?? re.test(v);
 /** Quita los comentarios /* … *\/ en tiempo lineal (una regex perezosa es cuadrática con muchos /* sin cerrar). */
 function sinComentarios(t: string): string {
   let out = '', i = 0;
@@ -84,7 +99,8 @@ function* textos(v: unknown, prof = 0): Generator<string> {                     
 /** Banderas sobre la evidencia: marcan suspected_injection; nunca cambian severidad ni alerta. */
 export function scanInjection(datos: unknown): string[] {
   const f = new Set<string>();
-  for (const t of textos(datos)) for (const v of variantes(t)) for (const [id, re] of PATRONES_INYECCION) if (re.test(v)) f.add(id);
+  for (const t of textos(datos))
+    for (const v of variantes(t)) for (const [id, re] of PATRONES_INYECCION) if (casa(id, re, v)) f.add(id);
   return [...f];
 }
 /** Recibe datos YA pasados por redact(). Claves ordenadas = bytes estables = caché estable (S11). */
@@ -99,18 +115,47 @@ const negado = (antes: string) => { const n = NEGADO.exec(antes); return !!n && 
 // Bandera `secreto`: los formatos de proveedor (los que redact() tapa con [REDACTADO:tipo]) con sus flags. Los genéricos
 // (Authorization/Bearer, param=valor, cadena de conexión) solo cuentan si el valor parece un secreto real: un prompt de
 // corrección legítimo dice «Authorization: Bearer $SUPABASE_ANON_KEY», «API_KEY=tu_clave» o «Bearer <TU_TOKEN>».
-const SECRETO = PATRONES_SECRETO.filter(([, rep]) => rep.startsWith('[REDACTADO:'))
-  .map(([re]) => new RegExp(re.source, re.flags.replace('g', '')));
+// Dos formatos son cuadráticos como regex con texto hostil y van con su test() en lineal: la clave privada, con
+// tapaPrivadas de redact.ts (cabeceras sin pie; tapa algo si y solo si la regex casa), y el JWT, con hayJwt (`eyJ-`
+// repetido: un \b tras cada guion y el tramo de [\w-] entero desde cada uno; 0,6 s con 48 KB). Si cambia la regex del JWT,
+// deja de casar con JWT y se vuelve a ella.
+const JWT = String.raw`\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*`;
+const JWT_INI = /\beyJ/g, TRAMO_JWT = /[A-Za-z0-9_-]*/y, COLA_JWT = /\.eyJ[A-Za-z0-9_-]{10,}\./y;
+/** El tramo de [\w-] no lleva el punto: acaba en el mismo sitio para todos los \beyJ que caen en él. Basta el primero
+ *  (el que deja más sitio a los 10) y la cola una vez por tramo. */
+function hayJwt(v: string): boolean {
+  for (JWT_INI.lastIndex = 0; ;) {
+    const m = JWT_INI.exec(v);
+    if (!m) return false;
+    TRAMO_JWT.lastIndex = m.index + 3;
+    TRAMO_JWT.test(v);
+    const fin = TRAMO_JWT.lastIndex;
+    COLA_JWT.lastIndex = fin;
+    if (fin - m.index - 3 >= 10 && COLA_JWT.test(v)) return true;
+    JWT_INI.lastIndex = fin;                                                // los demás inicios del tramo, saltados
+  }
+}
+const SECRETO: ReadonlyArray<(v: string) => boolean> = PATRONES_SECRETO.filter(([, rep]) => rep.startsWith('[REDACTADO:'))
+  .map(([re, rep]) => {
+    if (rep === '[REDACTADO:clave_privada]') return (v: string) => tapaPrivadas(v) !== v;
+    if (re.source === JWT && re.flags === 'g') return hayJwt;
+    const r = new RegExp(re.source, re.flags.replace('g', ''));
+    return (v: string) => r.test(v);
+  });
 const SECRETO_GENERICO = [
   /\b(?:authorization\s*[:=]\s*(?:(?:bearer|basic|token)\s+)?|bearer\s+)([A-Za-z0-9._~+/=-]{20,})/gi,
   /(?:^|[?&\s;,"'(])(?:(?:access_|refresh_|id_|auth_)?token|api[_-]?key|client_secret|secret|password|passwd)\s*[=:]\s*["']?([^&\s"'<>#;,)]{16,})/gi,
-  /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^:\s/@]+:([^@\s]{8,})@/gi,
 ];
+// Cadena de conexión: lo que daba /\b(?:postgres…):\/\/[^:\s/@]+:([^@\s]{8,})@/gi, con la fuente de redact.ts. Con la @
+// obligatoria era cuadrática (`postgres://u:` sin @: 160 ms con 48 KB); con ella opcional, las mismas coincidencias son
+// las que traen @ y 8 o más caracteres de clave (ninguna puede empezar dentro de otra: no hay @ ni blancos en medio).
+const CONEXION = new RegExp(CONEXION_LINEAL.source, 'gi');
 const PLACEHOLDER = /^[[<${%*]|redactad|your|tu_|example|ejemplo|xxxx|changeme|placeholder|aqui/i;
 const NOMBRE_ENV = /^[A-Z][A-Z0-9]*_[A-Z0-9_]*$/;                                       // CF_API_TOKEN, SUPABASE_ANON_KEY
 const valorReal = (v: string) =>
   !PLACEHOLDER.test(v) && !NOMBRE_ENV.test(v) && (/\d/.test(v) || (/[a-z]/.test(v) && /[A-Z]/.test(v)));
-const secretoGenerico = (v: string) => SECRETO_GENERICO.some((re) => [...v.matchAll(re)].some((m) => valorReal(m[1] ?? '')));
+const secretoGenerico = (v: string) => SECRETO_GENERICO.some((re) => [...v.matchAll(re)].some((m) => valorReal(m[1] ?? '')))
+  || [...v.matchAll(CONEXION)].some((m) => m[2] !== undefined && (m[1] ?? '').length >= 8 && valorReal(m[1] ?? ''));
 // Hosts de salida (06.3): esquema especial con o sin barras (https:evil, https:/evil), cualquier esquema con //, relativo
 // al protocolo (//evil.x), www. y git@host:; la barra invertida vale como barra, como en el navegador. El grupo 1 corta en
 // la puntuación de prosa (lo que enlaza un linkificador); el resto de la autoridad, hasta el blanco, /, ? o #, lo miran
@@ -208,11 +253,11 @@ export function checkFixPrompt(texto: string, extraHosts: string[] = []): string
   const f = new Set<string>();
   const ok = [...DOMINIOS_OK, ...extraHosts.map((h) => h.toLowerCase())];
   if (vs.some((v) => !urlsPermitidas(barras(v), ok))) f.add('url_no_permitida');
-  for (const [id, re] of PATRONES_INYECCION) if (BLOQUEAN.has(id) && vs.some((v) => re.test(v))) f.add(id);
+  for (const [id, re] of PATRONES_INYECCION) if (BLOQUEAN.has(id) && vs.some((v) => casa(id, re, v))) f.add(id);
   for (const v of vs) for (const m of v.matchAll(BORRADO_G))                             // pipe_a_shell NO admite negación
     if (!negado(v.slice(Math.max(0, m.index! - 60), m.index))) f.add('borrado');
   if (vs.some((v) => v.includes(CANARIO))) f.add('canario');
-  if (vs.some((v) => SECRETO.some((re) => re.test(v)) || secretoGenerico(v))) f.add('secreto');
+  if (vs.some((v) => SECRETO.some((casaFormato) => casaFormato(v)) || secretoGenerico(v))) f.add('secreto');
   return [...f];
 }
 /** API que usan S11 (turno user) y S15: bloque cercado + banderas de entrada en una sola llamada. */

@@ -277,3 +277,56 @@ describe('fenceMd / escapeMdInline (S13 13.4)', () => {
     expect(largo.endsWith('…')).toBe(true);
   });
 });
+
+// Por proporción y no por tiempo absoluto (como redact.test.ts): doblar el texto cuesta ≈ ×2 si es lineal y ×4 si es
+// cuadrático, y las dos medidas sufren la misma carga de la suite. Antes, con 48 KB: `postgres://u:` sin @ 160 ms en
+// checkFixPrompt (fix_prompt admite 20 000 caracteres y lo puede dirigir una inyección), `-eyJ` 0,6 s, `<system` sin «>»
+// 90 ms, `\n` repetido 0,9 s en scanInjection y la cabecera de clave privada sin pie 6 ms (con ella hacen falta 192 y
+// 384 KB para que el margen no tape lo cuadrático). Contra la versión anterior, corpus y fuzz dieron lo mismo en todo.
+describe('lineal por proporción con texto hostil: conexión, JWT, clave privada y etiqueta y prefijo de rol', () => {
+  const largo = (base: string, n: number) => base.repeat(Math.ceil(n / base.length));
+  const lineal = (f: (s: string) => unknown, familias: ReadonlyArray<string | ((n: number) => string)>) => {
+    for (const fam of familias) {
+      const gen = typeof fam === 'string' ? (n: number) => largo(fam, n) : fam;
+      const a = gen(192_000), b = gen(384_000);
+      const uno = ms(() => f(a)), dos = ms(() => f(b));
+      expect(dos, JSON.stringify(gen(40))).toBeLessThan(uno * 3 + 20);
+      expect(uno, JSON.stringify(gen(40))).toBeLessThan(1500);
+    }
+  };
+  const PRIVADA = '-----BEGIN ' + 'PRIVATE KEY-----', J = 'ey' + 'J';
+  it('checkFixPrompt: cadenas de conexión sin @ (bandera secreto)', () => lineal(checkFixPrompt, ['postgres://u:', 'postgres://',
+    'mysql://', 'POSTGRES://U:', 'mongodb+srv://a:', 'postgresql://a.b:', (n) => 'token=x ' + largo('postgres://u:', n)]));
+  it('checkFixPrompt: cabeceras de clave privada sin pie y JWT con un \\b tras cada guion (bandera secreto)', () =>
+    lineal(checkFixPrompt, [PRIVADA, '-----BEGIN RSA ' + 'PRIVATE KEY-----END ', J + '-', '-' + J, J + '0123456789-',
+      (n) => largo(J + '-', n) + '.' + J]));
+  it('checkFixPrompt y scanInjection: etiquetas de rol sin «>» detrás', () => {
+    lineal(checkFixPrompt, ['<system', '</user', '<system ', '< instructions', (n) => '>' + largo('<system', n)]);
+    lineal((s) => scanInjection({ x: s }), ['<system', '</ human']);
+  });
+  it('scanInjection: saltos de línea y blancos seguidos (prefijo de rol)', () => lineal((s) => scanInjection({ x: s }),
+    ['\n', '\r\n', '\n ', '\n\t', ' \n', (n) => largo('\n', n) + 'x system']));
+  // Lo que hacían las regex en los casos raros, fijado (contra la versión anterior dieron lo mismo).
+  it('mismo resultado que las regex: la primera etiqueta, el último \\n, el primer eyJ del tramo, pies y la @', () => {
+    expect(checkFixPrompt('<system sin cierre')).toEqual([]);
+    expect(checkFixPrompt('a > b <user c')).toEqual([]);
+    expect(checkFixPrompt('<system ' + 'x'.repeat(50) + ' y > fin')).toEqual(['etiqueta_rol']);
+    expect(checkFixPrompt('<instructionss>')).toEqual([]);
+    for (const t of ['\n\n  \n system :', ' \t system:', 'ok\r\n assistant\t:', 'texto\nHuman\n\n:'])
+      expect(scanInjection({ x: t }), JSON.stringify(t)).toEqual(['prefijo_rol']);
+    for (const t of ['\n x system:', 'a  system: hola', 'x system:', '\n\nhuman'])
+      expect(scanInjection({ x: t }), JSON.stringify(t)).toEqual([]);
+    const D = '0123456789';
+    for (const t of [`x-${J}${D}.${J}${D}.firma`, `${J}-${J}${D}.${J}${D}.`]) expect(checkFixPrompt(t), t).toEqual(['secreto']);
+    for (const t of [`abc-${J}012345678.${J}${D}.`, `${J}${D}.${J}012345678.`, `${J}${D}.-${J}${D}.`, `${J}${D}.${J}${D}`])
+      expect(checkFixPrompt(t), t).toEqual([]);
+    const k = (s: string) => s + ' ' + 'PRIVATE KEY-----';
+    expect(checkFixPrompt(k('-----BEGIN A') + k('-----BEGIN B') + 'x' + k('-----END'))).toEqual(['secreto']);
+    expect(checkFixPrompt(k('-----END A') + ' ' + k('-----BEGIN A'))).toEqual([]);
+    expect(checkFixPrompt(k('-----BEGIN A') + 'END ' + k('B'))).toEqual([]);
+    for (const t of ['postgres://u:p postgres://u:Sup3rS3creta@h', 'POSTGRES://U:Sup3rS3creta@h', 'redis://a:b:Sup3rS3creta@h'])
+      expect(checkFixPrompt(t), t).toContain('secreto');
+    for (const t of ['postgres://u:Sup3r@h', 'postgres://u:Sup3rS3creta', 'mysql://x:Sup3rS3creta @h'])
+      expect(checkFixPrompt(t), t).not.toContain('secreto');
+  });
+});

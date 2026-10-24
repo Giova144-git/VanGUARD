@@ -72,9 +72,9 @@ const tapable = (v: string) => /\d/.test(v) && !REFERENCIA.test(v) && !/^[A-Za-z
 // cuadrática con `http://` repetido sin `?` (650 ms con 100 KB).
 const URL_QUERY = /(https?:\/\/[^\s?#]+)(\?[^\s#]*)?/g;
 // Versiones lineales de PRIVADA (cada cabecera con el primer pie que le sigue, lo que hace su `*?`) y de CONEXION (la @,
-// opcional y mirada después).
+// opcional y mirada después). CONEXION_LINEAL es también la fuente de la cadena de conexión de checkFixPrompt.
 const PRIVADA_INI = /-----BEGIN[^-]*PRIVATE KEY-----/g, PRIVADA_FIN = /-----END[^-]*PRIVATE KEY-----/g;
-const CONEXION_LINEAL = /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^:\s/@]+:([^@\s]+)(@)?/g;
+export const CONEXION_LINEAL = /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^:\s/@]+:([^@\s]+)(@)?/g;
 // Cabezas con lo que tapan detrás de un blanco: si la salida se come la cabeza y no el token, el token también entra.
 // Mejor que HEAD: en `token=…-Bearer tok` o `token=…Authorization: Basic tok` el param= se comía la cabeza y el token
 // quedaba suelto en claro. Todas las cabezas, también las que caen dentro del valor de otra (por eso no matchAll del
@@ -253,9 +253,9 @@ const tapaConexiones = (t: string) => t.replace(CONEXION_LINEAL, (m: string, cla
 // `[\s\S]*?` recorre hasta el final desde cada una. Cada cabecera, desde donde acabó el bloque anterior, con el primer pie
 // que EMPIEZA tras ella, aunque se solape con otro pie (`…KEY-----END…`: por eso los pies con un lookahead y no con
 // matchAll de PRIVADA_FIN, que se saltaría el segundo). Si una cabecera no tiene pie, las de después (acaban más tarde)
-// tampoco: se acaba.
+// tampoco: se acaba. checkFixPrompt la usa como test() lineal de PRIVADA (tapa algo si y solo si la regex casa).
 const CABECERA = /-----BEGIN[^-]*PRIVATE KEY-----/y, PIE = /(?=(-----END[^-]*PRIVATE KEY-----))/g;
-function tapaPrivadas(t: string): string {
+export function tapaPrivadas(t: string): string {
   let out = '', desde = 0, k = 0, pies: RegExpExecArray[] | undefined;
   for (let i = t.indexOf('-----BEGIN'); i !== -1; i = t.indexOf('-----BEGIN', i + 1)) {
     CABECERA.lastIndex = i;

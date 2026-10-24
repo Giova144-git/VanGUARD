@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0011 (0012 no cambia firmas).
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0013.
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -142,6 +142,38 @@ export type Database = {
           },
         ]
       }
+      alert_prefs: {
+        Row: {
+          org_id: string
+          review_voice_min: string
+          review_whatsapp_min: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          org_id: string
+          review_voice_min?: string
+          review_whatsapp_min?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          org_id?: string
+          review_voice_min?: string
+          review_whatsapp_min?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alert_prefs_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_config: {
         Row: {
           key: string
@@ -216,6 +248,180 @@ export type Database = {
           },
           {
             foreignKeyName: "approvals_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      code_review_configs: {
+        Row: {
+          branch: string
+          connection_id: string
+          created_at: string
+          created_by: string | null
+          enabled: boolean
+          hook_events: string[]
+          id: string
+          last_error: string | null
+          last_error_at: string | null
+          last_event_at: string | null
+          last_ping_at: string | null
+          org_id: string
+          secret_kid: string
+          secret_last4: string | null
+          secret_sealed: Json
+          updated_at: string
+        }
+        Insert: {
+          branch: string
+          connection_id: string
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          hook_events?: string[]
+          id: string
+          last_error?: string | null
+          last_error_at?: string | null
+          last_event_at?: string | null
+          last_ping_at?: string | null
+          org_id: string
+          secret_kid: string
+          secret_last4?: string | null
+          secret_sealed: Json
+          updated_at?: string
+        }
+        Update: {
+          branch?: string
+          connection_id?: string
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          hook_events?: string[]
+          id?: string
+          last_error?: string | null
+          last_error_at?: string | null
+          last_event_at?: string | null
+          last_ping_at?: string | null
+          org_id?: string
+          secret_kid?: string
+          secret_last4?: string | null
+          secret_sealed?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "code_review_configs_connection_id_org_id_fkey"
+            columns: ["connection_id", "org_id"]
+            isOneToOne: false
+            referencedRelation: "connections"
+            referencedColumns: ["id", "org_id"]
+          },
+          {
+            foreignKeyName: "code_review_configs_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      code_reviews: {
+        Row: {
+          alert_reason: string | null
+          alert_state: string
+          base_sha: string
+          branch: string
+          config_id: string
+          counts: Json
+          created_at: string
+          delivery_id: string | null
+          error_code: string | null
+          event: string
+          files_changed: number
+          finished_at: string | null
+          head_sha: string
+          id: string
+          lines_added: number
+          max_severity: string | null
+          new_findings: Json
+          notified_at: string | null
+          org_id: string
+          partial: boolean
+          pr_number: number | null
+          push_commits: string[]
+          reported_keys: string[]
+          started_at: string | null
+          status: string
+          voice_pending: boolean
+        }
+        Insert: {
+          alert_reason?: string | null
+          alert_state?: string
+          base_sha: string
+          branch: string
+          config_id: string
+          counts?: Json
+          created_at?: string
+          delivery_id?: string | null
+          error_code?: string | null
+          event: string
+          files_changed?: number
+          finished_at?: string | null
+          head_sha: string
+          id?: string
+          lines_added?: number
+          max_severity?: string | null
+          new_findings?: Json
+          notified_at?: string | null
+          org_id: string
+          partial?: boolean
+          pr_number?: number | null
+          push_commits?: string[]
+          reported_keys?: string[]
+          started_at?: string | null
+          status?: string
+          voice_pending?: boolean
+        }
+        Update: {
+          alert_reason?: string | null
+          alert_state?: string
+          base_sha?: string
+          branch?: string
+          config_id?: string
+          counts?: Json
+          created_at?: string
+          delivery_id?: string | null
+          error_code?: string | null
+          event?: string
+          files_changed?: number
+          finished_at?: string | null
+          head_sha?: string
+          id?: string
+          lines_added?: number
+          max_severity?: string | null
+          new_findings?: Json
+          notified_at?: string | null
+          org_id?: string
+          partial?: boolean
+          pr_number?: number | null
+          push_commits?: string[]
+          reported_keys?: string[]
+          started_at?: string | null
+          status?: string
+          voice_pending?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "code_reviews_config_id_org_id_fkey"
+            columns: ["config_id", "org_id"]
+            isOneToOne: false
+            referencedRelation: "code_review_configs"
+            referencedColumns: ["id", "org_id"]
+          },
+          {
+            foreignKeyName: "code_reviews_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "orgs"
@@ -688,6 +894,7 @@ export type Database = {
       notifications: {
         Row: {
           channel: string
+          code_review_id: string | null
           created_at: string
           delivered_at: string | null
           error: string | null
@@ -703,6 +910,7 @@ export type Database = {
         }
         Insert: {
           channel: string
+          code_review_id?: string | null
           created_at?: string
           delivered_at?: string | null
           error?: string | null
@@ -718,6 +926,7 @@ export type Database = {
         }
         Update: {
           channel?: string
+          code_review_id?: string | null
           created_at?: string
           delivered_at?: string | null
           error?: string | null
@@ -732,6 +941,13 @@ export type Database = {
           template?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "notifications_code_review_id_fkey"
+            columns: ["code_review_id"]
+            isOneToOne: false
+            referencedRelation: "code_reviews"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "notifications_incident_id_fkey"
             columns: ["incident_id"]
@@ -1170,6 +1386,15 @@ export type Database = {
         Args: { p_ip: unknown; p_org: string; p_seconds?: number }
         Returns: string
       }
+      vg_mark_step: {
+        Args: {
+          p_paso: string
+          p_patch: Json
+          p_progress: number
+          p_scan: string
+        }
+        Returns: boolean
+      }
       vg_redeem_approval: {
         Args: { p_approval: string; p_nonce_hash: string; p_recipient: string }
         Returns: {
@@ -1223,6 +1448,16 @@ export type Database = {
           org_id: string
         }[]
       }
+      vg_review_findings: {
+        Args: {
+          p_meta: Json
+          p_org: string
+          p_review: string
+          p_rows: Json
+          p_write: boolean
+        }
+        Returns: Json
+      }
       vg_rotate_secret: {
         Args: {
           p_capabilities: Json
@@ -1274,7 +1509,11 @@ export type Database = {
         }[]
       }
       vg_vigilar_corridas: {
-        Args: { p_limit?: number; p_scan_seconds?: number; p_wiki_seconds?: number }
+        Args: {
+          p_limit?: number
+          p_scan_seconds?: number
+          p_wiki_seconds?: number
+        }
         Returns: {
           id: string
           org_id: string

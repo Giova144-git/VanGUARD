@@ -395,6 +395,7 @@ invocación se fija un techo de 40 de las 50 subpeticiones del plan (`PRESUPUEST
 | `GET /api/health` | **5 ms** | commit `a4828aa` |
 | Cron por minuto | 0 ms | commit `a4828aa` |
 | Paso `supabase` con respuestas de 750 KB | 12–17 ms de CPU y muerte por CPU (error 1102, a la cola de mensajes muertos) → tope de **300 KB** por respuesta (≈ 7 ms medidos en Node) | `apps/api/src/scans/supabase.ts` (`MAX_RESPUESTA`); commit `58a052c` |
+| `redact()` con texto hostil (denegación por CPU) | Era cuadrático: 12.000 caracteres de dígitos y puntos costaban **247 ms**; 192 KB de `postgres://u:` sin `@`, **1,45 s**; cabeceras de clave privada sin pie, **84 ms**. Ahora lineal: **0,08 ms**, **0,7 ms** y **1,0 ms**. Cero diferencias de resultado entre la versión vieja y la nueva en 95.793 cadenas (más 220.000 del fuzz de la verificación adversarial). Pruebas por proporción en 31 familias hostiles (doblar el texto cuesta ≤ 3×) | `packages/core/src/redact.ts`; commit `06a5c26` (Node 24, mejor de 3) |
 
 Lectura honesta: 21–25 ms supera los 10 ms nominales del plan Free. Cloudflare no cortó esos pasos, pero no contamos
 con esa tolerancia: por eso se bajó la carga por paso y se puso tope al tamaño de las respuestas.

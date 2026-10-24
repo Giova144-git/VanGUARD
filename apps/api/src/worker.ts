@@ -1,5 +1,6 @@
 import { app } from './app.ts';
 import { onCron } from './cron.ts';
+import './scans/index.ts';   // registra los pasos de la cola vg-jobs
 import { cierreDlq, runJob, type JobMsg } from './jobs.ts';
 
 // Entrada del Worker `vanguard` (S15 15.2). Sin tail(): en Free no hay Tail Workers (A7.6).

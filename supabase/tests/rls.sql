@@ -30,10 +30,26 @@ begin
     bad := bad || ('authenticated escribe en: ' || r.t); end loop;
   if cardinality(bad) > 0 then raise exception 'rls.sql FALLA: %', array_to_string(bad, ' | '); end if;
 end $$;
--- Aislamiento con JWT simulado (datos de dev-idor.sql; begin/rollback: no cambia nada en el proyecto): debe devolver 0
+-- Aislamiento con JWT simulado (datos de dev-idor.sql; begin/rollback: no cambia nada en el proyecto). Decisión (a) del
+-- ORQUESTADOR: authenticated NO tiene SELECT directo en public (todo va por la API), así que leer findings debe dar 42501;
+-- y private.user_org_ids() de idor-a debe devolver solo su org. Termina en ERROR si algo falla.
 begin;
 select set_config('request.jwt.claims', json_build_object('sub', id, 'role', 'authenticated')::text, true)
   from auth.users where email = 'idor-a@vanguard.test';
 set local role authenticated;
-select count(*) as debe_ser_0 from public.findings where org_id = '00000000-0000-4000-a000-00000000b002';
+do $$ begin
+  begin
+    perform count(*) from public.findings where org_id = '00000000-0000-4000-a000-00000000b002';
+    raise exception 'rls.sql FALLA: authenticated lee public.findings directamente';
+  exception when insufficient_privilege then null;
+  end;
+  if (select count(*) from private.user_org_ids()) <> 1 then raise exception 'rls.sql FALLA: idor-a no ve exactamente su org'; end if;
+end $$;
 rollback;
+-- service_role (el Worker) sí tiene DML en todas las tablas de public (0008c).
+do $$ begin
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind = 'r'
+             and not has_table_privilege('service_role', c.oid, 'select,insert,update,delete')) then
+    raise exception 'rls.sql FALLA: service_role sin DML en alguna tabla de public';
+  end if;
+end $$;

@@ -16,6 +16,19 @@ export * from './egress.ts';
 // Análisis (S15 15.9, S09): puntaje, severidad.
 export * from './score.ts';
 export * from './severity.ts';
+export * from './rules/supabase.ts';
+export * from './secrets/scan.ts';
+export * from './lockfiles/npm.ts';
+export * from './lockfiles/composer.ts';
+export * from './secrets/rules.ts';
+export * from './secrets/entropy.ts';
+export * from './ip.ts';
+export * from './stack.ts';
+
+// Plantillas deterministas (S11 11.10, S15 15.14 recorte #4): títulos, resumen sin IA y prompts de corrección por regla.
+export * from './templates/titles.ts';
+export * from './templates/summary.ts';
+export * from './templates/fix-prompt.ts';
 
 // IA (S11 11.12): precios, peor caso, costo real y filtro de salida.
 export * from './ai.ts';

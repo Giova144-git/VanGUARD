@@ -7,8 +7,10 @@ import { ProviderError } from '../lib/http.ts';
 import { log } from '../lib/log.ts';
 
 // Piezas comunes de los pasos de la auditoría (S15 15.8).
+// dedupe_input: lo que identifica el hallazgo dentro de la regla (por defecto el resource; en SQL 2 es recurso#política y
+// en advisors el cache_key del lint, según packages/core/src/rules/supabase.ts).
 export type Borrador = { rule_id: string; severity: string; confirmed?: boolean; origin?: 'rule' | 'ai' | 'provider';
-  title: string; resource: string; evidence?: Record<string, unknown>; suspected_injection?: boolean };
+  title: string; resource: string; evidence?: Record<string, unknown>; suspected_injection?: boolean; dedupe_input?: string };
 export type Conexion = { id: string; meta: Record<string, unknown>; capabilities: Record<string, unknown> };
 
 // Conexión de lectura activa del proveedor: la del params del scan_run si la pidieron, o la más reciente.
@@ -26,10 +28,10 @@ export async function conexionActiva(env: CloudflareBindings, m: MsgScan, provid
 
 // Toda la evidencia pasa por redact() antes de salir del paso; dedupe_key = sha256hex(org|regla|recurso) (§05).
 async function aFila(orgId: string, b: Borrador) {
-  const limpio = redact({ title: b.title, resource: b.resource, evidence: b.evidence ?? {} });
+  const limpio = redact({ title: b.title, resource: b.resource, evidence: b.evidence ?? {}, clave: b.dedupe_input ?? b.resource });
   return { rule_id: b.rule_id, severity: b.severity, confirmed: b.confirmed ?? false, origin: b.origin ?? 'rule',
     title: limpio.title.slice(0, 200), resource: limpio.resource.slice(0, 300), evidence: limpio.evidence,
-    suspected_injection: b.suspected_injection ?? false, dedupe_key: await dedupeKey(orgId, b.rule_id, limpio.resource.slice(0, 300)) };
+    suspected_injection: b.suspected_injection ?? false, dedupe_key: await dedupeKey(orgId, b.rule_id, limpio.clave) };
 }
 
 // vg_upsert_findings con cable trampa (regla 9): si el check looks_like_secret rechaza el lote (23514), fila por fila;

@@ -3,6 +3,7 @@ import { app } from './app.ts';
 import { CRON_MINUTO, onCron } from './cron.ts';
 import { runJob, type JobMsg } from './jobs.ts';
 import { log } from './lib/log.ts';
+import './scans/index.ts';   // registra los pasos de la cola vg-jobs
 
 // El mismo app de Hono en Node 24 (:8787) con dobles de bindings (R17 §11.4): la cola corre en línea y en serie,
 // sin reintentos, y un setInterval de 60 s hace de cron por minuto. Los valores salen de .dev.vars vía --env-file.

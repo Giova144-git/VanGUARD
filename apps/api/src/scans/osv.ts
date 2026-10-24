@@ -8,7 +8,7 @@ const LOTE = 1000;
 export const DETALLE_POR_MENSAJE = 30;
 const PARALELO = 5;
 
-export type Dep = { ecosystem: 'npm' | 'Packagist'; name: string; version: string; dev: boolean };
+export type Dep = { ecosystem: string; name: string; version: string; dev: boolean };
 type Rango = { type?: string; events?: { introduced?: string; fixed?: string; last_affected?: string }[] };
 type Aviso = { id: string; aliases?: string[]; summary?: string; database_specific?: { severity?: string; cvss?: string };
   severity?: { type?: string; score?: string }[];

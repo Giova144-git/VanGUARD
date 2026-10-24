@@ -1,4 +1,9 @@
+import { evaluarSupabase, SQL1, SQL2, SQL3B, type FilaSql1, type FilaSql2, type FilaSql3, type LintAdvisor } from '@vanguard/core';
+import type { FnPaso } from '../jobs.ts';
+import { withSecret } from '../lib/credentials.ts';
+import { db } from '../lib/db.ts';
 import { ProviderError, check, codigoHttp, pedir, sondear } from '../lib/http.ts';
+import { conexionActiva, guardarHallazgos } from './comun.ts';
 import { sondeoFallido, veredicto, type Sondeo } from './sondeo.ts';
 
 // Cliente de la Management API de Supabase (§07.3, extracto normativo) y sondeo de permisos del PAT (§07.2).
@@ -110,3 +115,43 @@ export async function probarSupabase(pat: string, ref: string): Promise<Sondeo> 
     expiresAt: null,
   };
 }
+
+// ── Paso supabase de la auditoría (§07.5, S15 15.8): advisors (seguridad y rendimiento) + SQL 1, 2 y 3b de solo lectura.
+// El PAT solo existe dentro de withSecret. Un chequeo que falla queda «sin mirar» (p_complete = false), nunca verde.
+type Resultado<T> = { ok: true; v: T } | { ok: false; code: string };
+const intentar = async <T>(f: () => Promise<T>): Promise<Resultado<T>> => {
+  try { return { ok: true, v: await f() }; } catch (e) { return { ok: false, code: e instanceof ProviderError ? e.code : 'unavailable' }; }
+};
+
+export const pasoSupabase: FnPaso = async (env, m) => {
+  const conn = await conexionActiva(env, m, 'supabase');
+  if (!conn) return { status: 'skipped', error_code: 'no_connection' };
+  const ref = String(conn.meta.project_ref ?? '');
+  const caps = conn.capabilities as Record<string, boolean | undefined>;
+  const admin = db(env);
+  const ctx = { orgId: m.org_id, connectionId: conn.id, provider: 'supabase' as const, kind: 'read' as const };
+  const r = await withSecret(env, admin, ctx, async (pat) => {
+    const sinPermiso = <T>(): Promise<Resultado<T>> => Promise.resolve({ ok: false, code: 'forbidden' });
+    const [advS, advP, s1, s2, s3] = await Promise.all([
+      caps.advisors === false ? sinPermiso<unknown>() : intentar(() => mgmt(pat, ref, '/advisors/security')),
+      caps.advisors === false ? sinPermiso<unknown>() : intentar(() => mgmt(pat, ref, '/advisors/performance')),
+      caps.sql_read_only === false ? sinPermiso<FilaSql1[]>() : intentar(() => sqlRead<FilaSql1>(pat, ref, SQL1)),
+      caps.sql_read_only === false ? sinPermiso<FilaSql2[]>() : intentar(() => sqlRead<FilaSql2>(pat, ref, SQL2)),
+      caps.sql_read_only === false ? sinPermiso<FilaSql3[]>() : intentar(() => sqlRead<FilaSql3>(pat, ref, SQL3B)),
+    ]);
+    return { advS, advP, s1, s2, s3 };
+  });
+  const todos = [r.advS, r.advP, r.s1, r.s2, r.s3];
+  const malos = todos.filter((x): x is { ok: false; code: string } => !x.ok);
+  if (malos.some((x) => x.code === 'unauthorized')) throw new ProviderError('unauthorized', 401);
+  if (malos.length === todos.length && malos.some((x) => x.code === 'unavailable' || x.code === 'timeout' || x.code === 'rate_limited')) {
+    throw new ProviderError('unavailable');   // todo caído por la red: reintenta el paso
+  }
+  const lints = (x: Resultado<unknown>) => (x.ok ? ((x.v as { lints?: LintAdvisor[] } | null)?.lints ?? []) : []);
+  const borradores = evaluarSupabase({
+    advisors: r.advS.ok || r.advP.ok ? [...lints(r.advS), ...lints(r.advP)] : null,
+    sql1: r.s1.ok ? r.s1.v : null, sql2: r.s2.ok ? r.s2.v : null, sql3: r.s3.ok ? r.s3.v : null,
+  });
+  const g = await guardarHallazgos(env, m, 'supabase', conn.id, borradores, malos.length === 0);
+  return { status: 'done', findings: g.n, ...(malos.length ? { error_code: `parcial:${malos.length}` } : {}) };
+};

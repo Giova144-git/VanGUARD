@@ -6,10 +6,11 @@ import { ApiError } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
 
 // :org es orgs.id (uuid). Quien no es miembro recibe 404, no 403: no se confirma que la org exista (S15 15.3).
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export const orgMember: MiddlewareHandler<AppEnv> = async (c, next) => {
-  const org = c.req.param('org') ?? '';
+  // En minúsculas: orgId entra en el AAD y en la huella; con mayúsculas se salta la dedupe y el secreto no se abre.
+  const org = (c.req.param('org') ?? '').toLowerCase();
   if (!UUID.test(org)) throw new ApiError('not_found', 'Organización no encontrada');
   const { data, error } = await db(c.env).from('org_members').select('role')
     .eq('org_id', org).eq('user_id', c.get('userId')).maybeSingle();

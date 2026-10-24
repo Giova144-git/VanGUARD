@@ -13,10 +13,14 @@ export type Sondeo = {
   meta: Record<string, unknown>;
   label: string;
   expiresAt: string | null;
+  // Permisos que el token NO debe tener y tiene (sondeo negativo de Supabase, §06.3/§07.2): organizations_read,
+  // api_gateway_keys_read, data_api_config_read, edge_functions_secrets_read. Con alguno, la ruta lo rechaza y no guarda.
+  // Opcional: Cloudflare y GitHub no hacen sondeo negativo.
+  sobra?: string[];
 };
 
 export const sondeoFallido = (estado: 'rechazado' | 'caido', checks: PermCheck[], extra: Partial<Sondeo> = {}): Sondeo =>
-  ({ estado, faltan: [], checks, capabilities: {}, scopes: [], meta: {}, label: '', expiresAt: null, ...extra });
+  ({ estado, faltan: [], checks, capabilities: {}, scopes: [], meta: {}, label: '', expiresAt: null, sobra: [], ...extra });
 
 // Con los checks ya hechos: faltan los obligatorios con 401/403/404 → rechazado; un obligatorio caído por red, plazo,
 // 429 o 5xx → caido (502); si no, ok.

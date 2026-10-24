@@ -66,12 +66,20 @@ const post = (body: unknown) => app.request(`https://officialvanguard.com/api/or
 }, envDoble().env);
 const error = async (r: Response) => ApiErrorBody.parse(await r.json()).error;
 
-// Respuestas de la Management API por ruta; lo que no esté → 200 '{}'.
+const MGMT = 'https://api.supabase.com';
+const PROYECTO = `${MGMT}/v1/projects/${REF}`;
+// Rutas del sondeo negativo (permisos que el PAT NO debe tener): por defecto 403, como el PAT de la demo.
+const NEGATIVAS = ['/v1/organizations', '/api-keys', '/postgrest', '/secrets'];
+
+// Respuestas de la Management API por ruta (relativa al proyecto, o /v1/organizations); lo que no esté → 200 '{}',
+// salvo las rutas negativas → 403. Un 0 simula que vence el plazo (TimeoutError).
 function supabaseResponde(porRuta: Record<string, number>) {
   fetchMock.mockImplementation(async (url: string) => {
-    const ruta = String(url).replace(`https://api.supabase.com/v1/projects/${REF}`, '');
+    const u = String(url);
+    const ruta = u.startsWith(PROYECTO) ? u.slice(PROYECTO.length) : u.replace(MGMT, '');
     const clave = Object.keys(porRuta).find((k) => ruta.startsWith(k) && (k !== '' || ruta === ''));
-    const s = clave !== undefined ? porRuta[clave]! : 200;
+    const s = clave !== undefined ? porRuta[clave]! : NEGATIVAS.includes(ruta) ? 403 : 200;
+    if (s === 0) throw Object.assign(new Error('plazo'), { name: 'TimeoutError' });
     return new Response(ruta === '' && s === 200 ? JSON.stringify({ name: 'tienda', region: 'us-west-2', status: 'ACTIVE_HEALTHY' }) : '{}', { status: s });
   });
 }
@@ -166,6 +174,86 @@ describe('E8 · Supabase', () => {
   });
 });
 
+describe('E8 · Supabase · sondeo negativo (permisos de más, §06.3)', () => {
+  const alta = () => post({ provider: 'supabase', project_ref: REF, pat: PAT_SB });
+
+  it('todos los negativos 403 → 201: 4 GET tras el lote positivo, /api-keys sin reveal y nunca más de 5 a la vez', async () => {
+    supabaseResponde({});
+    const responde = fetchMock.getMockImplementation() as (u: string, i?: RequestInit) => Promise<Response>;
+    let enVuelo = 0;
+    let max = 0;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      max = Math.max(max, ++enVuelo);
+      await new Promise((r) => setTimeout(r, 5));
+      try { return await responde(url, init); } finally { enVuelo--; }
+    });
+    const r = await alta();
+    expect(r.status).toBe(201);
+    const pedidas = fetchMock.mock.calls.map(([u, i]) => `${(i as RequestInit | undefined)?.method ?? 'GET'} ${String(u)}`);
+    const negativas = [`GET ${MGMT}/v1/organizations`, `GET ${PROYECTO}/api-keys`, `GET ${PROYECTO}/postgrest`, `GET ${PROYECTO}/secrets`];
+    expect(pedidas).toEqual(expect.arrayContaining(negativas));
+    expect(pedidas.some((p) => p.includes('reveal'))).toBe(false);
+    expect(max).toBeLessThanOrEqual(5);
+    const ultimaPositiva = pedidas.findIndex((p) => p.includes('/config/auth'));
+    for (const n of negativas) expect(pedidas.indexOf(n)).toBeGreaterThan(ultimaPositiva);
+    const b = ConnectionCreated.parse(await r.json());
+    expect(b.checks.map((c) => c.permission)).not.toContain('organizations_read');
+    expect(cred.createConnectionWithSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it('400, 401 o 404 en los negativos también son «no lo tiene» → 201', async () => {
+    supabaseResponde({ '/v1/organizations': 401, '/api-keys': 404, '/postgrest': 400, '/secrets': 404 });
+    expect((await alta()).status).toBe(201);
+  });
+
+  it('200 en /v1/organizations → 422 key_rejected legacy_pat y nada guardado', async () => {
+    supabaseResponde({ '/v1/organizations': 200 });
+    const r = await alta();
+    expect(r.status).toBe(422);
+    const e = await error(r);
+    expect(e.code).toBe('key_rejected');
+    expect(e.details).toEqual({ reason: 'legacy_pat', excess_permissions: ['organizations_read'] });
+    expect(e.message).toMatch(/^Ese token tiene permisos de más \(.+\)\. Crea uno con alcance a este proyecto/);
+    expect(JSON.stringify(e)).not.toContain(PAT_SB);
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+  });
+
+  it('200 en /api-keys, /postgrest o /secrets → key_rejected excess_scope con el permiso que sobra', async () => {
+    const casos = [['/api-keys', 'api_gateway_keys_read'], ['/postgrest', 'data_api_config_read'],
+      ['/secrets', 'edge_functions_secrets_read']] as const;
+    for (const [ruta, permiso] of casos) {
+      supabaseResponde({ [ruta]: 200 });
+      const r = await alta();
+      expect(r.status).toBe(422);
+      const e = await error(r);
+      expect(e.code).toBe('key_rejected');
+      expect(e.details).toEqual({ reason: 'excess_scope', excess_permissions: [permiso] });
+    }
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+  });
+
+  it('acceso total (todo 2xx) → legacy_pat con los 4 permisos; sobra gana aunque falte un obligatorio', async () => {
+    supabaseResponde({ '/v1/organizations': 200, '/api-keys': 200, '/postgrest': 200, '/secrets': 200 });
+    expect((await error(await alta())).details).toEqual({ reason: 'legacy_pat',
+      excess_permissions: ['organizations_read', 'api_gateway_keys_read', 'data_api_config_read', 'edge_functions_secrets_read'] });
+    supabaseResponde({ '/database/query/read-only': 403, '/secrets': 200 });
+    const e = await error(await alta());
+    expect(e.code).toBe('key_rejected');
+    expect(e.details?.reason).toBe('excess_scope');
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+  });
+
+  it('503, 429 o plazo vencido en un negativo → 502 provider_unavailable y nada guardado', async () => {
+    for (const s of [503, 429, 0]) {
+      supabaseResponde({ '/postgrest': s });
+      const r = await alta();
+      expect(r.status).toBe(502);
+      expect((await error(r)).code).toBe('provider_unavailable');
+    }
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+  });
+});
+
 describe('E8 · GitHub e ingest', () => {
   it('ya hay un repo activo → 409 sin llamar a GitHub', async () => {
     tabla = (op) => (op.table === 'connections' && eqDe(op, 'provider') === 'github' ? { count: 1 } : undefined);
@@ -209,6 +297,28 @@ describe('E7, E9 y E10', () => {
     expect(ConnectionTest.parse(await r.json()).ok).toBe(false);
     const up = doble.ops.find((o) => o.action === 'update' && o.table === 'connections');
     expect(up?.payload).toMatchObject({ status: 'revoked', last_error: 'unauthorized' });
+    expect(eqDe(up!, 'org_id')).toBe(ORG);
+  });
+
+  it('E9: negativos 403 → ok y active; 200 en /secrets → error con last_error excess_scope y 422 key_rejected', async () => {
+    tabla = (op) => (op.table === 'connections' && op.action === 'select' ? { data: fila() } : undefined);
+    cred.withSecret.mockImplementation(async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn(PAT_SB));
+    const probar = () => app.request(`https://officialvanguard.com/api/orgs/${ORG}/connections/${CONN}/test`,
+      { method: 'POST', headers: { authorization: 'Bearer ana' } }, envDoble().env);
+    const updates = () => doble.ops.filter((o) => o.action === 'update' && o.table === 'connections');
+
+    supabaseResponde({});
+    expect(ConnectionTest.parse(await (await probar()).json()).ok).toBe(true);
+    expect(updates()[0]?.payload).toMatchObject({ status: 'active', last_error: null });
+
+    supabaseResponde({ '/secrets': 200 });
+    const r = await probar();
+    expect(r.status).toBe(422);
+    const e = await error(r);
+    expect(e.code).toBe('key_rejected');
+    expect(e.details).toEqual({ reason: 'excess_scope', excess_permissions: ['edge_functions_secrets_read'] });
+    const up = updates()[1];
+    expect(up?.payload).toEqual({ status: 'error', last_checked_at: expect.any(String), last_error: 'excess_scope' });
     expect(eqDe(up!, 'org_id')).toBe(ORG);
   });
 

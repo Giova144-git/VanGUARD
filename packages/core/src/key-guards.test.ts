@@ -34,6 +34,11 @@ describe('guardKey', () => {
   it('PAT sbp_fc… válido → null', () => {
     expect(guardKey('supabase', 'sbp_fc' + 'q1w2e3'.repeat(7))).toBeNull();
   });
+  it('PAT legacy que por azar empieza por sbp_fc (sbp_ + 40 hex) pasa la guarda por diseño: lo para el sondeo de /v1/organizations', () => {
+    const azar = 'sbp_' + 'fc' + hex(38);
+    expect(azar).toMatch(/^sbp_[a-f0-9]{40}$/);   // mismo lenguaje que un PAT legacy
+    expect(guardKey('supabase', azar)).toBeNull();
+  });
   it('más de 400 caracteres → too_long; PAT sin sbp_fc en Supabase → legacy_pat', () => {
     expect(guardKey('supabase', 'sbp_fc' + 'a'.repeat(400))).toBe('too_long');
     expect(guardKey('supabase', 'sbp_' + hex(40))).toBe('legacy_pat');

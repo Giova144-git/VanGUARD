@@ -55,6 +55,22 @@ function guardar(provider: 'supabase' | 'cloudflare' | 'github', ...tokens: (str
   }
 }
 
+// Permisos de más que delata el sondeo negativo de probarSupabase (§06.3, §07.2), con el nombre del panel.
+const PERMISO_SOBRANTE: Record<string, string> = {
+  organizations_read: 'Organizations, propio de un token de acceso total',
+  api_gateway_keys_read: 'API Keys',
+  data_api_config_read: 'Data API Config',
+  edge_functions_secrets_read: 'Edge Function Secrets',
+};
+
+// Token con exceso de alcance → 422 key_rejected: no se guarda (E8) o la conexión queda en error (E9).
+function errorSobra(sobra: string[]): ApiError {
+  const nombres = sobra.map((p) => PERMISO_SOBRANTE[p] ?? p).join('; ');
+  return new ApiError('key_rejected', `Ese token tiene permisos de más (${nombres}). Crea uno con alcance a este proyecto `
+    + 'y solo Read en Project Settings, Advisors y Database.',
+  { reason: sobra.includes('organizations_read') ? 'legacy_pat' : 'excess_scope', excess_permissions: sobra });
+}
+
 function exigirSondeo(s: Sondeo) {
   if (s.estado === 'rechazado') {
     throw new ApiError('provider_rejected', s.mensaje ?? 'El proveedor rechazó el token',
@@ -114,6 +130,7 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
     }
     token = body.pat.trim();
     sondeo = await probarSupabase(token, ref);
+    if (sondeo.sobra?.length) throw errorSobra(sondeo.sobra);   // antes que cualquier otro veredicto: nada se guarda
   } else if (body.provider === 'cloudflare') {
     guardar('cloudflare', body.read_token, body.action_token);
     token = body.read_token.trim();
@@ -187,15 +204,19 @@ connections.post('/orgs/:org/connections/:id/test', requireAdmin, async (c) => {
       ? probarCloudflareAcciones(t, zoneId, { estado: 'ok', faltan: [], checks: [], capabilities: {}, scopes: [], meta, label: '', expiresAt: null })
       : probarCloudflareLectura(t, zoneId);
   });
+  const sobra = sondeo.sobra ?? [];
   const primerError = (sondeo.checks.find((x: PermCheck) => x.required && !x.ok)?.error_code) ?? null;
-  const status = sondeo.estado === 'ok' ? 'active' : sondeo.motivo === 'unauthorized' ? 'revoked' : 'error';
-  const cambios: Record<string, unknown> = { status, last_checked_at: ahora, last_error: sondeo.estado === 'ok' ? null : primerError ?? 'unavailable' };
-  if (sondeo.estado !== 'caido' && sondeo.checks.length > 1) {
+  // Con permisos de más la conexión queda en error (la auditoría solo usa las activas) y se responde key_rejected.
+  const status = sobra.length ? 'error' : sondeo.estado === 'ok' ? 'active' : sondeo.motivo === 'unauthorized' ? 'revoked' : 'error';
+  const lastError = sobra.length ? 'excess_scope' : sondeo.estado === 'ok' ? null : primerError ?? 'unavailable';
+  const cambios: Record<string, unknown> = { status, last_checked_at: ahora, last_error: lastError };
+  if (!sobra.length && sondeo.estado !== 'caido' && sondeo.checks.length > 1) {
     cambios.capabilities = sondeo.capabilities;
     cambios.scopes = sondeo.scopes;
   }
   const { error: eu } = await admin.from('connections').update(cambios).eq('id', fila.id).eq('org_id', orgId);
   if (eu) log('error', 'connections.test_guardar_error', { rid: c.get('rid'), code: eu.code });
+  if (sobra.length) throw errorSobra(sobra);
   return c.json(ConnectionTest.parse({ ok: sondeo.estado === 'ok', checks: sondeo.checks, checked_at: ahora }));
 });
 

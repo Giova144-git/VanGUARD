@@ -64,6 +64,15 @@ export const sqlRead = async <T>(pat: string, ref: string, query: string): Promi
   }
 };
 
+// Permisos prohibidos y el GET que los delata (cuerpo cancelado sin leer). organizations_read lo tiene todo PAT de acceso
+// total: cierra el hueco del prefijo sbp_fc de guardKey. /api-keys va SIN ?reveal: nunca pedimos los valores.
+const PROHIBIDOS = (base: string) => [
+  ['organizations_read', 'https://api.supabase.com/v1/organizations'],
+  ['api_gateway_keys_read', `${base}/api-keys`],
+  ['data_api_config_read', `${base}/postgrest`],
+  ['edge_functions_secrets_read', `${base}/secrets`],
+] as const;
+
 // Sondeo por permiso (§07.2): un intento, 8 s, como máximo 5 a la vez. 403 = «te falta ESE permiso», nunca «token roto».
 export async function probarSupabase(pat: string, ref: string): Promise<Sondeo> {
   const h = { Authorization: `Bearer ${pat}`, Accept: 'application/json' };
@@ -98,13 +107,28 @@ export async function probarSupabase(pat: string, ref: string): Promise<Sondeo> 
     check('analytics_logs_read', false, metrics),
     check('auth_config_read', false, authCfg),
   ];
-  const v = veredicto(checks);
+  const v0 = veredicto(checks);
   const ok = (r: number | string) => typeof r === 'number' && r >= 200 && r < 300;
+
+  // Sondeo negativo (§06.3, §07.2): permisos que el PAT NO debe tener. Va DESPUÉS del lote para no pasar de 5 a la vez.
+  // 2xx → los tiene (sobra); otro 4xx salvo 429 → no los tiene; 429, 5xx, red o plazo → no se sabe → caido (502).
+  // database_write no se sondea: haría falta POST /database/query, prohibido en el código (§07.3).
+  let sobra: string[] = [];
+  let negCaido = false;
+  if (v0.estado !== 'caido' && v0.motivo !== 'unauthorized') {
+    const prohibidos = PROHIBIDOS(base);
+    const negativos = await Promise.all(prohibidos.map(([, url]) => sondear(url, { headers: h }, 8000)));
+    const noLoTiene = (r: number | string) => typeof r === 'number' && r >= 400 && r < 500 && r !== 429;
+    sobra = prohibidos.filter((_, i) => ok(negativos[i] ?? 'unavailable')).map(([id]) => id);
+    negCaido = negativos.some((r) => !ok(r) && !noLoTiene(r));
+  }
+  const v = v0.estado === 'ok' && negCaido ? { ...v0, estado: 'caido' as const } : v0;
   const name = typeof proyecto?.name === 'string' && proyecto.name ? proyecto.name.slice(0, 60) : ref;
   return {
     ...v,
     ...(v.motivo === 'unauthorized' ? { mensaje: 'El token no es válido o ya caducó' } : {}),
     ...(v.estado === 'caido' ? { mensaje: 'Supabase no respondió. Vuelve a intentarlo en un minuto.' } : {}),
+    sobra,
     checks,
     capabilities: { project: true, health: ok(health), advisors: ok(advisors), sql_read_only: ok(sql),
                     analytics: ok(metrics), auth_config: ok(authCfg) },

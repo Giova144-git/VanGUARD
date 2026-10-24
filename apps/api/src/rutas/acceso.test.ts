@@ -218,6 +218,15 @@ describe('orgMember, anonReadOnly y requireAdmin', () => {
     expect(await r.json()).toEqual({ org: ORG, role: 'viewer' });
   });
 
+  it(':org en mayúsculas entra igual y el orgId del contexto sale en minúsculas (AAD y huella estables)', async () => {
+    miembro('admin');
+    const r = await ir(`/api/orgs/${ORG.toUpperCase()}/leer`, 'ana');
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ org: ORG, role: 'admin' });
+    const consulta = doble.ops.find((o) => o.table === 'org_members');
+    expect(consulta && eqDe(consulta, 'org_id')).toBe(ORG);
+  });
+
   it('viewer no escribe; admin y owner sí', async () => {
     miembro('viewer');
     expect((await ir(`/api/orgs/${ORG}/escribir`, 'ana', 'POST')).status).toBe(403);

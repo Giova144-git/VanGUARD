@@ -90,6 +90,7 @@ describe('enviarKapso', () => {
     expect(url).toBe(`${KAPSO_BASE}/${NUMERO}/messages`);
     expect(init.method).toBe('POST');
     expect((init.headers as Record<string, string>)['X-API-Key']).toBe(CLAVE);
+    expect(init.redirect).toBe('manual');
     expect(JSON.parse(String(init.body))).toEqual({ messaging_product: 'whatsapp', to: '584141234567', type: 'text', text: { body: 'Hola' } });
   });
 

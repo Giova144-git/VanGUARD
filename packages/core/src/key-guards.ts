@@ -9,10 +9,12 @@ export function guardKey(provider: 'supabase' | 'cloudflare' | 'github', raw: st
   if (jwtRole(s) === 'service_role') return 'service_role';               // decodifica el payload sin verificar firma (R11 §4.2)
   if (/^gh[pousr]_/.test(s)) return 'classic_github_pat';
   if (/^cfk_/.test(s) || /^[0-9a-f]{37,45}$/.test(s)) return 'global_api_key';   // nueva con prefijo cfk_; antigua 37–45 hex [verificado: https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/]
-  if (provider === 'supabase' && !s.startsWith('sbp_fc')) return 'legacy_pat';
+  if (provider === 'supabase' && !s.startsWith('sbp_fc')) return 'legacy_pat';   // filtro rápido, no prueba el alcance (abajo)
   return null;
 }
-// multi_project: tras la guarda, si GET /v1/projects devuelve > 1 proyecto [no verificado] → 422 key_rejected
+// El prefijo no basta: un PAT legacy (sbp_ + 40 hex) empieza por sbp_fc ~1 de cada 256 veces. El acceso total lo delata
+// el sondeo negativo GET /v1/organizations de probarSupabase (apps/api/src/scans/supabase.ts): 2xx → 422 key_rejected
+// legacy_pat. multi_project (GET /v1/projects con > 1 proyecto) queda P1 [no verificado].
 
 /** `role` del payload de un JWT (cabecera.payload[.firma]) SIN verificar la firma; null si no es un JWT legible. */
 export function jwtRole(s: string): string | null {

@@ -104,7 +104,7 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
       {s.reason === 'conexion_inactiva'
         ? <p className="text-sm font-medium">La conexión de GitHub no está activa: <Link to={`/o/${org.id}/connections/github`} className="underline underline-offset-4">reconéctala</Link> para revisar los pushes.</p>
         : null}
-      <Umbral org={org.id} prefs={prefs.data} />
+      <Umbral org={org.id} prefs={prefs.data} puedeEscribir={org.puedeEscribir} />
       {/* Línea reservada: el error de activar aparece sin empujar nada (L7). */}
       <p role="alert" className="min-h-5 text-sm text-mal">{error ?? ''}</p>
       {c?.state === 'error' ? <p className="text-[15px] font-medium text-mal">{textoErrorHook(c.last_error)}</p> : null}
@@ -114,14 +114,22 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
   );
 }
 
-function Umbral({ org, prefs }: { org: string; prefs: ReturnType<typeof usePrefsAvisos>['data'] }) {
+// Los enlaces «Cambiar» y «añade uno en Ajustes» solo para owner y admin: el viewer no puede tocar ni los avisos ni los
+// contactos, así que ve el mismo dato en neutro.
+function Umbral({ org, prefs, puedeEscribir }: { org: string; prefs: ReturnType<typeof usePrefsAvisos>['data']; puedeEscribir: boolean }) {
   if (!prefs) return null;   // E48 sin desplegar o cargando: sin promesa de aviso
   const u = umbralWhatsapp(prefs);
-  const cambiar = <Link to={`/o/${org}/settings#avisos`} className="font-medium underline underline-offset-4">Cambiar</Link>;
   if (prefs.whatsapp_ready_contacts === 0) {
-    return <p className="text-[15px]">Ningún contacto con WhatsApp verificado: <Link to={`/o/${org}/settings`} className="font-medium underline underline-offset-4">añade uno en Ajustes</Link></p>;
+    return puedeEscribir
+      ? <p className="text-[15px]">Ningún contacto con WhatsApp verificado: <Link to={`/o/${org}/settings`} className="font-medium underline underline-offset-4">añade uno en Ajustes</Link></p>
+      : <p className="text-[15px]">Aún no hay contactos con WhatsApp verificado</p>;
   }
-  return <p className="text-[15px]">{u ? <>Te avisamos por WhatsApp desde <span className="font-semibold">{severidad(u).etiqueta}</span></> : 'No te avisamos por WhatsApp'} · {cambiar}</p>;
+  return (
+    <p className="text-[15px]">
+      {u ? <>Te avisamos por WhatsApp desde <span className="font-semibold">{severidad(u).etiqueta}</span></> : 'No te avisamos por WhatsApp'}
+      {puedeEscribir ? <> · <Link to={`/o/${org}/settings#avisos`} className="font-medium underline underline-offset-4">Cambiar</Link></> : null}
+    </p>
+  );
 }
 
 function PasosGithub({ c, secreto }: { c: CodeReviewConfig; secreto: string | null }) {

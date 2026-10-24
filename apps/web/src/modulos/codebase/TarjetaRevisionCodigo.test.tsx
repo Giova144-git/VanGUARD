@@ -23,11 +23,11 @@ const GH = z.array(ConnectionPublic).parse(fx.connections).find((c) => c.provide
 const ESPERANDO: CodeReviewState = { ...fx.codeReviewState as CodeReviewState,
   config: { ...fx.codeReviewState.config as NonNullable<CodeReviewState['config']>, state: 'waiting_ping', last_ping_at: null, last_event_at: null } };
 
-function tarjeta(org: OrgActual, estado: CodeReviewState | ApiError, ruta = `/o/${ORG}/codebase`) {
+function tarjeta(org: OrgActual, estado: CodeReviewState | ApiError, ruta = `/o/${ORG}/codebase`, prefs = fx.alertPrefs) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (estado instanceof ApiError) qc.getQueryCache().build(qc, { queryKey: ['org', ORG, 'revision'] }).setState({ status: 'error', error: estado, fetchStatus: 'idle' });
   else qc.setQueryData(['org', ORG, 'revision'], estado);
-  qc.setQueryData(['org', ORG, 'alert-prefs'], fx.alertPrefs);
+  qc.setQueryData(['org', ORG, 'alert-prefs'], prefs);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[ruta]}>
@@ -50,6 +50,18 @@ describe('TarjetaRevisionCodigo', () => {
     expect(html).not.toContain('role="switch"');
     expect(html).not.toContain('Pasos en GitHub');
     expect(html).not.toContain('/webhooks/github/');
+  });
+
+  it('los enlaces a Ajustes («Cambiar», «añade uno en Ajustes») solo para owner y admin; el viewer ve el dato en neutro', () => {
+    const sinContactos = { ...fx.alertPrefs, whatsapp_ready_contacts: 0 };
+    const viewer = tarjeta(VIEWER, ESPERANDO);
+    expect(viewer).toContain('Te avisamos por WhatsApp desde');
+    expect(viewer).not.toContain('settings#avisos');
+    const viewer0 = tarjeta(VIEWER, ESPERANDO, undefined, sinContactos);
+    expect(viewer0).toContain('Aún no hay contactos con WhatsApp verificado');
+    expect(viewer0).not.toContain('añade uno en Ajustes');
+    expect(tarjeta(ADMIN, ESPERANDO)).toContain('settings#avisos');
+    expect(tarjeta(ADMIN, ESPERANDO, undefined, sinContactos)).toContain('añade uno en Ajustes');
   });
 
   it('el admin esperando el ping ve el interruptor y los pasos abiertos con la URL; el secreto solo por su final', () => {

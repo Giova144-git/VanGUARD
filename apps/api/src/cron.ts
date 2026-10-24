@@ -1,3 +1,4 @@
+import { housekeeping } from './engine/housekeeping.ts';
 import { log } from './lib/log.ts';
 
 // Los 3 crons de S15 15.7 (de los 5 de la cuenta en Free). El monitor por minuto corre directo aquí, sin cola
@@ -6,12 +7,15 @@ export const CRON_MINUTO = '* * * * *';
 export const CRON_HORA = '0 * * * *';
 export const CRON_DIA = '0 10 * * *'; // 06:00 Caracas
 
-export async function onCron(cron: string, _env: CloudflareBindings, now = new Date()) {
+export async function onCron(cron: string, env: CloudflareBindings, now = new Date()) {
   switch (cron) {
-    case CRON_MINUTO:
-      // runMonitors + housekeeping llegan con sus tablas (hitos 2 y 5).
-      log('info', 'monitor.minuto', { minuto: now.getUTCMinutes(), trabajos: 0, subpeticiones: 0 });
+    case CRON_MINUTO: {
+      // housekeeping (cierre automático, §12.3) en una línea de log; runMonitors (sb_health) llega con su hito.
+      const h = await housekeeping(env, now);
+      log(h.error ? 'warn' : 'info', 'monitor.minuto', { minuto: now.getUTCMinutes(), trabajos: 1, subpeticiones: h.subpeticiones,
+        resueltos: h.resueltos, housekeeping: h.modo, error: h.error });
       return;
+    }
     case CRON_HORA:
       // Red de seguridad de la cola: scan_runs running sin avance > 15 min → failed (P1).
       log('info', 'mantenimiento.hora', {});

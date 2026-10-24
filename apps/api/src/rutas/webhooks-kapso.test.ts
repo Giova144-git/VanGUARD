@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError as ApiErrorBody } from '@vanguard/contracts';
+import { sha256Hex } from '../lib/hmac.ts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 import { envDoble } from '../test/dobles.ts';
 
@@ -25,6 +26,7 @@ async function firmar(cuerpo: string, secreto = SECRETO): Promise<string> {
 let doble: ReturnType<typeof dbDoble>;
 let vistas: Set<string>;
 let tabla: (op: Op) => Resp | undefined;
+let rpc: (name: string, args: Record<string, unknown>) => Resp | undefined;
 let pendientes: Promise<unknown>[];
 let logs: { mock: { calls: unknown[][] } };
 
@@ -32,7 +34,9 @@ beforeEach(() => {
   vistas = new Set();
   pendientes = [];
   tabla = () => undefined;
+  rpc = () => undefined;
   doble = dbDoble({
+    rpc: (name, args) => rpc(name, args),
     tabla: (op) => {
       if (op.table === 'webhook_events' && op.action === 'insert') {
         const k = String((op.payload as Record<string, unknown>).external_id);
@@ -212,14 +216,16 @@ describe('E31 · estados de entrega', () => {
   });
 });
 
-describe('E31 · botones (hito 5: solo se registran)', () => {
-  it('ack:<código>:<nonce> se registra con log sin teléfono completo y sin canje ni acciones', async () => {
+describe('E31 · botones: registro', () => {
+  it('ack sin aprobación que canjear → log sin teléfono completo ni nonce, canje con sha256 y sin tocar incidentes', async () => {
     const r = await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received' });
     expect(r.status).toBe(200);
-    expect(doble.rpcs).toHaveLength(0);
+    expect(doble.rpcs).toEqual([{ name: 'vg_redeem_approval',
+      args: { p_approval: null, p_nonce_hash: `\\x${await sha256Hex(NONCE)}`, p_recipient: TEL } }]);
     expect(doble.ops.map((o) => o.table)).toEqual(['webhook_events']);
     const linea = lineas().find((l) => l.includes('"kapso.boton"'))!;
     expect(JSON.parse(linea)).toMatchObject({ accion: 'ack', codigo: 'A1F3C9', remitente: '+58•••4567' });
+    expect(JSON.parse(lineas().find((l) => l.includes('"kapso.boton_canje"'))!)).toMatchObject({ resultado: 'sin_canje' });
     expect(lineas().join('\n')).not.toContain('4141234567');
     expect(lineas().join('\n')).not.toContain(NONCE);
   });
@@ -233,7 +239,140 @@ describe('E31 · botones (hito 5: solo se registran)', () => {
     expect(updates()).toHaveLength(0);
   });
 
+  it('ok, no y blk solo se registran (hito siguiente): ni canje ni efecto', async () => {
+    for (const [i, a] of ['ok', 'no', 'blk'].entries()) {
+      await enviar(boton(`${a}:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave: `x${i}` });
+    }
+    expect(doble.rpcs).toHaveLength(0);
+    expect(doble.ops.every((o) => o.table === 'webhook_events')).toBe(true);
+  });
+
   it('resumenKapso marca los botones que no casan como desconocido', () => {
     expect(resumenKapso('whatsapp.message.received', boton('noop')).items[0]!.button).toBe('desconocido');
+  });
+});
+
+describe('E31 · botones ack/snz: canje del nonce', () => {
+  const ORG_A = '0f6c0000-0000-4000-8000-00000000000a';
+  const ORG_B = '0f6c0000-0000-4000-8000-00000000000b';
+  const INC = '9e0b0000-0000-4000-8000-000000000001';
+  const NONCE_SNZ = 'Qw8rTy6Ui4Op2As0' + 'Df1gHj';
+  type Fila = Record<string, unknown>;
+  let aprobaciones: Map<string, Fila>;
+  let incidente: Fila;
+  let contacto: Fila | null;
+
+  // Doble de approvals con la semántica de vg_redeem_approval: un solo uso, no vencida y recipient = remitente.
+  async function sembrar(nonce: string, extra: Fila = {}) {
+    aprobaciones.set(`\\x${await sha256Hex(nonce)}`, { id: crypto.randomUUID(), org_id: ORG_A, incident_id: INC,
+      action_kind: 'ack', channel: 'whatsapp', recipient: TEL, used_at: null, expires_at: new Date(Date.now() + 600_000).toISOString(), ...extra });
+  }
+  beforeEach(() => {
+    aprobaciones = new Map();
+    incidente = { id: INC, code: 'A1F3C9', status: 'open', acked_at: null, muted_until: null,
+      details: { ip: 'x', n_60s: 180, detected_at: '2026-10-24T19:01:06.000Z' } };
+    contacto = { id: 'c1', verified_at: '2026-10-24T14:00:00+00:00' };
+    rpc = (name, args) => {
+      if (name !== 'vg_redeem_approval') return undefined;
+      const f = aprobaciones.get(String(args.p_nonce_hash));
+      if (!f || f.used_at || Date.parse(String(f.expires_at)) <= Date.now() || f.recipient !== args.p_recipient) return { data: [] };
+      f.used_at = new Date().toISOString();
+      return { data: [{ ...f }] };
+    };
+    tabla = (op) => {
+      if (op.table === 'incidents' && op.action === 'select') {
+        return { data: eqDe(op, 'id') === INC && eqDe(op, 'org_id') === ORG_A ? incidente : null };
+      }
+      if (op.table === 'contacts') {
+        return { data: eqDe(op, 'org_id') === ORG_A && eqDe(op, 'phone_e164') === `+${TEL}` ? contacto : null };
+      }
+      return undefined;
+    };
+  });
+  const incUpdates = () => doble.ops.filter((o) => o.table === 'incidents' && o.action === 'update');
+  const resultado = () => lineas().filter((l) => l.includes('"kapso.boton_canje"')).map((l) => JSON.parse(l).resultado as string);
+
+  it('ack válido → incidente ack con acked_at y acked_via whatsapp, filtrando por id, org y status', async () => {
+    await sembrar(NONCE);
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received' });
+    const [u] = incUpdates();
+    expect(u!.payload).toEqual({ status: 'ack', acked_at: expect.stringMatching(/Z$/), acked_via: 'whatsapp' });
+    expect(eqDe(u!, 'id')).toBe(INC);
+    expect(eqDe(u!, 'org_id')).toBe(ORG_A);
+    expect(eqDe(u!, 'status')).toBe('open');
+    expect(resultado()).toEqual(['aplicado']);
+  });
+
+  it('el mismo nonce otra vez (otro evento de Kapso) → sin efecto: ya está usado', async () => {
+    await sembrar(NONCE);
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave: 'e1' });
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave: 'e2' });
+    expect(incUpdates()).toHaveLength(1);
+    expect(resultado()).toEqual(['aplicado', 'sin_canje']);
+  });
+
+  it('nonce vencido o de otro remitente → sin efecto', async () => {
+    await sembrar(NONCE, { expires_at: new Date(Date.now() - 1000).toISOString() });
+    await sembrar(NONCE_SNZ, { recipient: '584249998877', action_kind: 'mute' });
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave: 'v1' });
+    await enviar(boton(`snz:A1F3C9:${NONCE_SNZ}`), { evento: 'whatsapp.message.received', clave: 'v2' });
+    expect(incUpdates()).toHaveLength(0);
+    expect(resultado()).toEqual(['sin_canje', 'sin_canje']);
+  });
+
+  it('nonce de un incidente de otra org → sin efecto (el incidente se busca por id y org de la aprobación)', async () => {
+    await sembrar(NONCE, { org_id: ORG_B });
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received' });
+    expect(incUpdates()).toHaveLength(0);
+    expect(resultado()).toEqual(['otro_incidente']);
+    const lectura = doble.ops.find((o) => o.table === 'incidents')!;
+    expect(eqDe(lectura, 'org_id')).toBe(ORG_B);
+  });
+
+  it('código del botón distinto del incidente de la aprobación → sin efecto', async () => {
+    await sembrar(NONCE);
+    await enviar(boton(`ack:B2C3D4:${NONCE}`), { evento: 'whatsapp.message.received' });
+    expect(incUpdates()).toHaveLength(0);
+    expect(resultado()).toEqual(['otro_incidente']);
+  });
+
+  it('remitente que ya no es contacto verificado de la org → sin efecto', async () => {
+    await sembrar(NONCE);
+    contacto = { id: 'c1', verified_at: null };
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received' });
+    expect(incUpdates()).toHaveLength(0);
+    expect(resultado()).toEqual(['no_contacto']);
+  });
+
+  it('nonce de snz usado en un botón ack → sin efecto (cada nonce vale para su acción)', async () => {
+    await sembrar(NONCE, { action_kind: 'mute' });
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received' });
+    expect(incUpdates()).toHaveLength(0);
+    expect(resultado()).toEqual(['tipo_distinto']);
+  });
+
+  it('snz válido → muted_until = ahora + 1 h y details.muted_at, conservando el resto de details', async () => {
+    await sembrar(NONCE_SNZ, { action_kind: 'mute' });
+    const antes = Date.now();
+    await enviar(boton(`snz:A1F3C9:${NONCE_SNZ}`), { evento: 'whatsapp.message.received' });
+    const [u] = incUpdates();
+    const p = u!.payload as { muted_until: string; details: Record<string, unknown> };
+    const hasta = Date.parse(p.muted_until) - antes;
+    expect(hasta).toBeGreaterThanOrEqual(3_600_000 - 50);
+    expect(hasta).toBeLessThan(3_600_000 + 5_000);
+    expect(p.details).toEqual({ ip: 'x', n_60s: 180, detected_at: '2026-10-24T19:01:06.000Z', muted_at: expect.stringMatching(/Z$/) });
+    expect(eqDe(u!, 'org_id')).toBe(ORG_A);
+  });
+
+  it('incidente resuelto o ya con ack → sin efecto', async () => {
+    await sembrar(NONCE);
+    incidente.status = 'resolved';
+    await enviar(boton(`ack:A1F3C9:${NONCE}`), { evento: 'whatsapp.message.received', clave: 'r1' });
+    await sembrar(NONCE_SNZ);
+    incidente.status = 'ack';
+    incidente.acked_at = '2026-10-24T19:02:00+00:00';
+    await enviar(boton(`ack:A1F3C9:${NONCE_SNZ}`), { evento: 'whatsapp.message.received', clave: 'r2' });
+    expect(incUpdates()).toHaveLength(0);
+    expect(resultado()).toEqual(['resuelto', 'ya_ack']);
   });
 });

@@ -29,6 +29,12 @@ export * from './stack.ts';
 export * from './templates/titles.ts';
 export * from './templates/summary.ts';
 export * from './templates/fix-prompt.ts';
+export * from './templates/whatsapp.ts';
+
+// Motor en vivo (S15 15.9, S12 12.2–12.6): reglas del borde, decisión del incidente y plan de avisos; sin red ni base.
+export * from './engine/edge.ts';
+export * from './engine/incidente.ts';
+export * from './engine/notify-plan.ts';
 
 // IA (S11 11.12): precios, peor caso, costo real y filtro de salida.
 export * from './ai.ts';

@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { redact } from '@vanguard/core';
-import { parsearBoton } from '../actions/approvals.ts';
+import { canjearBotonAlerta, parsearBoton } from '../actions/approvals.ts';
 import type { AppEnv } from '../env.ts';
 import { db } from '../lib/db.ts';
 import { fail } from '../lib/errors.ts';
@@ -98,7 +98,7 @@ async function actualizarEstado(env: CloudflareBindings, m: Obj, estado: Estado,
   log('info', 'kapso.estado', { rid, estado, filas: Array.isArray(data) ? data.length : 0, ...(error ? { error_code: error } : {}) });
 }
 
-function registrarBoton(m: Obj, conversacion: Obj, rid: string) {
+async function registrarBoton(env: CloudflareBindings, m: Obj, conversacion: Obj, rid: string) {
   const id = idBoton(m);
   if (!id) {
     log('debug', 'kapso.texto_ignorado', { rid, type: str(m.type) });   // P1: «VERIFICAR <código>» (§06.9)
@@ -106,10 +106,14 @@ function registrarBoton(m: Obj, conversacion: Obj, rid: string) {
   }
   const b = parsearBoton(id);
   const remitente = (str(m.from) ?? str(conversacion.phone_number) ?? '').replace(/\D/g, '');
-  // TODO(hito 5): canje con vg_redeem_approval(null, sha256(nonce), remitente) y ack/snz/blk/ok/no (§15.10). Hasta
-  // entonces solo se registra; no se ejecuta ninguna acción.
-  log('info', 'kapso.boton', { rid, accion: b?.accion ?? 'desconocido', codigo: b?.codigo ?? null,
-    remitente: remitente.length >= 8 ? enmascararTelefono(remitente) : null });
+  const enmascarado = remitente.length >= 8 ? enmascararTelefono(remitente) : null;
+  log('info', 'kapso.boton', { rid, accion: b?.accion ?? 'desconocido', codigo: b?.codigo ?? null, remitente: enmascarado });
+  // ack/snz: canje del nonce y efecto sobre el incidente (§15.10). ok/no/blk solo se registran hasta el hito siguiente.
+  // Un canje sin efecto (repetido, vencido, de otra org, remitente que no es contacto) queda solo en el log.
+  if (b?.accion !== 'ack' && b?.accion !== 'snz') return;
+  const resultado = await canjearBotonAlerta(env, b, remitente, rid);
+  log(resultado === 'aplicado' ? 'info' : 'warn', 'kapso.boton_canje',
+    { rid, accion: b.accion, codigo: b.codigo, resultado, remitente: enmascarado });
 }
 
 // Proceso de un webhook ya verificado y deduplicado. Nunca lanza: corre en waitUntil.
@@ -118,7 +122,7 @@ export async function procesarKapso(env: CloudflareBindings, evento: string | nu
     try {
       const m = obj(it.message);
       if (evento === 'whatsapp.message.received') {
-        registrarBoton(m, obj(it.conversation), rid);
+        await registrarBoton(env, m, obj(it.conversation), rid);
         continue;
       }
       const estado = evento ? ESTADO_DE_EVENTO[evento] : ESTADO_DE_EVENTO[`whatsapp.message.${String(obj(m.kapso).status)}`];

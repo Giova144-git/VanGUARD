@@ -47,6 +47,7 @@ export const CONTACT_2 = 'cc000000-0000-4000-8000-000000000002';
 export const MCP_TOKEN_1 = 'd0000000-0000-4000-8000-000000000001';
 export const MCP_TOKEN_2 = 'd0000000-0000-4000-8000-000000000002';
 export const PERF_RUN_BASE = 'b0000000-0000-4000-8000-0000000000'; // + 2 hex por corrida (ver rendimiento.ts)
+export const PERF_GROUP_BASE = 'b1000000-0000-4000-8000-00000000000'; // + 1 hex por tanda y estrategia (ver rendimiento.ts)
 
 // ── Textos compartidos ─────────────────────────────────────────────────────────
 export const ORG_NOMBRE = 'Tienda Demo';

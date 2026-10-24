@@ -2,23 +2,27 @@
 // así la cobertura 4 de 4 de scanDone es real: §15.9 cuenta Rendimiento con cualquier perf_runs) y de v2-regresion
 // (tanda T_PERF_V2, antes de T_ESTADO), la versión con CSS y JS bloqueantes, imagen pesada y un script lento (S10 §10.11).
 // Mismo orden que S10 (v1-sana y luego v2-regresion, que se queda desplegada); las horas caen en la ventana del sábado
-// de estos fixtures. Orden: más recientes primero (created_at descendente).
-import type { PerfRun } from '../api.ts';
-import { HOST_VICTIMA, PERF_RUN_BASE, T_PERF_V1, T_PERF_V2 } from './ids.ts';
+// de estos fixtures. Orden: más recientes primero (created_at descendente). Cada tanda y estrategia lleva su run_group,
+// rep 1–3 y version_label (campos de PerfRunExt), así el histórico del FRONT rotula «v1-sana» y «v2-regresion».
+import type { PerfRunExt } from '../perf.ts';
+import { HOST_VICTIMA, PERF_GROUP_BASE, PERF_RUN_BASE, T_PERF_V1, T_PERF_V2 } from './ids.ts';
 
 type Medida = { perf: number; lcp: number; tbt: number; cls: number; fcp: number; si: number; ttfb: number };
 const OBJETIVO = `https://${HOST_VICTIMA}/`;
 const mas = (iso: string, s: number) => new Date(Date.parse(iso) + s * 1000).toISOString();
 
-const corrida = (n: number, strategy: 'mobile' | 'desktop', at: string, m: Medida): PerfRun => ({
+// Grupo 1 = v1 escritorio, 2 = v1 móvil, 3 = v2 escritorio, 4 = v2 móvil; rep = posición dentro de la tanda.
+const corrida = (n: number, strategy: 'mobile' | 'desktop', at: string, m: Medida): PerfRunExt => ({
   id: PERF_RUN_BASE + n.toString(16).padStart(2, '0'), url: OBJETIVO, strategy, source: 'psi', lighthouse_version: '13.5.0',
+  run_group: PERF_GROUP_BASE + Math.ceil(n / 3).toString(16), rep: ((n - 1) % 3) + 1, trigger: 'seed',
+  version_label: n <= 6 ? 'v1-sana' : 'v2-regresion',
   scores: { performance: m.perf, accessibility: 0.91, 'best-practices': 0.96, seo: 0.92 },
   metrics: { lcp_ms: m.lcp, tbt_ms: m.tbt, cls: m.cls, fcp_ms: m.fcp, si_ms: m.si, ttfb_ms: m.ttfb },
   created_at: at,
 });
 
 // Escritorio y móvil van en paralelo: repeticiones a +1/+20/+39 s (escritorio) y +2/+21/+40 s (móvil) del inicio de la tanda.
-const corridas: PerfRun[] = [
+const corridas: PerfRunExt[] = [
   // v1-sana
   corrida(1, 'desktop', mas(T_PERF_V1, 1), { perf: 0.99, lcp: 560, tbt: 10, cls: 0, fcp: 320, si: 470, ttfb: 112 }),
   corrida(2, 'desktop', mas(T_PERF_V1, 20), { perf: 1, lcp: 520, tbt: 0, cls: 0, fcp: 300, si: 450, ttfb: 110 }),
@@ -35,4 +39,4 @@ const corridas: PerfRun[] = [
   corrida(12, 'mobile', mas(T_PERF_V2, 40), { perf: 0.43, lcp: 5980, tbt: 790, cls: 0.31, fcp: 3050, si: 5500, ttfb: 125 }),
 ];
 
-export const perfRuns = corridas.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)) satisfies PerfRun[];
+export const perfRuns = corridas.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)) satisfies PerfRunExt[];

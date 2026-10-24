@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0010.
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0011 (0012 no cambia firmas).
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -1271,6 +1271,14 @@ export type Database = {
           reopened: boolean
           severity: string
           status: string
+        }[]
+      }
+      vg_vigilar_corridas: {
+        Args: { p_limit?: number; p_scan_seconds?: number; p_wiki_seconds?: number }
+        Returns: {
+          id: string
+          org_id: string
+          tabla: string
         }[]
       }
       vg_wiki_avanzar: {

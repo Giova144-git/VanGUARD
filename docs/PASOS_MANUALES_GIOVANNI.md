@@ -194,6 +194,11 @@ Qué cambia en el `.env` de la raíz:
 7. **Primera prueba sin plantilla:** desde tu teléfono escribe «hola» al número nuevo de VanGUARD (abre la ventana de 24 h). Escríbeme «listo, Kapso nuevo» y el BACK te manda el interactivo; pulsa un botón.
 8. Si todavía tienes acceso a la cuenta vieja, **revoca su API key y borra su webhook**.
 
+**Si Meta dice «tu cuenta de WhatsApp Business está restringida»** (pasó el sáb ~09:30):
+1. Repite el alta y, en **WhatsApp Business account**, elige **Create a WhatsApp Business account** (una NUEVA), no la existente. Si vuelve a fallar, crea también un **Business portfolio** nuevo en el mismo flujo.
+2. Mira el motivo en `https://business.facebook.com/latest/whatsapp_manager/phone_numbers` y en `https://business.facebook.com/latest/settings/whatsapp_account`. Si aparece **Request Review**, pídela. Kapso no puede apelar por nosotros y Meta no da plazos.
+3. Si sigue restringida: la demo va por el **sandbox de la cuenta nueva** (7A con la API key nueva, `KAPSO_PHONE_NUMBER_ID=` vacío y `node scripts/kapso-config.mjs --webhook`, sin `--real`). El número real queda pedido en paralelo.
+
 **7G · WhatsApp REAL: número de EE. UU. de Kapso, gratis** (decidido por Giovanni: opción 1)
 El plan Free trae **un número gestionado por Kapso sin depósito**: vale una vez por usuario, en tu primer proyecto, y se libera solo si pasa **30 días sin mensajes de producción**. Necesitas una cuenta de **Facebook**; la cuenta de Meta Business (portfolio) se crea en el mismo flujo si no la tienes.
 1. Kapso → **Connected numbers** → **Connect new number** → **Instant setup**. Confirma el aviso de elegir un número preverificado y pulsa para abrir el alta de Meta.

@@ -10,8 +10,10 @@ const RAIZ = join(import.meta.dirname, '..');
 const WEB = join(RAIZ, 'apps', 'web', 'src');
 const ZIP = join(WEB, 'modulos', 'codebase', 'zip') + sep;
 const EXTENSIONES = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const PROHIBIDO = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"]@vanguard\/core(?:\/[^'"]*)?['"]/;
-const IMPORTA_ZIP = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"][^'"]*\/zip\/(?:analizar|leer|zip\.worker)(?:\.[a-z]+)?['"]/;
+// «import 'x'» (de efecto) también cuenta. zip/tipos.ts sí se puede importar desde fuera: solo trae tipos.
+const IMPORTA = String.raw`(?:from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)`;
+const PROHIBIDO = new RegExp(IMPORTA + String.raw`['"]@vanguard\/core(?:\/[^'"]*)?['"]`);
+const IMPORTA_ZIP = new RegExp(IMPORTA + String.raw`['"][^'"]*\/zip\/(?:analizar|leer|zip\.worker)(?:\.[a-z]+)?['"]`);
 
 function* archivos(dir) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {

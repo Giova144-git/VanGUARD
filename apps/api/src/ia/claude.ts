@@ -2,7 +2,8 @@
 // Nadie más importa @anthropic-ai/sdk (11.1). Orden: (1) IA_CORTE=1 → disabled sin tocar la base; (2) vg_ai_status →
 // nivel de la escalera; (3) vg_ai_reserve con el modelo ya elegido; (4) llamada; (5) vg_ai_settle. Nunca lanza.
 // Nunca se registra el prompt, la salida del modelo ni la key: solo ids, tokens, costo y stop_reason.
-import Anthropic from '@anthropic-ai/sdk';
+// El SDK se carga perezoso (clienteIA): pesa y solo lo usan las llamadas a la IA, no el arranque en frío del Worker.
+import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { AuditSummary, type Coverage } from '@vanguard/contracts';
 import { redact, fence, detectInjection } from '@vanguard/core';
@@ -79,6 +80,18 @@ const TOPE_PETICION_USD = 1;
 const RITMO_POR_MINUTO = 10;
 const TOPE_HAIKU_TOKENS = 90_000;                                            // tarifa ×5 por encima de 100K (11.2)
 let cliente: Anthropic | undefined;                                          // uno por isolate
+type ModuloSdk = typeof import('@anthropic-ai/sdk');
+let carga: Promise<ModuloSdk> | undefined;                                   // import() una sola vez por isolate
+let ErrorApi: ModuloSdk['default']['APIError'] | undefined;                  // del SDK ya cargado, para el instanceof del catch
+
+async function clienteIA(apiKey: string): Promise<Anthropic> {
+  if (cliente) return cliente;
+  const { default: Sdk } = await (carga ??= import('@anthropic-ai/sdk'));
+  ErrorApi = Sdk.APIError;
+  return (cliente ??= new Sdk({ apiKey, maxRetries: 0 }));
+}
+// e es un APIError del SDK (sin SDK cargado no puede serlo)
+const esErrorApi = (e: unknown): e is InstanceType<typeof Anthropic.APIError> => ErrorApi !== undefined && e instanceof ErrorApi;
 
 export type ResultadoIA<T> = { ok: true; data: T; model: string; cost_usd: number } | { ok: false; code: Fallo; reasons?: string[] };
 
@@ -115,15 +128,15 @@ export async function llamarIA<T>(env: CloudflareBindings, p: { org_id: string; 
   // 3) Llamada
   let msg: Anthropic.Message;
   try {
-    const ai = (cliente ??= new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 0 }));
+    const ai = await clienteIA(env.ANTHROPIC_API_KEY);
     msg = await enviar(ai, plan, system, messages, p.ruta, p.timeoutMs ?? plan.timeoutMs);
   } catch (e) {
     // En el SDK de TS, APIConnectionError (y su timeout) es subclase de APIError sin `status`: cuenta como transitorio
-    const status = e instanceof Anthropic.APIError && typeof e.status === 'number' ? e.status : null;
+    const status = esErrorApi(e) && typeof e.status === 'number' ? e.status : null;
     const es4xx = status !== null && status < 500;                             // un 4xx no se cobra: costo 0
     await liquidarIA(env, reserva, { cost: es4xx ? 0 : null, stop: es4xx ? 'error_4xx' : 'error_transient' });
     log('warn', 'ia.error', { ruta: p.ruta, model: plan.model, usage_id: reserva, status,
-      error_type: e instanceof Anthropic.APIError ? e.type : null, tipo: e instanceof Error ? e.name : 'desconocido' });
+      error_type: esErrorApi(e) ? e.type : null, tipo: e instanceof Error ? e.name : 'desconocido' });
     return { ok: false, code: falloProveedor(e, status) };                     // devuelve, nunca lanza hacia la cola
   }
 
@@ -338,7 +351,7 @@ function lineasLogicas(xs: string[]): string[] {
 // plantillaResumen) y el paso acaba en done.
 const SIN_SALDO = /credit balance|usage limit|spend(?:ing)? limit|billing/i;
 function falloProveedor(e: unknown, status: number | null): Fallo {
-  const tipo = e instanceof Anthropic.APIError ? e.type : null;
+  const tipo = esErrorApi(e) ? e.type : null;
   if (status === 402 || status === 429 || tipo === 'billing_error' || tipo === 'rate_limit_error') return 'budget';
   if ((status === 400 || status === 403) && e instanceof Error && SIN_SALDO.test(e.message)) return 'budget';
   if (status === 401 || status === 403) return 'disabled';
@@ -487,18 +500,18 @@ export async function llamarIATexto(env: CloudflareBindings, p: { org_id: string
 
   let msg: Anthropic.Message;
   try {
-    const ai = (cliente ??= new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 0 }));
+    const ai = await clienteIA(env.ANTHROPIC_API_KEY);
     // Sin temperature, top_p, top_k, tool_choice ni tools (11.2, 11.11). El system del motor es estable: punto de caché.
     const cuerpo = { model: modelo, max_tokens,
       system: [{ type: 'text', text: p.sistema, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: p.usuario }], output_config: { effort: plan.effort } } as any;   // output_config: cast puntual
     msg = await ai.messages.create(cuerpo, { timeout: p.timeoutMs ?? plan.timeoutMs, maxRetries: plan.retries }) as Anthropic.Message;
   } catch (e) {
-    const status = e instanceof Anthropic.APIError && typeof e.status === 'number' ? e.status : null;
+    const status = esErrorApi(e) && typeof e.status === 'number' ? e.status : null;
     const es4xx = status !== null && status < 500;
     await liquidarIA(env, reserva, { cost: es4xx ? 0 : null, stop: es4xx ? 'error_4xx' : 'error_transient' });
     log('warn', 'ia.error', { ruta: p.ruta, model: modelo, usage_id: reserva, status,
-      error_type: e instanceof Anthropic.APIError ? e.type : null, tipo: e instanceof Error ? e.name : 'desconocido' });
+      error_type: esErrorApi(e) ? e.type : null, tipo: e instanceof Error ? e.name : 'desconocido' });
     const code = falloProveedor(e, status);
     const ritmo = status === 429 && !(e instanceof Error && SIN_SALDO.test(e.message));
     return ritmo ? { ok: false, code, reintentar: true } : { ok: false, code };

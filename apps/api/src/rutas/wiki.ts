@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { Id, RepoFullName, WikiEstimate, WikiEstimateRequest, WikiRun, WikiRunAccepted, WikiRunCreate } from '@vanguard/contracts';
-import { estimar, leerMeta, pasoArbol, type Estimacion, type MetaRepo } from '@vanguard/deepwiki';
+import type { Estimacion, MetaRepo } from '@vanguard/deepwiki';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
 import { db } from '../lib/db.ts';
@@ -14,6 +14,7 @@ import {
   mensajeInicio, SUBPETICIONES_CACHE,
 } from '../wiki/corridas.ts';
 import { conTokenGithub, depsWiki, falloGithub, salidaGithub, TOPE_SUBPETICIONES, type SalidaGithub } from '../wiki/deps.ts';
+import { motor } from '../wiki/motor.ts';
 
 // «Wiki del repo» con el motor de DeepWiki (packages/deepwiki/LEEME.md, «Integración en el BACK»): E40 estima, E41 crea
 // la corrida (o la sirve de la caché) y encola el paso arbol en vg-jobs, E42–E44 leen wiki_runs (0010). La caché es por
@@ -32,7 +33,8 @@ export const SUBPETICIONES_RUTA_E41 = 16;
 
 const NO_ENCONTRADA = 'Generación no encontrada';
 
-// ErrorGithub → ApiError con su código (wiki/deps.ts); cualquier otro error sigue hasta mw/error.ts.
+// ErrorGithub → ApiError con su código (wiki/deps.ts); cualquier otro error sigue hasta mw/error.ts. Las rutas que lo
+// llaman ya cargaron el motor (await motor(), wiki/motor.ts).
 function errorGithub(c: Context<AppEnv>, e: unknown, conToken: boolean, salida: SalidaGithub, evento: string): never {
   const fallo = falloGithub(e, conToken);
   if (!fallo) throw e;
@@ -62,6 +64,7 @@ wiki.post('/orgs/:org/wiki/estimate', requireAdmin, async (c) => {
   const rid = c.get('rid');
   const conToken = body.connection_id !== undefined;
   const salida = salidaGithub(TOPE_SUBPETICIONES - SUBPETICIONES_RUTA_E40);
+  const { estimar, pasoArbol } = await motor();
   let estimacion: Estimacion;
   try {
     // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub, nada más.
@@ -113,6 +116,7 @@ wiki.post('/orgs/:org/wiki/runs', requireAdmin, requireColaPropia, async (c) => 
   const connectionId = body.connection_id?.toLowerCase();   // como se guarda: va a la fila y la lee el paso arbol
   const conToken = connectionId !== undefined;
   const salida = salidaGithub(TOPE_SUBPETICIONES - SUBPETICIONES_RUTA_E41);
+  const { leerMeta } = await motor();
   let meta: MetaRepo;
   try {
     meta = await conTokenGithub(c.env, admin, orgId, connectionId, (githubToken) =>

@@ -1,6 +1,7 @@
 import type { WikiModelos } from '@vanguard/contracts';
-import { modeloPara, type Llm, type Tarea } from '@vanguard/deepwiki';
+import type { Llm, Tarea } from '@vanguard/deepwiki';
 import { llamarIATexto, type RutaWiki } from '../ia/claude.ts';
+import { motor } from './motor.ts';
 
 // Deps.llm de DeepWiki en el Worker (packages/deepwiki/LEEME.md, punto 7): cada tarea del motor va por ia/claude.ts con
 // su ruta de ai_usage (wiki_triage | wiki_area | wiki_sintesis), así pasa por el interruptor IA_CORTE, la escalera de
@@ -44,6 +45,7 @@ export function llmWiki(env: CloudflareBindings, orgId: string, modelos: WikiMod
   return async (p) => {
     const ruta = RUTA[p.tarea];
     if (!ruta) throw new ErrorLlmWiki('ia_invalida');
+    const { modeloPara } = await motor();
     const r = await llamar(env, { org_id: orgId, ruta, modelo: modeloPara(p.tarea, modelos), sistema: p.system,
       usuario: p.user, maxTokens: p.maxTokens });
     if (r.ok) return { texto: r.texto, modelo: r.model, uso: r.uso, ...(r.stop_reason ? { stop_reason: r.stop_reason } : {}) };

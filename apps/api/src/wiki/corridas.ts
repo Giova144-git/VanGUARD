@@ -1,10 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { WikiDoc, WikiModelos, WikiRun, WikiRunStep, type WikiPaso } from '@vanguard/contracts';
-import { huellaHallazgos, MODELOS_POR_DEFECTO, type HallazgoBreve } from '@vanguard/deepwiki';
+import type { HallazgoBreve } from '@vanguard/deepwiki';
 import type { MsgWiki } from '../jobs.ts';
 import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
+import { MODELOS_POR_DEFECTO, motor } from './motor.ts';
 
 // Filas de wiki_runs (0010) y caché de la wiki (packages/deepwiki/LEEME.md, «Integración en el BACK», puntos 1–3). Lo
 // usan E40–E44 (rutas/wiki.ts); los pasos 'wiki' de la cola viven en wiki/pasos.ts. Toda consulta lleva
@@ -146,7 +147,7 @@ export async function hallazgosDelRepo(admin: SupabaseClient, orgId: string, rep
 // Huella de la llave: la de huellaHallazgos, o null si no hubo auditoría (huellaHallazgos daría 'sin-auditoria', que no
 // es una huella de 64 hex).
 export async function huellaDe(h: HallazgosRepo): Promise<string | null> {
-  return h.hallazgos ? huellaHallazgos(h.hallazgos) : null;
+  return h.hallazgos ? (await motor()).huellaHallazgos(h.hallazgos) : null;
 }
 
 // ── Llave de la caché: (org_id, repo_full_name, commit_sha, huella) ────────────────────────────────────────────────

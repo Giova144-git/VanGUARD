@@ -1,11 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ErrorCode } from '@vanguard/contracts';
 import { assertAllowedUrl } from '@vanguard/core';
-import { ErrorGithub, ErrorWiki } from '@vanguard/deepwiki';
 import type { CodigoErrorGithub, Deps, Fetch, HallazgoBreve, Llm } from '@vanguard/deepwiki';
 import { withSecret } from '../lib/credentials.ts';
 import { ApiError } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
+import { motor, motorCargado } from './motor.ts';
 
 // Deps de @vanguard/deepwiki en el Worker (packages/deepwiki/LEEME.md, «Integración en el BACK», puntos 1, 6 y 7).
 // Lo usan E40 (estimar), E41 (generar) y los pasos 'wiki' de la cola vg-jobs. El PAT de GitHub solo vive dentro de
@@ -54,6 +54,7 @@ export function salidaGithub(max: number,
 
 // E40 no llama al modelo (LEEME, punto 1): si algo lo intentara, falla antes de gastar.
 export const sinLlm: Llm = async () => {
+  const { ErrorWiki } = await motor();
   throw new ErrorWiki('sin_llm', 'Este paso no llama al modelo.');
 };
 
@@ -114,9 +115,11 @@ const TRADUCCION: Record<CodigoErrorGithub, (conToken: boolean) => Traduccion> =
 
 export type FalloGithub = { error: ApiError; codigo: CodigoErrorGithub; status: number | null; retryAfterS: number | null };
 
-// null si no es un ErrorGithub (ErrorWiki u otro): no se traduce y sigue hasta el 500 genérico de mw/error.ts.
+// null si no es un ErrorGithub (ErrorWiki u otro): no se traduce y sigue hasta el 500 genérico de mw/error.ts. Corre
+// tras un await motor(): un ErrorGithub solo lo lanza el motor ya cargado.
 export function falloGithub(e: unknown, conToken: boolean): FalloGithub | null {
-  if (!(e instanceof ErrorGithub)) return null;
+  const ErrorGithub = motorCargado()?.ErrorGithub;
+  if (!ErrorGithub || !(e instanceof ErrorGithub)) return null;
   const [code, texto, details] = TRADUCCION[e.codigo](conToken);
   return {
     error: new ApiError(code, texto, { reason: e.codigo, ...details }),

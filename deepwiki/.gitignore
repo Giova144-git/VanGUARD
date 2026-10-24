@@ -1,6 +1,0 @@
-.env
-.env.*
-!.env.example
-out/
-.cache/
-node_modules/

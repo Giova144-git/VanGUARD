@@ -1,9 +1,11 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.ts';
 import { connections } from './connections.ts';
+import { contacts } from './contacts.ts';
 import { demo } from './demo.ts';
 import { findings } from './findings.ts';
 import { modules } from './modules.ts';
+import { notifications } from './notifications.ts';
 import { overview } from './overview.ts';
 import { scans } from './scans.ts';
 import { health } from './health.ts';
@@ -22,3 +24,5 @@ rutas.route('/', scans);
 rutas.route('/', findings);
 rutas.route('/', overview);
 rutas.route('/', modules);
+rutas.route('/', contacts);
+rutas.route('/', notifications);

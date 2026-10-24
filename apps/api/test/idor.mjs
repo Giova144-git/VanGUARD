@@ -79,14 +79,25 @@ try {
   const listaB = await (await pedir(tb, 'GET', `/api/orgs/${ORG_B}/connections`)).json();
   ok('las conexiones de B no traen ninguna de A', Array.isArray(listaB) && !listaB.some((c) => c.id === CONN_A));
 
-  // Decisión (a) del ORQUESTADOR: authenticated no tiene SELECT directo en public (todo va por la API). Con la clave
-  // publicable y la sesión de idor-a, un select directo a findings debe dar «permission denied» (42501).
+  // Decisión (a) del ORQUESTADOR y 0008h: authenticated no tiene SELECT directo en public (todo va por la API). Con la
+  // clave publicable y la sesión de idor-a, un select directo a CADA tabla o vista de public debe dar «permission denied»
+  // (42501). contacts se pide además por las columnas que 0008 dejó legibles (id, name): `*` no lo habría detectado,
+  // porque phone_e164 nunca tuvo grant. La lista va a mano (sin grants, PostgREST no la expone); rls.sql la saca de
+  // pg_class y detecta las tablas nuevas.
   const PUBLICABLE = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
   if (PUBLICABLE) {
     const pub = createClient(SUPABASE_URL, PUBLICABLE,
       { ...opciones, global: { headers: { Authorization: `Bearer ${ta}` } } });
-    const { error } = await pub.from('findings').select('id').limit(1);
-    ok('select directo a findings con la sesión de A → permission denied', error?.code === '42501');
+    const TABLAS = ['actions', 'ai_usage', 'app_config', 'approvals', 'connection_secrets', 'connections', 'contacts',
+      'edge_eval_state', 'edge_hits', 'findings', 'incidents', 'metric_samples', 'notifications', 'org_members', 'orgs',
+      'perf_points', 'perf_runs', 'scan_runs', 'webhook_events'];
+    const legibles = [];
+    for (const [tabla, columnas] of [...TABLAS.map((t) => [t, '*']), ['contacts', 'id,name']]) {
+      const { error } = await pub.from(tabla).select(columnas).limit(1);
+      if (error?.code !== '42501') legibles.push(`${tabla}(${columnas}):${error?.code ?? 'leyó'}`);
+    }
+    ok(`select directo a las ${TABLAS.length} tablas de public con la sesión de A → permission denied`, legibles.length === 0);
+    if (legibles.length) console.log(`     legibles: ${legibles.join(', ')}`);
   } else {
     console.log('INFO sin SUPABASE_PUBLISHABLE_KEY ni VITE_SUPABASE_PUBLISHABLE_KEY: se salta la comprobación de lectura directa');
   }

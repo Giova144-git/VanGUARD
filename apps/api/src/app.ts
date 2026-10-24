@@ -11,18 +11,24 @@ import { rateLimit } from './mw/rate.ts';
 import { requestId } from './mw/request-id.ts';
 import { securityHeaders } from './mw/security-headers.ts';
 import { rutas } from './rutas/index.ts';
+import { webhooksKapso } from './rutas/webhooks-kapso.ts';
 
-// Orden de middlewares de S15 15.3. /ingest, /webhooks y /mcp entran con sus hitos.
+// Orden de middlewares de S15 15.3. /ingest y /mcp entran con sus hitos.
 export const app = new Hono<AppEnv>();
+
+const limiteCuerpo = bodyLimit({
+  maxSize: 1024 * 1024,
+  onError: (c) => fail(c, 'invalid_body', 'El cuerpo de la petición pasa de 1 MB', undefined, 413),
+});
 
 app.use('*', requestId);
 app.use('*', securityHeaders);
 app.onError(errorHandler);
 app.notFound((c) => fail(c, 'not_found', 'Ruta inexistente'));
-app.use('/api/*', bodyLimit({
-  maxSize: 1024 * 1024,
-  onError: (c) => fail(c, 'invalid_body', 'El cuerpo de la petición pasa de 1 MB', undefined, 413),
-}));
+app.use('/api/*', limiteCuerpo);
 app.use('/api/*', originGuard, auth, rateLimit);          // auth se salta las rutas públicas (mw/auth.ts)
 app.use('/api/orgs/:org/*', orgMember, anonReadOnly);    // cada ruta de escritura declara además requireAdmin
 app.route('/api', rutas);
+// Webhooks: sin sesión ni originGuard (los autentica su firma); RL_API con clave ip:<cf-connecting-ip> (no hay userId).
+app.use('/webhooks/*', rateLimit, limiteCuerpo);
+app.route('/webhooks', webhooksKapso);

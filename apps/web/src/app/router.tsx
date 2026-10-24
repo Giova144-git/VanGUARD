@@ -11,9 +11,6 @@ const pagina = (cargar: () => Promise<{ default: React.ComponentType }>) =>
 
 // Páginas de módulo que llegan en hitos siguientes (asignación del ORQUESTADOR, S14 §14.20).
 const EN_CAMINO: [string, IdNav, string][] = [
-  ['overview', 'overview', 'el hito 3 (Resumen)'],
-  ['connections', 'connections', 'el hito 2 (Conexiones)'],
-  ['connections/:provider', 'connections', 'el hito 2 (Conexiones)'],
   ['supabase', 'supabase', 'el hito 4 (PantallaModulo)'],
   ['cloudflare', 'cloudflare', 'el hito 4 (PantallaModulo)'],
   ['codebase', 'codebase', 'el hito 4 (PantallaModulo)'],
@@ -39,6 +36,9 @@ const rutas: RouteObject[] = [
         path: '/o/:orgId', lazy: pagina(() => import('./paginas/ConOrg')), errorElement: <ErrorRuta />,
         children: [
           { index: true, lazy: pagina(() => import('./paginas/RedireccionOrg')) },
+          { path: 'overview', lazy: pagina(() => import('@/modulos/resumen/PaginaResumen')), errorElement: <ErrorRuta /> },
+          { path: 'connections', lazy: pagina(() => import('@/modulos/conexiones/PaginaConexiones')), errorElement: <ErrorRuta /> },
+          { path: 'connections/:provider', lazy: pagina(() => import('@/modulos/conexiones/Asistente')), errorElement: <ErrorRuta /> },
           ...EN_CAMINO.map(([path, id, hito]): RouteObject => ({
             path, errorElement: <ErrorRuta />,
             lazy: async () => {

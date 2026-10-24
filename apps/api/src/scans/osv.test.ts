@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { arregloDe, cmpVersion, dedupeAvisos, filaDep, type Dep } from './osv.ts';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { ProviderError } from '../lib/http.ts';
+import { arregloDe, cmpVersion, dedupeAvisos, depsVulnerables, detallar, esTransitorio, filaDep, type Dep } from './osv.ts';
 
 // Fixtures JSON sin red (§15.13: dos ids con el mismo alias CVE → un hallazgo).
 const lodash: Dep = { ecosystem: 'npm', name: 'lodash', version: '4.17.15', dev: false };
@@ -51,5 +52,90 @@ describe('osv', () => {
     const sin = filaDep(lodash, [{ id: 'PYSEC-1' }]);
     expect(sin.severity).toBe('medium');
     expect((sin.evidence.avisos as { severidad_por_defecto?: boolean }[])[0]?.severidad_por_defecto).toBe(true);
+  });
+});
+
+// OSV caído (hallazgos 8 y 17): fetch simulado, sin red.
+describe('osv · fallos', () => {
+  type Fetch = (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  let f: Mock<Fetch>;
+  const jquery: Dep = { ecosystem: 'npm', name: 'jquery', version: '3.4.0', dev: false };
+  beforeEach(() => { f = vi.fn<Fetch>(); vi.stubGlobal('fetch', f); vi.spyOn(console, 'log').mockImplementation(() => {}); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('esTransitorio: red, plazo, 429 y 5xx sí; 4xx y errores sueltos no', () => {
+    expect(esTransitorio(new ProviderError('unavailable', 503))).toBe(true);
+    expect(esTransitorio(new ProviderError('rate_limited', 429))).toBe(true);
+    expect(esTransitorio(new ProviderError('timeout'))).toBe(true);
+    expect(esTransitorio(new ProviderError('invalid', 400))).toBe(false);
+    expect(esTransitorio(new SyntaxError('json'))).toBe(false);
+  });
+
+  it('querybatch: un 503 se reintenta una vez dentro del mensaje', async () => {
+    f.mockResolvedValueOnce(new Response('x', { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ results: [{}, { vulns: [{ id: 'GHSA-1' }] }] }));
+    expect(await depsVulnerables([lodash, jquery], 0)).toEqual({ vulnerables: [1], subpeticiones: 2 });
+  });
+
+  it('querybatch: dos 503 seguidos lanzan el ProviderError transitorio (el paso decide el reintento de cola)', async () => {
+    f.mockImplementation(async () => new Response('x', { status: 503 }));
+    await expect(depsVulnerables([lodash], 0)).rejects.toMatchObject({ code: 'unavailable' });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('querybatch: un 400 no se reintenta', async () => {
+    f.mockResolvedValue(new Response('x', { status: 400 }));
+    await expect(depsVulnerables([lodash], 0)).rejects.toMatchObject({ code: 'invalid' });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('detallar: un /query caído cuenta como fallido (su fila entra sin_detalle); un 400 no', async () => {
+    f.mockImplementation(async (_u, init) => {
+      const nombre = (JSON.parse(String(init?.body)) as { package: { name: string } }).package.name;
+      return nombre === 'lodash' ? new Response('x', { status: 502 }) : new Response('x', { status: 400 });
+    });
+    const r = await detallar([lodash, jquery]);
+    expect(r.fallidos).toBe(1);
+    expect(r.errores).toBe(2);   // el 400 no vuelve a la cola, pero deja OSV incompleto (sin auto-verificar)
+    expect(r.filas.map((x) => x.evidence.sin_detalle)).toEqual([true, true]);
+  });
+
+  // Cuerpo que se corta después de las cabeceras: 200, empieza el JSON y la red cae (revisión del hallazgo 17).
+  const cortado = () => new Response(new ReadableStream<Uint8Array>({
+    start(c) { c.enqueue(new TextEncoder().encode('{"results":[')); c.error(new TypeError('Network connection lost.')); },
+  }), { status: 200 });
+
+  it('querybatch: un cuerpo cortado a mitad es transitorio y se reintenta dentro del mensaje', async () => {
+    f.mockImplementationOnce(async () => cortado())
+      .mockResolvedValueOnce(Response.json({ results: [{ vulns: [{ id: 'GHSA-1' }] }] }));
+    expect(await depsVulnerables([lodash], 0)).toEqual({ vulnerables: [0], subpeticiones: 2 });
+  });
+
+  it('querybatch: dos cuerpos cortados lanzan ProviderError unavailable (no un TypeError que la cola no reintenta)', async () => {
+    f.mockImplementation(async () => cortado());
+    const e = await depsVulnerables([lodash], 0).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ProviderError);
+    expect(esTransitorio(e)).toBe(true);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('un 200 que no es JSON también es transitorio', async () => {
+    f.mockImplementation(async () => new Response('<html>proxy</html>', { status: 200 }));
+    await expect(depsVulnerables([lodash], 0)).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  it('detallar: un /query con el cuerpo cortado cuenta como fallido', async () => {
+    f.mockImplementation(async () => cortado());
+    const r = await detallar([lodash]);
+    expect(r).toMatchObject({ fallidos: 1, errores: 1 });
+    expect(r.filas[0]?.evidence.sin_detalle).toBe(true);
+  });
+
+  it('detallar: el plazo vencido mientras se lee el cuerpo es timeout (transitorio)', async () => {
+    f.mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({
+      start(c) { c.error(new DOMException('plazo', 'TimeoutError')); },
+    }), { status: 200 }));
+    expect((await detallar([lodash])).fallidos).toBe(1);
+    await expect(depsVulnerables([lodash], 0)).rejects.toMatchObject({ code: 'timeout' });
   });
 });

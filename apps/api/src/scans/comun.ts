@@ -33,24 +33,78 @@ async function aFila(orgId: string, b: Borrador) {
     title: limpio.title.slice(0, 200), resource: limpio.resource.slice(0, 300), evidence: limpio.evidence,
     suspected_injection: b.suspected_injection ?? false, dedupe_key: await dedupeKey(orgId, b.rule_id, limpio.clave) };
 }
+export type Fila = Awaited<ReturnType<typeof aFila>>;
 
-// vg_upsert_findings con cable trampa (regla 9): si el check looks_like_secret rechaza el lote (23514), fila por fila;
-// la que falla va con evidence {redacted:true} y, si aún falla (el secreto estaba en title/resource), se descarta.
-export async function guardarHallazgos(env: CloudflareBindings, m: MsgScan, module: Module, connId: string | null,
-  borradores: Borrador[], completo: boolean, regla?: string): Promise<{ n: number; descartadas: number }> {
-  const admin = db(env);
-  const filas = await Promise.all(borradores.map((b) => aFila(m.org_id, b)));
-  const rpc = (rows: unknown[], complete: boolean) => admin.rpc('vg_upsert_findings', { p_org: m.org_id, p_scan: m.scan_run_id,
-    p_module: module, p_conn: connId, p_rows: rows, p_complete: complete, ...(regla ? { p_rule: regla } : {}) });
-  const { error } = await rpc(filas, completo);
-  if (!error) return { n: filas.length, descartadas: 0 };
-  if (error.code !== '23514') throw new ProviderError('unavailable');
+// Copia en JS de private.looks_like_secret (0001_base.sql), sin \b, igual que allí (redact() sí lo exige, así que
+// «x_ghp_…» pasa redact() y la base lo rechaza). El cable trampa mira evidence::text, title y resource. Si cambia el
+// SQL, cambia esto (el rescate de abajo cubre la deriva).
+export const PARECE_SECRETO = /(sb_secret_[A-Za-z0-9_-]{16,}|sbp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|vg[iks]_[A-Za-z0-9_-]{20,}|cf(k|ut|at)_[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.)/;
+
+// Regla 9 en memoria, antes del primer RPC (así el 23514 es de verdad excepcional y no gasta subpeticiones): la fila
+// cuya evidencia casa va con evidence {redacted:true}; la que lo lleva en title o resource se descarta.
+export function prefiltrar(filas: readonly Fila[]): { filas: Fila[]; descartadas: number } {
+  const out: Fila[] = [];
   let descartadas = 0;
   for (const f of filas) {
-    if (!(await rpc([f], false)).error) continue;
-    log('warn', 'TRIPWIRE', { rule_id: f.rule_id });
-    if ((await rpc([{ ...f, evidence: { redacted: true } }], false)).error) descartadas++;
+    if (PARECE_SECRETO.test(`${f.title} ${f.resource}`)) { log('warn', 'TRIPWIRE', { rule_id: f.rule_id, descartada: true }); descartadas++; }
+    else if (PARECE_SECRETO.test(JSON.stringify(f.evidence))) { log('warn', 'TRIPWIRE', { rule_id: f.rule_id }); out.push({ ...f, evidence: { redacted: true } }); }
+    else out.push(f);
   }
-  if (completo) await rpc([], true);   // la auto-verificación solo corre si el paso vio todo
-  return { n: filas.length - descartadas, descartadas };
+  return { filas: out, descartadas };
+}
+
+// Tope propio de subpeticiones por invocación (§A7): Free da 50 y dejamos 10 de margen.
+export const TOPE_SUBPETICIONES = 40;
+// Lo que guardarHallazgos puede gastar si el llamador no lo dice: lote + 6 de rescate (≤ 3 filas fila por fila) + cierre.
+const PRESUPUESTO_GUARDAR = 8;
+
+// vg_upsert_findings con cable trampa (regla 9). Si se descarta alguna fila, el paso no auto-verifica (su instancia
+// anterior quedaría 'verified' sin haberse arreglado) y el llamador debe propagar error_code 'tripwire'.
+// presupuesto = subpeticiones que puede gastar en total (lote, rescate y auto-verificación): lo que le queda al paso
+// hasta TOPE_SUBPETICIONES. El rescate fila por fila (hasta 2 por fila) solo va si cabe; si no, un único lote con
+// evidence {redacted:true} (§05.14, hallazgo 24).
+export async function guardarHallazgos(env: CloudflareBindings, m: MsgScan, module: Module, connId: string | null,
+  borradores: Borrador[], completo: boolean, regla?: string, presupuesto = PRESUPUESTO_GUARDAR):
+  Promise<{ n: number; descartadas: number; error_code?: 'tripwire' }> {
+  const admin = db(env);
+  const pre = prefiltrar(await Promise.all(borradores.map((b) => aFila(m.org_id, b))));
+  const filas = pre.filas;
+  let descartadas = pre.descartadas;
+  const fin = (n: number) => ({ n, descartadas, ...(descartadas > 0 ? { error_code: 'tripwire' as const } : {}) });
+  const rpc = (rows: unknown[], complete: boolean) => admin.rpc('vg_upsert_findings', { p_org: m.org_id, p_scan: m.scan_run_id,
+    p_module: module, p_conn: connId, p_rows: rows, p_complete: complete, ...(regla ? { p_rule: regla } : {}) });
+  const otroError = (e: { code?: string } | null) => { if (e && e.code !== '23514') throw new ProviderError('unavailable'); };
+
+  const auto = completo && descartadas === 0;
+  if (!filas.length && !auto) return fin(0);
+  const { error } = await rpc(filas, auto);
+  if (!error) return fin(filas.length);
+  otroError(error);
+
+  // La base rechazó el lote aunque el filtro en JS no vio nada (deriva entre la regex de aquí y la del SQL).
+  log('warn', 'TRIPWIRE', { lote: filas.length });
+  const resto = presupuesto - 1;   // ya se gastó el lote
+  let fallidas = 0;
+  if (filas.length * 2 + (auto ? 1 : 0) <= resto) {
+    for (const f of filas) {
+      const r1 = await rpc([f], false);
+      if (!r1.error) continue;
+      otroError(r1.error);
+      log('warn', 'TRIPWIRE', { rule_id: f.rule_id });
+      const r2 = await rpc([{ ...f, evidence: { redacted: true } }], false);
+      otroError(r2.error);
+      if (r2.error) fallidas++;
+    }
+    if (auto && fallidas === 0) otroError((await rpc([], true)).error ?? null);   // auto-verifica solo si se guardó todo
+  } else if (resto >= 1) {
+    // Una sola llamada: el RPC es atómico, así que con p_complete escribe todo y auto-verifica, o no hace nada.
+    const r = await rpc(filas.map((f) => ({ ...f, evidence: { redacted: true } })), auto);
+    otroError(r.error);
+    if (r.error) fallidas = filas.length;   // el secreto está en title o resource de alguna: no caben más pruebas
+  } else {
+    fallidas = filas.length;   // sin presupuesto ni para el lote tapado: nada se guarda y el paso avisa con tripwire
+  }
+  if (fallidas) log('warn', 'TRIPWIRE', { descartadas: fallidas });
+  descartadas += fallidas;
+  return fin(filas.length - fallidas);
 }

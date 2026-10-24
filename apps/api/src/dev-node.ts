@@ -1,26 +1,21 @@
 import { serve } from '@hono/node-server';
 import { app } from './app.ts';
 import { CRON_MINUTO, onCron } from './cron.ts';
-import { runJob, type JobMsg } from './jobs.ts';
+import { colaEnSerie, type JobMsg } from './jobs.ts';
 import { log } from './lib/log.ts';
 import './scans/index.ts';   // registra los pasos de la cola vg-jobs
 
-// El mismo app de Hono en Node 24 (:8787) con dobles de bindings (R17 §11.4): la cola corre en línea y en serie,
-// sin reintentos, y un setInterval de 60 s hace de cron por minuto. Los valores salen de .dev.vars vía --env-file.
+// El mismo app de Hono en Node 24 (:8787) con dobles de bindings (R17 §11.4): la cola es una FIFO local que corre los
+// pasos en serie, uno tras otro y nunca anidados (S15.8 regla 10), con los reintentos de vg-jobs (attempts+1 tras su
+// delaySeconds, max_retries 3 y luego la DLQ), y un setInterval de 60 s hace de cron por minuto. Los valores salen de
+// .dev.vars vía --env-file.
 const PUERTO = 8787;
 
 const pasa: RateLimit = { limit: async () => ({ success: true }) };
 
-function mensaje(body: JobMsg): Message<JobMsg> {
-  return { id: crypto.randomUUID(), timestamp: new Date(), body, attempts: 1, ack() {}, retry() {} } as Message<JobMsg>;
-}
-
 const env = { ...process.env, VG_ENV: process.env.VG_ENV ?? 'local', RL_API: pasa, RL_COSTLY: pasa, RL_INGEST: pasa } as
   unknown as CloudflareBindings;
-env.JOBS_Q = {
-  async send(body: JobMsg) { await runJob(env, mensaje(body)); },
-  async sendBatch(msgs: Iterable<{ body: JobMsg }>) { for (const m of msgs) await runJob(env, mensaje(m.body)); },
-} as unknown as Queue<JobMsg>;
+env.JOBS_Q = colaEnSerie(env, (e) => log('error', 'dev.job_error', { name: (e as Error)?.name })) as unknown as Queue<JobMsg>;
 
 const ctx = {
   waitUntil(p: Promise<unknown>) { p.catch((e: unknown) => log('error', 'dev.waituntil', { name: (e as Error)?.name })); },

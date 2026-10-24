@@ -4,10 +4,8 @@ import { pedirResumen, type HallazgoResumen } from '../ia/claude.ts';
 import { registrarPaso, type FnPaso } from '../jobs.ts';
 import { db } from '../lib/db.ts';
 import { ProviderError } from '../lib/http.ts';
-import { withSecret } from '../lib/credentials.ts';
-import { reglasZona, zonaParaAuditar } from './cloudflare.ts';
+import { pasoCloudflare } from './cloudflare.ts';
 import { calcularCobertura } from './cobertura.ts';
-import { conexionActiva, guardarHallazgos } from './comun.ts';
 import { pasoRepo } from './repo-paso.ts';
 import { pasoSupabase } from './supabase.ts';
 
@@ -29,17 +27,6 @@ export const pasoPuntaje: FnPaso = async (env, m) => {
     .eq('id', m.scan_run_id).eq('org_id', m.org_id);
   if (eu) throw new ProviderError('unavailable');
   return { status: 'done' };
-};
-
-// cloudflare (P0): CF_ZONE_01 con una lectura de la zona. CF_TLS_*/CF_WAF_01 son P0 tardío (§08.7).
-export const pasoCloudflare: FnPaso = async (env, m) => {
-  const conn = await conexionActiva(env, m, 'cloudflare');
-  if (!conn) return { status: 'skipped', error_code: 'no_connection' };
-  const zoneId = String(conn.meta.zone_id ?? '');
-  const ctx = { orgId: m.org_id, connectionId: conn.id, provider: 'cloudflare' as const, kind: 'read' as const };
-  const zona = await withSecret(env, db(env), ctx, (t) => zonaParaAuditar(t, zoneId));
-  const g = await guardarHallazgos(env, m, 'cloudflare', conn.id, reglasZona(zona, zoneId), true, 'CF_ZONE_01');
-  return { status: 'done', findings: g.n };
 };
 
 // resumen_ia (IA-2): solo llama al modelo si scan_runs.summary es nulo (idempotente, sin doble gasto). Si la IA está

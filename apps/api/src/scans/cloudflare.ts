@@ -1,5 +1,10 @@
 import type { PermCheck } from '@vanguard/contracts';
+import type { FnPaso } from '../jobs.ts';
+import { withSecret } from '../lib/credentials.ts';
+import { db } from '../lib/db.ts';
 import { ProviderError, check, codigoHttp, pedir, sondear } from '../lib/http.ts';
+import { escribirDetalleModulo } from './cobertura.ts';
+import { conexionActiva, guardarHallazgos } from './comun.ts';
 import { sondeoFallido, veredicto, type Sondeo } from './sondeo.ts';
 
 // Sondeo de los tokens de Cloudflare (§08.2–08.3): lectura obligatoria con zone_read y analytics_read; acciones opcional.
@@ -165,6 +170,26 @@ export function reglasZona(z: { name?: string; status?: string; paused?: boolean
     resource: `zone:${zoneId}`, evidence: { zone_id: zoneId, zone_name: z.name ?? null, paused: true, status: z.status } }];
 }
 
+// Una lectura de la zona. Un zone_id mal formado nunca llega a GET /zones/ (devolvería la lista de zonas) y una respuesta
+// sin el objeto de la zona es 'invalid': sin zona no hay «mirado», nunca un {} que pase por zona sana.
+const ZONE_ID = /^[a-f0-9]{32}$/;
 export async function zonaParaAuditar(token: string, zoneId: string): Promise<Zona> {
-  return (await cfJson<{ result?: Zona }>(token, `/zones/${zoneId}`)).result ?? {};
+  if (!ZONE_ID.test(zoneId)) throw new ProviderError('invalid');
+  const z = (await cfJson<{ result?: unknown }>(token, `/zones/${zoneId}`)).result;
+  if (!z || typeof z !== 'object' || Array.isArray(z)) throw new ProviderError('invalid');
+  return z as Zona;
 }
+
+// Paso cloudflare completo: CF_ZONE_01 con el cable trampa (15.8 regla 9) y coverage.detail.cloudflare.miradas.
+// zona = la zona se leyó y su fila, si la hubo, quedó guardada (un descarte la deja sin mirar: E6 no pinta 0 ✓).
+// ≈ 12 subpeticiones del paso (conexión 2, secreto 2, Cloudflare 1, RPC 1–8, coverage 2).
+export const pasoCloudflare: FnPaso = async (env, m) => {
+  const conn = await conexionActiva(env, m, 'cloudflare');
+  if (!conn) return { status: 'skipped', error_code: 'no_connection' };
+  const zoneId = String(conn.meta.zone_id ?? '');
+  const ctx = { orgId: m.org_id, connectionId: conn.id, provider: 'cloudflare' as const, kind: 'read' as const };
+  const z = await withSecret(env, db(env), ctx, (t) => zonaParaAuditar(t, zoneId));
+  const g = await guardarHallazgos(env, m, 'cloudflare', conn.id, reglasZona(z, zoneId), true, 'CF_ZONE_01');
+  await escribirDetalleModulo(env, m, 'cloudflare', { miradas: { zona: g.descartadas === 0 } });
+  return { status: 'done', findings: g.n, ...(g.error_code ? { error_code: g.error_code } : {}) };   // tripwire
+};

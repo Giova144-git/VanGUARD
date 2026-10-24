@@ -8,6 +8,10 @@ const LOTE = 1000;
 // 12 y no 30: el humo de A7.7 midió 21–25 ms de CPU con 40 respuestas de OSV (lo caro es el JSON.parse); con 12 queda ~7 ms.
 export const DETALLE_POR_MENSAJE = 12;
 const PARALELO = 5;
+const TRANSITORIOS = new Set(['unavailable', 'timeout', 'rate_limited']);
+/** Red, plazo, 429 o 5xx: lo que la cola debe reintentar (jobs.ts usa el mismo conjunto). */
+export const esTransitorio = (e: unknown): boolean => e instanceof ProviderError && TRANSITORIOS.has(e.code);
+const dormir = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export type Dep = { ecosystem: string; name: string; version: string; dev: boolean };
 type Rango = { type?: string; events?: { introduced?: string; fixed?: string; last_affected?: string }[] };
@@ -99,15 +103,21 @@ export function filaDep(dep: Dep, avisos: Aviso[], sinDetalle = false): FilaDep 
   };
 }
 
+const deRed = (e: unknown) => ((e as Error)?.name === 'TimeoutError' ? 'timeout' : 'unavailable');
+
+// El cuerpo también puede fallar después de las cabeceras (red cortada, plazo vencido a mitad, 200 que no es JSON): es
+// el mismo fallo transitorio que un 5xx, para que el querybatch y la cola lo reintenten (mismo criterio que http.ts).
 async function osvJson<T>(path: string, body: unknown): Promise<T> {
   const r = await pedir(`${OSV}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body) }, PLAZO);
   if (!r.ok) { await r.body?.cancel(); throw new ProviderError(codigoHttp(r.status), r.status); }
-  return (await r.json()) as T;
+  try { return (await r.json()) as T; } catch (e) { throw new ProviderError(deRed(e), r.status); }
 }
 
-// Paso 1: índices de las deps con algún aviso. Reintenta el querybatch una vez (lo único que se reintenta dentro).
-export async function depsVulnerables(deps: Dep[]): Promise<{ vulnerables: number[]; subpeticiones: number }> {
+// Paso 1: índices de las deps con algún aviso. Reintenta el querybatch una vez tras una espera corta (lo único que se
+// reintenta dentro del mensaje, §09.4) y solo si el fallo es transitorio. Si vuelve a fallar, lanza: el paso decide si
+// la cola reintenta el mensaje o si se rinde con osv_unavailable.
+export async function depsVulnerables(deps: Dep[], espera = 500): Promise<{ vulnerables: number[]; subpeticiones: number }> {
   const vulnerables: number[] = [];
   let sub = 0;
   for (let i = 0; i < deps.length; i += LOTE) {
@@ -116,17 +126,25 @@ export async function depsVulnerables(deps: Dep[]): Promise<{ vulnerables: numbe
     let res: { results?: { vulns?: unknown[] }[] } | null = null;
     for (let intento = 0; intento < 2 && !res; intento++) {
       sub++;
-      try { res = await osvJson('/querybatch', cuerpo); } catch (e) { if (intento === 1) throw e; }
+      try { res = await osvJson('/querybatch', cuerpo); } catch (e) {
+        if (intento === 1 || !esTransitorio(e)) throw e;
+        await dormir(espera);
+      }
     }
     (res?.results ?? []).forEach((r, j) => { if ((r.vulns?.length ?? 0) > 0) vulnerables.push(i + j); });
   }
   return { vulnerables, subpeticiones: sub };
 }
 
-// Paso 2: detalle de hasta DETALLE_POR_MENSAJE paquetes, 5 en paralelo. Un paquete que falla entra sin detalle.
-export async function detallar(deps: Dep[]): Promise<FilaDep[]> {
+// Paso 2: detalle de hasta DETALLE_POR_MENSAJE paquetes, 5 en paralelo. Un paquete que falla entra sin detalle;
+// `fallidos` cuenta los fallos transitorios para que el paso devuelva el mensaje a la cola en vez de rebajar a medium
+// sin_detalle un hallazgo que la auditoría anterior tenía con su severidad real; `errores` cuenta todos (un 400
+// incluido): con alguno, OSV no vio todo y el cierre no auto-verifica.
+export async function detallar(deps: Dep[]): Promise<{ filas: FilaDep[]; fallidos: number; errores: number }> {
   const filas: FilaDep[] = new Array(deps.length);
   let k = 0;
+  let fallidos = 0;
+  let errores = 0;
   const hilo = async () => {
     while (k < deps.length) {
       const i = k++;
@@ -134,11 +152,13 @@ export async function detallar(deps: Dep[]): Promise<FilaDep[]> {
       try {
         const r = await osvJson<{ vulns?: Aviso[] }>('/query', { package: { ecosystem: d.ecosystem, name: d.name }, version: d.version });
         filas[i] = (r.vulns?.length ?? 0) > 0 ? filaDep(d, r.vulns!) : filaDep(d, [], true);
-      } catch {
+      } catch (e) {
         filas[i] = filaDep(d, [], true);
+        errores++;
+        if (esTransitorio(e)) fallidos++;
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(PARALELO, deps.length) }, hilo));
-  return filas.filter(Boolean);
+  return { filas: filas.filter(Boolean), fallidos, errores };
 }

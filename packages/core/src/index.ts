@@ -12,3 +12,10 @@ export * from './redact.ts';
 export * from './untrusted.ts';
 export * from './otp.ts';
 export * from './egress.ts';
+
+// Análisis (S15 15.9, S09): puntaje, severidad.
+export * from './score.ts';
+export * from './severity.ts';
+
+// IA (S11 11.12): precios, peor caso, costo real y filtro de salida.
+export * from './ai.ts';

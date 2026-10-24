@@ -155,3 +155,16 @@ export async function probarCloudflareAcciones(token: string, zoneId: string, le
     expiresAt: null,
   };
 }
+
+// ── Paso cloudflare de la auditoría (§08.7). P0: CF_ZONE_01 (zona pausada: solo DNS, sin WAF ni proxy), critical.
+// Con status !== 'active' no hay hallazgo: es la fila de aviso de §08.3. CF_TLS_*/CF_WAF_01 son P0 tardío.
+export function reglasZona(z: { name?: string; status?: string; paused?: boolean }, zoneId: string) {
+  if (z.paused !== true || z.status !== 'active') return [];
+  return [{ rule_id: 'CF_ZONE_01', severity: 'critical', confirmed: true,
+    title: `La zona ${z.name ?? zoneId} está pausada: Cloudflare solo resuelve DNS, sin WAF ni proxy`.slice(0, 200),
+    resource: `zone:${zoneId}`, evidence: { zone_id: zoneId, zone_name: z.name ?? null, paused: true, status: z.status } }];
+}
+
+export async function zonaParaAuditar(token: string, zoneId: string): Promise<Zona> {
+  return (await cfJson<{ result?: Zona }>(token, `/zones/${zoneId}`)).result ?? {};
+}

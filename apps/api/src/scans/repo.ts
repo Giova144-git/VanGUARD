@@ -54,3 +54,73 @@ export async function probarGithub(token: string, repo: string): Promise<Sondeo>
     expiresAt: exp && !Number.isNaN(Date.parse(exp)) ? new Date(exp).toISOString() : null,
   };
 }
+
+// ── Paso repo de la auditoría (§09.4): árbol por sha, archivos de riesgo acotados y contenido solo en memoria ──
+export type EntradaArbol = { path: string; size: number };
+export const LIM_REPO = { archivos: 20, bytesArchivo: 1_000_000, bytesTotal: 3_000_000, lockfiles: 6, envs: 5 };
+const FUERA = /(^|\/)(node_modules|vendor|dist|build|\.git)\//;
+const BINARIO = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|tgz|jar|woff2?|ttf|eot|mp[34]|mov|exe|dll|so|dylib|wasm|bin)$/i;
+const LOCK = /(^|\/)(package-lock\.json|pnpm-lock\.yaml|composer\.lock|package\.json|composer\.json)$/;
+const ENV = /(^|\/)\.env(\.[^/]*)?$/;
+const ENV_EJEMPLO = /\.(example|sample|template)$/i;
+const CONFIG = /(^|\/)(wrangler\.(toml|json|jsonc)|\.npmrc|\.pypirc|docker-compose[^/]*\.ya?ml|Dockerfile|vercel\.json|netlify\.toml|firebase\.json)$|^supabase\/config\.toml$|^\.github\/workflows\/[^/]+\.ya?ml$/;
+const CODIGO_RIESGO = /(supabase|admin|secret|key|token|cred|config|client|firebase|stripe|auth|env)/i;
+const CODIGO = /\.(ts|tsx|js|jsx|mjs|cjs|php|py|go|rb|java|kt|cs|rs|vue|svelte)$/i;
+
+// elegirArchivosRiesgo (§09.4): en este orden hasta 20 archivos y 3 MB; nunca uno > 1 MB (el tamaño sale del árbol).
+export function elegirArchivosRiesgo(arbol: EntradaArbol[], lim = LIM_REPO): string[] {
+  const validos = arbol.filter((e) => !FUERA.test(e.path) && !BINARIO.test(e.path) && e.size <= lim.bytesArchivo);
+  const elegidos: EntradaArbol[] = [];
+  let total = 0;
+  const tomar = (xs: EntradaArbol[], max = Infinity) => {
+    let n = 0;
+    for (const e of xs) {
+      if (elegidos.length >= lim.archivos || n >= max) return;
+      if (elegidos.some((x) => x.path === e.path) || total + e.size > lim.bytesTotal) continue;
+      elegidos.push(e); total += e.size; n++;
+    }
+  };
+  tomar(validos.filter((e) => LOCK.test(e.path)), lim.lockfiles);
+  tomar(validos.filter((e) => e.path === '.gitignore'));
+  tomar(validos.filter((e) => ENV.test(e.path) && !ENV_EJEMPLO.test(e.path)), lim.envs);
+  tomar(validos.filter((e) => CONFIG.test(e.path)));
+  tomar(validos.filter((e) => CODIGO.test(e.path) && CODIGO_RIESGO.test(e.path)).sort((a, b) => a.size - b.size));
+  return elegidos.map((e) => e.path);
+}
+
+async function ghJson<T>(token: string, url: string): Promise<T> {
+  const r = await pedir(url, { headers: ghHeaders(token) }, 30_000);
+  if (!r.ok) { await r.body?.cancel(); throw new ProviderError(codigoHttp(r.status), r.status); }
+  return (await r.json()) as T;
+}
+
+// rama → sha → árbol (3 subpeticiones). El árbol truncado deja la cobertura parcial (lo dice coverage.detail).
+export async function arbolRepo(token: string, repo: string): Promise<{ sha: string; rama: string; arbol: EntradaArbol[]; truncado: boolean }> {
+  const info = await ghJson<{ default_branch: string }>(token, `${GH}/repos/${repo}`);
+  const commits = await ghJson<{ sha: string }[]>(token,
+    `${GH}/repos/${repo}/commits?sha=${encodeURIComponent(info.default_branch)}&per_page=1`);
+  const sha = commits[0]?.sha;
+  if (!sha) throw new ProviderError('not_found');
+  const t = await ghJson<{ tree?: { path: string; type: string; size?: number }[]; truncated?: boolean }>(token,
+    `${GH}/repos/${repo}/git/trees/${sha}?recursive=1`);
+  const arbol = (t.tree ?? []).filter((e) => e.type === 'blob').map((e) => ({ path: e.path, size: e.size ?? 0 }));
+  return { sha, rama: info.default_branch, arbol, truncado: t.truncated === true };
+}
+
+// Contenido crudo de las rutas elegidas, 5 en paralelo y solo en memoria. Un archivo que falla se omite.
+export async function leerContenidos(token: string, repo: string, sha: string, rutas: string[]): Promise<{ path: string; content: string }[]> {
+  const out: { path: string; content: string }[] = [];
+  let k = 0;
+  const hilo = async () => {
+    while (k < rutas.length) {
+      const path = rutas[k++]!;
+      const url = `${GH}/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${sha}`;
+      try {
+        const r = await pedir(url, { headers: { ...ghHeaders(token), Accept: 'application/vnd.github.raw+json' } }, 30_000);
+        if (r.ok) out.push({ path, content: await r.text() }); else await r.body?.cancel();
+      } catch { /* se omite: el paso no muere por un archivo */ }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(5, rutas.length) }, hilo));
+  return out;
+}

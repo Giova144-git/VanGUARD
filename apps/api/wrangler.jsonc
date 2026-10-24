@@ -16,13 +16,14 @@
   ],
 
   // §04.9 y SEG-04: la SPA son assets y no gasta CPU del Worker; solo estas rutas pasan primero por el Worker.
-  // "/.*": /.env y /.git dan el 404 de Hono; /.well-known/* también, salvo security.txt, que sirven los assets
-  // (la negación con ! gana, S06 06.11). /llms.txt no casa ningún patrón y sale como asset.
+  // "/.*": /.env, /.git y /.well-known/* dan el 404 de Hono, salvo security.txt, que sirven los assets (la negación
+  // con ! gana, S06 06.11). "/.well-known/*" no se lista: wrangler 4.152 lo rechaza por redundante con "/.*".
+  // /llms.txt no casa ningún patrón y sale como asset.
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/ingest/*", "/webhooks/*", "/mcp", "/mcp/*", "/.*", "/.well-known/*", "!/.well-known/security.txt"]
+    "run_worker_first": ["/api/*", "/ingest/*", "/webhooks/*", "/mcp", "/mcp/*", "/.*", "!/.well-known/security.txt"]
   },
 
   "observability": {

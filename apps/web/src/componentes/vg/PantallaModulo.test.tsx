@@ -112,3 +112,20 @@ describe('PantallaModulo · un fallo de verdad sí pinta rojo, con su acción al
     expect(html).toMatch(new RegExp(`Falta un permiso · Ver</span><a [^>]*href="/o/${ORG}/connections/supabase"[^>]*>Ver<`));
   });
 });
+
+describe('PantallaModulo · errores fuera de contrato y límite de la API', () => {
+  // api() en producción deja pasar un cuerpo que no cumple el contrato: el texto de la chapa sale de deMapa.
+  it.each(['__proto__', 'constructor', 'toString', 'zzz'])('error %j: no lanza y la chapa roja dice «No pudimos leer», nunca vacía', (k) => {
+    const estado = { ...falla('supabase', 'token_invalido'), error: k as Estado['error'] };
+    const html = pintar('supabase', 'supabase', estado, CONEXIONES);
+    expect(chapasRojas(html)).toEqual(['No pudimos leer']);
+    expect(html).not.toContain('[object');
+    expect(html).not.toContain('native code');
+  });
+
+  it('limite_api se reintenta solo: chapa neutra, sin rojo (L3)', () => {
+    const html = pintar('supabase', 'supabase', falla('supabase', 'limite_api'), CONEXIONES);
+    expect(chapasRojas(html)).toEqual([]);
+    expect(html).toContain('Límite de la API · reintentamos en 1 min');
+  });
+});

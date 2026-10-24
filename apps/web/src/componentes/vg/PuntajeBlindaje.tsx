@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 import type { Overview } from '@vanguard/contracts';
 import type { Rol } from '@/lib/severidad';
-import { TEXTO_ROL } from '@/lib/severidad';
+import { TEXTO_ROL, deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 
 const NOMBRE_MODULO: Record<string, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
@@ -27,7 +27,7 @@ export function PuntajeBlindaje({ score = null, band = null, coverage, enlaceCon
       </div>
       <span className="min-h-[1.5em] text-[15px] text-muted-foreground">
         {coverage?.missing.length ? <>
-          Falta: {coverage.missing.map((m) => NOMBRE_MODULO[m] ?? m).join(', ')} ·{' '}
+          Falta: {coverage.missing.map((m) => deMapa(NOMBRE_MODULO, m, String(m))).join(', ')} ·{' '}
           <Link to={enlaceConectar} className="font-medium text-info underline underline-offset-4">Conectar</Link>
         </> : null}
       </span>

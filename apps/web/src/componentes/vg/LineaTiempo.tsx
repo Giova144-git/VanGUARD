@@ -3,6 +3,7 @@
 import type { TimelineItem } from '@vanguard/contracts';
 import type { Hito } from '@/modulos/incidentes/hitos';
 import { cuando } from '@/lib/formato';
+import { deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { PuntoEstado } from './PuntoEstado';
 import { SectorPlegable } from './SectorPlegable';
@@ -31,7 +32,7 @@ export function LineaTiempo({ hitos, resto }: { hitos: Hito[]; resto: TimelineIt
               </div>
               <div className={cn('mb-3 flex min-h-11 flex-1 flex-wrap items-center gap-x-3 rounded-lg px-3 py-2', destacado && 'border border-info bg-info-relleno')}>
                 <span className={cn('min-w-0 flex-1 text-[15px]', ocurrio ? 'font-medium' : 'text-muted-foreground')}>
-                  {h.etiqueta}{h.via && VIA[h.via] ? <span className="text-muted-foreground"> · {VIA[h.via]}</span> : null}
+                  {h.etiqueta}{deMapa(VIA, h.via, '') ? <span className="text-muted-foreground"> · {deMapa(VIA, h.via, '')}</span> : null}
                 </span>
                 {h.en ? <span className="text-[12.5px] text-texto-3 tabular-nums">{cuando(h.en)}</span> : null}
                 <span className={cn('font-mono text-[17px] font-semibold tabular-nums', destacado ? 'text-info' : ocurrio ? '' : 'text-texto-3')}>{h.mas}</span>
@@ -45,7 +46,7 @@ export function LineaTiempo({ hitos, resto }: { hitos: Hito[]; resto: TimelineIt
           <ul className="flex flex-col gap-2">
             {resto.map((t, i) => (
               <li key={`${t.kind}-${i}`} className="flex flex-wrap items-center gap-x-3 text-sm">
-                <span className={cn('flex-1', t.kind === 'call_failed' ? 'text-aviso' : '')}>{t.label ?? TIPO[t.kind] ?? t.kind}</span>
+                <span className={cn('flex-1', t.kind === 'call_failed' ? 'text-aviso' : '')}>{t.label ?? deMapa(TIPO, t.kind, String(t.kind))}</span>
                 <span className="font-mono text-[13px] text-texto-3 tabular-nums">+{(t.ms / 1000).toFixed(1).replace('.', ',')} s</span>
               </li>
             ))}

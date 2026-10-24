@@ -10,6 +10,7 @@ import { Spinner } from '@/componentes/ui/spinner';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
+import { deMapa } from '@/lib/severidad';
 import { useBloqueo } from '@/lib/mutaciones';
 
 const RAZON: Record<string, string> = {
@@ -26,7 +27,7 @@ const RESULTADO = 'h-auto min-h-14 shrink gap-2 px-4 py-2 text-base font-semibol
 
 function errorPropuesta(e: unknown): string {
   if (esApiError(e) && e.status === 403) return SOLO_PRODUCCION;
-  const r = esApiError(e) && typeof e.details?.reason === 'string' ? RAZON[e.details.reason] : undefined;
+  const r = esApiError(e) && typeof e.details?.reason === 'string' ? deMapa(RAZON, e.details.reason, '') || undefined : undefined;
   return r ?? mensajeDe(e);
 }
 

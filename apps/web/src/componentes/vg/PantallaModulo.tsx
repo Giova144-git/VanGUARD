@@ -12,6 +12,7 @@ import { chapaEstado } from '@/modulos/conexiones/TarjetaConexion';
 import { useConexiones, useEstadoModulo } from '@/lib/consultas';
 import { rutaDe } from '@/lib/destino';
 import { cuando } from '@/lib/formato';
+import { deMapa } from '@/lib/severidad';
 import { entradaNav, type IdNav } from '@/lib/nav';
 import { BarraModulo } from './BarraModulo';
 import { Bandeja } from './Bandeja';
@@ -51,7 +52,8 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
       {c ? <Etiqueta {...chapaEstado(c)} /> : null}
       {/* sin_conexion = aún no hay conexión (estado/modulo.ts del BACK): no es un fallo; lo explica el «Conecta …» de abajo (L3). */}
       {est && !est.ok && est.error === 'sin_conexion' ? (c ? <Etiqueta texto="Sin conexión activa" rol="neutra" /> : null)
-        : est && !est.ok ? <Etiqueta texto={est.error ? ERROR_ESTADO[est.error] : 'No pudimos leer · Reintentar'} rol="mal" /> : null}
+        // limite_api se reintenta solo: no pide nada al usuario, así que no va en rojo (L3).
+        : est && !est.ok ? <Etiqueta texto={deMapa(ERROR_ESTADO, est.error, 'No pudimos leer')} rol={est.error === 'limite_api' ? 'neutra' : 'mal'} /> : null}
       {arreglo ? (
         <Link to={`/o/${org.id}/connections/${proveedor}`}
           className="inline-flex h-11 items-center gap-1 rounded-lg border border-mal-borde bg-mal-relleno px-4 text-sm font-medium text-mal outline-none hover:bg-mal/15 focus-visible:ring-2 focus-visible:ring-ring">

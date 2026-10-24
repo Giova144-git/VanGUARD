@@ -729,13 +729,9 @@ describe('XSS · enums fuera de contrato', () => {
       for (const b of BASURA) expect(html, `${c} → ${b}`).not.toMatch(b);
     }
   };
-  // HALLAZGO (robustez, sin XSS): ListaChecks.tsx:19 pinta `${FRASE_ERROR[c.error_code]} ` sin respaldo. Un error_code
-  // fuera de contrato en los checks de ConnectionCreated sale «undefined Vuelve a crear el token…» (y con '__proto__',
-  // «[object Object] …»). Arreglo: deMapa(FRASE_ERROR, c.error_code, '') de lib/severidad. Cuando se arregle, it.fails se
-  // pone rojo: pasar el caso a la lista normal.
-  const conBasura = (caso: Caso) => caso.nombre.startsWith('Resultado de Asistente');
-  it.each(CASOS.filter((x) => !conBasura(x)))('$nombre: no pinta «undefined» ni un objeto como texto', sinBasura);
-  it.fails.each(CASOS.filter(conBasura))('HALLAZGO $nombre: no pinta «undefined» ni un objeto como texto', sinBasura);
+  // Incluye el Resultado del Asistente: ListaChecks lee FRASE_ERROR con deMapa, así que un error_code fuera de contrato
+  // (o «__proto__») no pinta «undefined» ni «[object Object]».
+  it.each(CASOS)('$nombre: no pinta «undefined» ni un objeto como texto', sinBasura);
 });
 
 // ── El detector detecta: sin esto, un arnés que no ve nada pasaría siempre ────

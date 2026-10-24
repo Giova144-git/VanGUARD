@@ -122,11 +122,12 @@ function Esqueleto({ org }: { org: string }) {
           <div className="flex flex-col gap-1 rounded-xl border bg-card p-5"><Bloque c="h-5 w-40" /><Bloque c="h-15 w-56" /></div>
           <div className="flex flex-col gap-3">
             <h3 className="text-[17px] font-semibold">Línea de tiempo</h3>
-            <div className="flex flex-col">{[0, 1, 2, 3].map((k) => <Bloque key={k} c="mb-3 h-11" />)}</div>
+            <div className="flex flex-col">{[0, 1, 2, 3, 4, 5].map((k) => <Bloque key={k} c="mb-3 h-11" />)}<Bloque c="h-11 w-40" /></div>
           </div>
           <div className="flex flex-col gap-3 rounded-xl border bg-card p-5">
             <div className="flex flex-wrap gap-3"><Bloque c="h-14 w-48" /><Bloque c="h-14 w-40" /></div>
             <Bloque c="h-14 w-56" />
+            <Bloque c="h-14 w-64" />
           </div>
           <div className="flex flex-col gap-3">
             <h3 className="text-[17px] font-semibold">Tráfico (5 min)</h3>
@@ -134,10 +135,10 @@ function Esqueleto({ org }: { org: string }) {
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-6">
-          <Caja titulo="Reglas que dispararon"><Bloque c="h-6 w-32" /><Bloque c="h-5 w-full" /></Caja>
-          <Caja titulo="Avisos enviados"><Bloque c="h-5 w-full" /><Bloque c="h-5 w-full" /></Caja>
+          <Caja titulo="Reglas que dispararon"><Bloque c="h-6 w-32" /><Bloque c="h-56 w-full" /></Caja>
+          <Caja titulo="Avisos enviados"><Bloque c="h-36 w-full" /></Caja>
           <Caja titulo="Acciones"><Bloque c="h-5 w-full" /></Caja>
-          <Caja titulo="Detalles"><Bloque c="h-24 w-full" /></Caja>
+          <Caja titulo="Detalles"><Bloque c="h-[21rem] w-full" /></Caja>
         </div>
       </div>
     </div>

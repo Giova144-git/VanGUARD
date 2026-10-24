@@ -16,7 +16,7 @@ const TEXTO: Record<string, string> = {
 };
 
 export function porQueImporta(rule: string): string | null {
-  if (TEXTO[rule]) return TEXTO[rule];
+  if (Object.hasOwn(TEXTO, rule)) return TEXTO[rule]!;   // hasOwn: un rule_id «__proto__» no devuelve el prototipo
   if (rule.startsWith('CB_SECRET_')) return 'Hay una clave en tu código: quien vea el repo puede usarla. Rótala y sácala del repo.';
   return null;
 }

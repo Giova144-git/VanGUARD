@@ -13,7 +13,7 @@ export const PERMISOS: Record<string, string> = {
   'metadata:read': 'Metadata · Read-only', 'contents:read': 'Contents · Read-only', 'dependabot_alerts:read': 'Dependabot alerts · Read-only',
 };
 
-export const nombrePermiso = (codigo: string) => PERMISOS[codigo] ?? codigo;
+export const nombrePermiso = (codigo: string) => (Object.hasOwn(PERMISOS, codigo) ? PERMISOS[codigo]! : codigo);
 
 export const FRASE_ERROR: Record<ProviderErrorCode, string> = {
   unauthorized: 'El proveedor no reconoce el token: cópialo de nuevo.',

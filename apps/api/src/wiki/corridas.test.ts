@@ -8,7 +8,6 @@ import {
   aWikiRun, cacheDeEstimacion, crearCorrida, elegir, ERROR_PARADA, hallazgosDelRepo, huellaDe, leerDoc, MAX_HALLAZGOS,
   mensajeInicio, pasosCache, pasosIniciales, SIN_AVANCE_MS, type FilaLlave,
 } from './corridas.ts';
-import { MODELOS_POR_DEFECTO as COPIA_MODELOS } from './motor.ts';
 
 // Filas de wiki_runs y caché de la wiki (wiki/corridas.ts). Sin red: doble de la base que aplica los .eq(), .in(),
 // .order() y .limit() de cada consulta como Postgres, y el índice único de corridas en curso de 0010.
@@ -285,10 +284,6 @@ describe('aWikiRun: fila de wiki_runs → WikiRun', () => {
       created_at: '2026-10-24T18:04:11.123Z', finished_at: null });
     expect(r.steps).toEqual([{ name: 'arbol', status: 'done', detalle: 'x'.repeat(80) },
       { name: 'triage', status: 'running', error_code: 'limite_github' }]);
-  });
-
-  it('la copia literal de MODELOS_POR_DEFECTO (wiki/motor.ts, sin cargar el motor) es la del motor', () => {
-    expect(COPIA_MODELOS).toStrictEqual(MODELOS_POR_DEFECTO);
   });
 });
 

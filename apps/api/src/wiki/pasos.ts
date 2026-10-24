@@ -1,5 +1,7 @@
 import { WikiModelos, type WikiRunStep } from '@vanguard/contracts';
-import type { EstadoWiki, ResultadoWiki, SiguientePaso } from '@vanguard/deepwiki';
+import { costoMaximoPaso, detalleInicio, ErrorGithub, ErrorWiki, ESPERA_SINTESIS_MS, estimar, marcarSintesis,
+  MODELOS_POR_DEFECTO, pasoArbol, pasoArea, pasoSintesis, pasoTriage, progreso, siguientePaso, sintesisEnCurso,
+  type EstadoWiki, type ResultadoWiki, type SiguientePaso } from '@vanguard/deepwiki';
 import type { MsgWiki, PasoWiki } from '../jobs.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
@@ -7,7 +9,6 @@ import { log } from '../lib/log.ts';
 import { hallazgosDelRepo } from './corridas.ts';
 import { conTokenGithub, depsWiki, salidaGithub, TOPE_SUBPETICIONES } from './deps.ts';
 import { ErrorLlmWiki, llmWiki } from './llm.ts';
-import { MODELOS_POR_DEFECTO, motor, motorCargado, type Motor } from './motor.ts';
 
 // Pasos 'wiki' de la cola vg-jobs (packages/deepwiki/LEEME.md, «Integración en el BACK», puntos 4–7). Un mensaje = un
 // paso = una invocación: arbol → triage → area (una por área) → sintesis. Entre pasos solo viaja wiki_runs.state
@@ -89,12 +90,6 @@ const TEXTO_FALLO: Record<string, string> = {
   error: 'Algo falló al generar la wiki.',
 };
 const textoDe = (codigo: string) => TEXTO_FALLO[codigo] ?? TEXTO_FALLO.error!;
-// El motor (perezoso, wiki/motor.ts): pasoWiki y cierreWikiDlq hacen await motor() antes de cualquier paso.
-function dw(): Motor {
-  const m = motorCargado();
-  if (!m) throw new Error('motor sin cargar');
-  return m;
-}
 const NOMBRE_PASO: Record<SiguientePaso['paso'], string> = { triage: 'de selección de archivos',
   area: 'de resumen por área', sintesis: 'del documento final' };
 
@@ -119,7 +114,6 @@ export async function pasoWiki(env: CloudflareBindings, m: MsgWiki, intento = 1)
   const ctx: Ctx = { env, m, fila, intento, modelos: modelosDe(fila), maxUsd: maxUsdDe(fila), n: nDe(fila.state),
     estado: null, github: null };
   try {
-    await motor();
     ctx.estado = estadoDe(fila.state);
     const r = await correr(ctx);
     log('info', 'wiki.paso', { run: m.wiki_run_id, paso: m.paso, intento, n: ctx.n, ms: Date.now() - t0,
@@ -142,7 +136,6 @@ export async function cierreWikiDlq(env: CloudflareBindings, m: MsgWiki): Promis
   const ctx: Ctx = { env, m, fila, intento: REINTENTOS_WIKI + 1, modelos: modelosDe(fila), maxUsd: maxUsdDe(fila),
     n: nDe(fila.state), estado: null, github: null };
   try {
-    const { siguientePaso, sintesisEnCurso } = await motor();
     try { ctx.estado = estadoDe(fila.state); } catch { ctx.estado = null; }
     const e = ctx.estado;
     if (e && m.paso === 'sintesis' && sintesisEnCurso(e)) return { retry: esperaMarca(e) };
@@ -163,7 +156,7 @@ export async function cierreWikiDlq(env: CloudflareBindings, m: MsgWiki): Promis
 async function correr(ctx: Ctx): Promise<RespuestaCola> {
   if (ctx.m.paso === 'arbol') return correrArbol(ctx);
   const estado = ctx.estado;
-  if (!estado) throw new (dw().ErrorWiki)('estado_invalido', 'Falta el estado del paso árbol.');
+  if (!estado) throw new ErrorWiki('estado_invalido', 'Falta el estado del paso árbol.');
   if (ctx.m.paso === 'triage') return correrTriage(ctx, estado);
   if (ctx.m.paso === 'area') return correrArea(ctx, estado);
   return correrSintesis(ctx, estado);
@@ -171,7 +164,6 @@ async function correr(ctx: Ctx): Promise<RespuestaCola> {
 
 async function correrArbol(ctx: Ctx): Promise<RespuestaCola> {
   const { env, m, fila } = ctx;
-  const { estimar, pasoArbol, siguientePaso } = dw();
   if (ctx.estado) return repetido(ctx, ctx.estado);
   // Sin IA no hay wiki: se corta antes de gastar el cupo de GitHub.
   if (env.IA_CORTE === '1' || !env.ANTHROPIC_API_KEY) throw new ErrorLlmWiki('sin_llm');
@@ -196,7 +188,6 @@ async function correrArbol(ctx: Ctx): Promise<RespuestaCola> {
 }
 
 async function correrTriage(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> {
-  const { ErrorWiki, pasoTriage, siguientePaso } = dw();
   if (estado.areas.length > 0) return repetido(ctx, estado);
   cortarSiTope(ctx, estado, { paso: 'triage' });
   const nuevo = await pasoTriage(estado, depsSinGithub(ctx));
@@ -209,7 +200,6 @@ async function correrTriage(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola
 
 async function correrArea(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> {
   const { env, m, fila } = ctx;
-  const { ErrorWiki, pasoArea, siguientePaso } = dw();
   const nombre = m.area ?? '';
   if (!estado.areas.some((a) => a.nombre === nombre)) throw new ErrorWiki('area_desconocida', 'Área inexistente.');
   if (!estado.pendientes.includes(nombre)) return repetido(ctx, estado);
@@ -231,7 +221,6 @@ async function correrArea(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> 
 // generado se guarda siempre, con un aviso si el pensamiento del modelo pasó el tope.
 async function correrSintesis(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> {
   const { env, m, fila } = ctx;
-  const { ErrorWiki, marcarSintesis, pasoSintesis, sintesisEnCurso } = dw();
   if (estado.areas.length === 0 || estado.pendientes.length > 0) {
     throw new ErrorWiki('pasos_pendientes', 'Faltan áreas antes de la síntesis.');
   }
@@ -313,7 +302,7 @@ async function repetido(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> {
     log('info', 'wiki.repetido', { run: ctx.m.wiki_run_id, paso: ctx.m.paso, intento: ctx.intento });
     return 'ack';
   }
-  const s = dw().siguientePaso(estado);
+  const s = siguientePaso(estado);
   if (queued && !(await avanzar(ctx, null, parcheAvance(estado, s)))) return casPerdido(ctx);
   await encolar(ctx, s);
   log('info', 'wiki.reencolado', { run: ctx.m.wiki_run_id, paso: ctx.m.paso, siguiente: s.paso, intento: ctx.intento });
@@ -354,12 +343,11 @@ type Clase = { reintentar: boolean; codigo: string; texto: string; esperaS?: num
 // LEEME, punto 6: limite_github → reintento con su espera; github_red y 5xx → reintento normal; IA caída o con el ritmo
 // lleno → reintento; base o cola → reintento; el resto falla la corrida con su código.
 function clasificar(e: unknown): Clase {
-  const w = motorCargado();                           // sin motor cargado, e no puede ser ErrorWiki ni ErrorGithub
-  if (w && e instanceof w.ErrorWiki) {
+  if (e instanceof ErrorWiki) {
     // El texto de tope_usd lo arma cortarSiTope (cifras nuestras); los demás, de la tabla.
     return { reintentar: false, codigo: e.codigo, texto: e.codigo === 'tope_usd' ? e.message : textoDe(e.codigo) };
   }
-  if (w && e instanceof w.ErrorGithub) {
+  if (e instanceof ErrorGithub) {
     if (e.codigo === 'limite_github') {
       return { reintentar: true, codigo: e.codigo, texto: textoDe(e.codigo),
         esperaS: Math.max(1, Math.ceil(e.reintentarEnS ?? 60)) };
@@ -423,7 +411,6 @@ async function fallar(ctx: Ctx, codigo: string, texto = textoDe(codigo)) {
 
 // LEEME, punto 4: ANTES de pagar el paso, lo gastado más lo máximo que puede costar no pasa de max_usd.
 function cortarSiTope(ctx: Ctx, estado: EstadoWiki, s: SiguientePaso) {
-  const { costoMaximoPaso, ErrorWiki } = dw();
   const techo = costoMaximoPaso(estado, s, { modelos: ctx.modelos });
   const gastado = estado.consumo.cost_usd;
   if (gastado + techo > ctx.maxUsd) {
@@ -460,7 +447,7 @@ function detalleHecho(name: WikiRunStep['name'], e: EstadoWiki | null): string |
 function vistaEnCurso(e: EstadoWiki, s: SiguientePaso): WikiRunStep[] {
   const i = ORDEN.indexOf(s.paso);
   return ORDEN.map((n, k) => (k < i ? paso(n, 'done', detalleHecho(n, e))
-    : k === i ? paso(n, 'running', dw().detalleInicio(s, e)) : paso(n, 'pending')));
+    : k === i ? paso(n, 'running', detalleInicio(s, e)) : paso(n, 'pending')));
 }
 
 function vistaFin(e: EstadoWiki, doc: ResultadoWiki): WikiRunStep[] {
@@ -476,7 +463,7 @@ function vistaFallo(e: EstadoWiki | null, en: PasoWiki, codigo: string): WikiRun
 }
 
 function parcheAvance(e: EstadoWiki, s: SiguientePaso): Record<string, unknown> {
-  return { status: 'running', progress: dw().progreso(e, s.paso === 'area'), steps: vistaEnCurso(e, s),
+  return { status: 'running', progress: progreso(e, s.paso === 'area'), steps: vistaEnCurso(e, s),
     cost_usd: e.consumo.cost_usd };
 }
 
@@ -515,7 +502,7 @@ function estadoDe(raw: unknown): EstadoWiki | null {
     || !Array.isArray(e.candidatos) || !Array.isArray(e.areas) || !Array.isArray(e.pendientes)
     || !Array.isArray(e.resumenes) || !Array.isArray(e.avisos) || typeof e.consumo?.cost_usd !== 'number'
     || !Number.isFinite(e.consumo.cost_usd)) {
-    throw new (dw().ErrorWiki)('estado_invalido', 'El estado guardado no tiene la forma esperada.');
+    throw new ErrorWiki('estado_invalido', 'El estado guardado no tiene la forma esperada.');
   }
   return e as EstadoWiki;
 }
@@ -538,7 +525,7 @@ function depsSinGithub(ctx: Ctx) {
 const escalonado = (intento: number) => Math.min(300, 10 * 2 ** Math.max(0, intento - 1));
 
 function esperaMarca(e: EstadoWiki, ahora = new Date()): number {
-  const vence = Date.parse(e.sintesis_iniciada ?? '') + dw().ESPERA_SINTESIS_MS;
+  const vence = Date.parse(e.sintesis_iniciada ?? '') + ESPERA_SINTESIS_MS;
   const s = Number.isFinite(vence) ? Math.ceil((vence - ahora.getTime()) / 1000) : 0;
   return Math.min(MAX_ESPERA_S, Math.max(1, s) + MARGEN_SINTESIS_S);
 }

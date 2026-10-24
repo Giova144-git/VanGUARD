@@ -1,10 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ErrorGithub, ErrorWiki, pasoArbol, type CodigoErrorGithub, type Fetch } from '@vanguard/deepwiki';
 import { ApiError } from '../lib/errors.ts';
 import { dbDoble, type Op } from '../test/db-doble.ts';
 import { conTokenGithub, depsWiki, falloGithub, salidaGithub, sinLlm, TOPE_SUBPETICIONES } from './deps.ts';
-import { motor } from './motor.ts';
 
 // Deps de DeepWiki en el Worker (wiki/deps.ts): lista de salida, tope de subpeticiones, token por withSecret y
 // traducción de errores de GitHub. Sin red: fetch simulado y doble de la base.
@@ -190,9 +189,6 @@ describe('conTokenGithub · el PAT solo dentro de withSecret', () => {
 });
 
 describe('falloGithub · errores esperados de GitHub → §15.3, nunca 500', () => {
-  // En el Worker falloGithub corre tras un await motor() (el motor se carga perezoso); aquí el ErrorGithub viene del import
-  // estático de la prueba, así que se carga a mano.
-  beforeAll(async () => { await motor(); });
   const casos: [CodigoErrorGithub, number, string][] = [
     ['repo_invalido', 422, 'invalid_body'], ['ref_invalida', 422, 'invalid_body'],
     ['repo_no_encontrado', 404, 'not_found'], ['ref_no_encontrada', 404, 'not_found'], ['repo_vacio', 409, 'conflict'],

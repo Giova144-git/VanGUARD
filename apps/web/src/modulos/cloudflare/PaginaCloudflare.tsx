@@ -1,19 +1,17 @@
 // Módulo Cloudflare (S14 §14.12): tráfico en vivo (la misma gráfica que Incidentes), Modo blindaje y tu zona.
-import { Link, useNavigate } from 'react-router';
-import { ChevronRight, ShieldHalf } from 'lucide-react';
+import { Link } from 'react-router';
+import { ChevronRight } from 'lucide-react';
 import { GraficaTrafico, TablaTopIps } from '@/componentes/vg/GraficaTrafico';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
-import { useIncidentes, useTrafico } from '@/lib/consultas';
-import { BotonGrande } from '@/componentes/vg/BotonGrande';
 import { BotonRevisar } from '@/componentes/vg/BotonRevisar';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { PantallaModulo } from '@/componentes/vg/PantallaModulo';
-import { SOLO_LECTURA, useOrg } from '@/app/guardas';
-import { useConexiones } from '@/lib/consultas';
+import { useOrg } from '@/app/guardas';
+import { ActivarBlindaje } from '@/modulos/conexiones/ActivarBlindaje';
+import { useConexiones, useIncidentes, useTrafico } from '@/lib/consultas';
 
 export default function PaginaCloudflare() {
   const org = useOrg();
-  const navegar = useNavigate();
   const cx = useConexiones(org.id);
   const lista = cx.data ?? [];
   const lectura = lista.find((c) => c.provider === 'cloudflare' && c.kind === 'read');
@@ -50,8 +48,7 @@ export default function PaginaCloudflare() {
         {/* Mientras cargan las conexiones, un hueco de alto fijo: ni el CTA equivocado ni el salto (L7). */}
         {cx.isPending ? <div className="min-h-16" aria-busy="true" />
           : blindaje ? <p className="text-sm text-muted-foreground">Puedes bloquear una IP desde un incidente o desde el mismo WhatsApp, con simulación previa y «Deshacer».</p>
-          : <BotonGrande icono={ShieldHalf} titulo="Activar modo blindaje" descripcion="Primero quita la conexión de lectura de Cloudflare y vuelve a conectarla con los dos tokens; los hallazgos se conservan"
-              deshabilitado={org.puedeEscribir ? undefined : SOLO_LECTURA} onClick={() => navegar(`/o/${org.id}/connections/cloudflare`)} />}
+          : <ActivarBlindaje />}
       </section>
       {zona ? (
         <section className="flex flex-col gap-1" aria-label="Tu zona">

@@ -14,6 +14,7 @@ import { mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { GUIAS_CONEXION } from '@/lib/guias';
 import { useProbarConexion, useQuitarConexion } from '@/lib/mutaciones';
+import { ActivarBlindaje } from './ActivarBlindaje';
 import { FRASE_ERROR, nombrePermiso } from '@/lib/permisos';
 import type { Rol } from '@/lib/severidad';
 
@@ -130,9 +131,12 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
         <LineaConexion c={lectura} titulo={proveedor === 'cloudflare' ? 'Lectura' : undefined} alQuitar={setQuitada} />
         {proveedor === 'cloudflare' ? (accion
           ? <LineaConexion c={accion} titulo="Modo blindaje (acciones)" alQuitar={setQuitada} />
-          : <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-4 py-3 text-sm">
-              <span className="font-semibold">Modo blindaje (acciones)</span><Etiqueta texto="No configurado" />
-              <span className="text-muted-foreground">Primero quita la conexión de lectura de Cloudflare y vuelve a conectarla con los dos tokens; los hallazgos se conservan.</span>
+          : <div className="flex flex-col gap-3 rounded-lg border border-dashed px-4 py-3 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold">Modo blindaje (acciones)</span><Etiqueta texto="No configurado" />
+              </div>
+              <span className="text-muted-foreground">Para bloquear IPs desde VanGUARD hace falta un segundo token, solo para eso.</span>
+              <ActivarBlindaje forma="fila" />
             </div>) : null}
       </> : (
         <BotonGrande icono={KeyRound} titulo={`Conectar ${g.nombre}`} descripcion="Con un token de solo lectura"

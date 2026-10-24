@@ -1,10 +1,9 @@
 // /o/:orgId/incidents/:incidentId (S14 §14.16), el corazón de la demo: ataque → WhatsApp (< 30 s) → aprobación (botón
 // del WhatsApp o código en el sitio) → bloqueo → «Deshacer». Dos columnas 60/40 desde 1280 px; apiladas por debajo.
-import { useNavigate, useParams, Link } from 'react-router';
-import { ArrowLeft, Bell, BellOff, Eye, MessageCircle, Phone, ShieldHalf } from 'lucide-react';
+import { useParams, Link } from 'react-router';
+import { ArrowLeft, Bell, BellOff, Eye, MessageCircle, Phone } from 'lucide-react';
 import type { ActionKind, ActionStatus, Channel, IncidentDetail, NotificationPublic } from '@vanguard/contracts';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
-import { BotonGrande } from '@/componentes/vg/BotonGrande';
 import { Cronometro } from '@/componentes/vg/Cronometro';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { FichaFila } from '@/componentes/vg/FichaFila';
@@ -18,6 +17,7 @@ import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { useAccionIncidente } from '@/lib/mutaciones';
 import { porQueImporta } from '@/lib/reglas-texto';
+import { ActivarBlindaje } from '@/modulos/conexiones/ActivarBlindaje';
 import { BloquearIp } from './BloquearIp';
 import { finDe, hitosDe, restoDe, t0De } from './hitos';
 import { ESTADO_INC } from './PaginaIncidentes';
@@ -42,7 +42,6 @@ function estadoAviso(n: NotificationPublic): string {
 }
 
 function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; puedeEscribir: boolean }) {
-  const navegar = useNavigate();
   const accion = useAccionIncidente(org);
   const conexiones = useConexiones(org);
   const blindaje = conexiones.data?.some((c) => c.provider === 'cloudflare' && c.kind === 'action' && c.status === 'active');
@@ -66,9 +65,7 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
       {esIp ? (blindaje || ejecutada
         ? <BloquearIp key={i.id} org={org} incidentId={i.id} ip={i.resource.slice(3)} ejecutada={ejecutada} puedeEscribir={puedeEscribir} />
         : conexiones.isPending ? <div className="h-14" aria-busy="true" />   // sin saber si hay blindaje: hueco fijo, no el CTA equivocado (L7)
-        : <BotonGrande icono={ShieldHalf} titulo="Activa el Modo blindaje para bloquear desde aquí"
-            descripcion="Primero quita la conexión de lectura de Cloudflare y vuelve a conectarla con los dos tokens; los hallazgos se conservan"
-            onClick={() => navegar(`/o/${org}/connections/cloudflare`)} />) : null}
+        : <ActivarBlindaje titulo="Activa el Modo blindaje para bloquear desde aquí" />) : null}
       <BotonSimularWhatsApp org={org} incidentId={i.id} />
     </section>
   );

@@ -167,6 +167,32 @@ Las alertas de un incidente van a los **contactos de la org** donde pasó; en la
 4. **Verificación:** escríbeme «verifica mi contacto». Yo marco `verified_at` en la base, sin escribir tu teléfono en ningún archivo, y la chapa pasa a «Verificado». Es la defensa contra que alguien use VanGUARD para escribirle a terceros.
 5. **Prueba:** Ajustes → **Probar WhatsApp**, cuando el BACK haya desplegado Kapso y el webhook esté creado (7E). Cada prueba gasta crédito del sandbox.
 
+**7H · Cuenta NUEVA de Kapso (sáb ~09:00, 20 USD de crédito): rehacer la configuración**
+Qué cambia en el `.env` de la raíz:
+
+| Variable | Qué hacer |
+|---|---|
+| `KAPSO_API_KEY` | **Cambia:** la key del proyecto de la cuenta nueva |
+| `KAPSO_PHONE_NUMBER_ID` | **Cambia:** lo escribe el script (déjala como está; `--real` la pisa) |
+| `KAPSO_WABA_ID` | **Nueva:** la escribe el script |
+| `KAPSO_WEBHOOK_SECRET` | **Se rota:** bórrale el valor (deja `KAPSO_WEBHOOK_SECRET=`) y el script genera uno nuevo. Así el webhook de la cuenta vieja deja de servir |
+| `KAPSO_TEST_TO` | No cambia |
+
+1. En la cuenta nueva: crea (o abre) el **primer proyecto**. Tiene que ser el primero para que el número gratis aplique.
+2. **API key:** proyecto → API keys → crea una → pégala en `KAPSO_API_KEY`. Vacía `KAPSO_WEBHOOK_SECRET=`.
+3. **Número real:** sigue el 7G, pasos 1 a 5 (Connected numbers → Connect new number → Instant setup → número con chapa **Verified**).
+4. En tu PC:
+   ```bash
+   node scripts/kapso-config.mjs --real --webhook
+   ```
+5. Al Worker, los 4:
+   ```bash
+   node scripts/subir-secretos-worker.mjs KAPSO_API_KEY KAPSO_PHONE_NUMBER_ID KAPSO_WABA_ID KAPSO_WEBHOOK_SECRET
+   ```
+6. A la app local: `node scripts/repartir-env.mjs`.
+7. **Primera prueba sin plantilla:** desde tu teléfono escribe «hola» al número nuevo de VanGUARD (abre la ventana de 24 h). Escríbeme «listo, Kapso nuevo» y el BACK te manda el interactivo; pulsa un botón.
+8. Si todavía tienes acceso a la cuenta vieja, **revoca su API key y borra su webhook**.
+
 **7G · WhatsApp REAL: número de EE. UU. de Kapso, gratis** (decidido por Giovanni: opción 1)
 El plan Free trae **un número gestionado por Kapso sin depósito**: vale una vez por usuario, en tu primer proyecto, y se libera solo si pasa **30 días sin mensajes de producción**. Necesitas una cuenta de **Facebook**; la cuenta de Meta Business (portfolio) se crea en el mismo flujo si no la tienes.
 1. Kapso → **Connected numbers** → **Connect new number** → **Instant setup**. Confirma el aviso de elegir un número preverificado y pulsa para abrir el alta de Meta.

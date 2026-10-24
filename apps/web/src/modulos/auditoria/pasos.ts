@@ -2,6 +2,7 @@
 // api() en producción deja pasar un cuerpo fuera de contrato: todo mapa se lee con deMapa, así un paso, un estado o un
 // «__proto__» desconocidos caen a un respaldo neutro (L3) en vez de lanzar TypeError y tumbar la auditoría.
 import type { Module, ScanRun, ScanStep } from '@vanguard/contracts';
+import { sinBidi } from '@/lib/bidi';
 import { textoErrorZip } from '@/lib/errores-escaneo';
 import { deMapa, type Rol } from '@/lib/severidad';
 
@@ -16,7 +17,7 @@ export const TEXTO_PASO: Record<ScanStep['name'], TextoPaso> = {
 };
 // Paso desconocido: su nombre crudo como texto y sin módulo (sin enlace ni ámbar).
 export const textoPaso = (name: unknown): TextoPaso =>
-  deMapa(TEXTO_PASO, name, { nombre: typeof name === 'string' && name ? name : '—', detalle: '', modulo: null });
+  deMapa(TEXTO_PASO, name, { nombre: typeof name === 'string' && name ? sinBidi(name) : '—', detalle: '', modulo: null });
 
 // ScanRun.step también vale 'waiting_result' entre E11 y E23 (ZIP): no es un paso de la lista, es la espera del navegador.
 const PASO_ACTUAL: Record<string, string> = { waiting_result: 'esperando el resultado de tu ZIP' };

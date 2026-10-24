@@ -118,15 +118,16 @@ function Resumen({ run, porId }: { run: ScanRun; porId: Map<string, Finding> }) 
         {s.model === 'template' ? <Etiqueta texto="Plantilla · IA en pausa" rol="aviso" /> : null}
         {s.suspected_injection ? <Etiqueta texto="Filtramos instrucciones sospechosas" rol="aviso" /> : null}
       </div>
-      {s.resumen.split('\n').filter(Boolean).map((p, i) => <p key={i} className="text-[15px] leading-relaxed">{p}</p>)}
+      {/* Texto del modelo redactado con títulos y recursos del cliente: los controles bidi se ven (lib/bidi.ts). */}
+      {sinBidi(s.resumen).split('\n').filter(Boolean).map((p, i) => <p key={i} className="text-[15px] leading-relaxed">{p}</p>)}
       {s.top.length ? <>
         <h4 className="text-[15px] font-semibold">Lo más urgente</h4>
         <ol className="flex flex-col gap-2">
           {s.top.map((t) => (
             <li key={t.finding_id} className="flex flex-col gap-0.5">
               <Link to={`?finding=${encodeURIComponent(t.finding_id)}`} className="inline-flex w-fit items-center gap-1 text-[15px] font-medium text-foreground underline underline-offset-4">
-                {porId.get(t.finding_id)?.title ?? 'Ver hallazgo'}<ChevronRight className="size-4" /></Link>
-              <span className="text-sm text-muted-foreground">{t.por_que}</span>
+                {sinBidi(porId.get(t.finding_id)?.title ?? 'Ver hallazgo')}<ChevronRight className="size-4" /></Link>
+              <span className="text-sm text-muted-foreground">{sinBidi(t.por_que)}</span>
             </li>
           ))}
         </ol>
@@ -137,14 +138,14 @@ function Resumen({ run, porId }: { run: ScanRun; porId: Map<string, Finding> }) 
           {s.relaciones.map((r, i) => (
             <li key={i} className="flex flex-col gap-1.5">
               <div className="flex flex-wrap gap-1.5">{r.finding_ids.map((id) => (
-                <Link key={id} to={`?finding=${encodeURIComponent(id)}`} className="inline-flex h-6 items-center rounded-lg border px-2 text-[12.5px] font-medium hover:bg-muted">{porId.get(id)?.rule_id ?? 'hallazgo'}</Link>
+                <Link key={id} to={`?finding=${encodeURIComponent(id)}`} className="inline-flex h-6 items-center rounded-lg border px-2 text-[12.5px] font-medium hover:bg-muted">{sinBidi(porId.get(id)?.rule_id ?? 'hallazgo')}</Link>
               ))}</div>
-              <span className="text-sm text-muted-foreground">{r.explicacion}</span>
+              <span className="text-sm text-muted-foreground">{sinBidi(r.explicacion)}</span>
             </li>
           ))}
         </ul>
       </> : null}
-      {s.model === 'template' ? null : <p className="text-[12.5px] text-texto-3">Redactado por <span className="font-mono">{s.model}</span></p>}
+      {s.model === 'template' ? null : <p className="text-[12.5px] text-texto-3">Redactado por <span className="font-mono"><bdi dir="ltr">{sinBidi(s.model)}</bdi></span></p>}
     </section>
   );
 }
@@ -206,7 +207,7 @@ function Corrida({ id }: { id: string }) {
                 <ChapaSeveridad severity={f.severity} />
                 <div className="flex min-w-0 flex-1 flex-col">
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
-                  <span className="truncate font-mono text-[13px] text-muted-foreground">{f.resource}</span>
+                  <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>
                 </div>
                 <Link to={`?finding=${encodeURIComponent(f.id)}`} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">Ver y corregir<ChevronRight className="size-4" /></Link>
               </li>

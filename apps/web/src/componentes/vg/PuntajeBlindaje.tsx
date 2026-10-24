@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import type { Overview } from '@vanguard/contracts';
+import { sinBidi } from '@/lib/bidi';
 import type { Rol } from '@/lib/severidad';
 import { TEXTO_ROL, deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
@@ -27,7 +28,8 @@ export function PuntajeBlindaje({ score = null, band = null, coverage, enlaceCon
       </div>
       <span className="min-h-[1.5em] text-[15px] text-muted-foreground">
         {coverage?.missing.length ? <>
-          Falta: {coverage.missing.map((m) => deMapa(NOMBRE_MODULO, m, String(m))).join(', ')} ·{' '}
+          {/* Un módulo fuera de contrato sale tal cual llega: con los controles bidi a la vista (lib/bidi.ts). */}
+          Falta: {sinBidi(coverage.missing.map((m) => deMapa(NOMBRE_MODULO, m, String(m))).join(', '))} ·{' '}
           <Link to={enlaceConectar} className="font-medium text-foreground underline underline-offset-4">Conectar</Link>
         </> : null}
       </span>

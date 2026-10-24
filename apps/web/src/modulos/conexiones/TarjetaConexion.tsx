@@ -1,5 +1,5 @@
 // Tarjeta de un proveedor en Conexiones (S14 §14.10): estado, ••••last4, alcances y meta; probar, quitar y reconectar.
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ExternalLink, KeyRound, RotateCw } from 'lucide-react';
 import type { ConnectionPublic, ConnectionTest, Provider, ProviderErrorCode } from '@vanguard/contracts';
@@ -10,6 +10,7 @@ import { ConfirmarEnSitio } from '@/componentes/vg/ConfirmarEnSitio';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { ListaChecks } from '@/componentes/vg/ListaChecks';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { GUIAS_CONEXION } from '@/lib/guias';
@@ -69,7 +70,10 @@ function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: 
   const [prueba, setPrueba] = useState<ConnectionTest | null>(null);
   const estado = chapaEstado(c);
   const nombre = GUIAS_CONEXION[c.provider].nombre;
-  const meta = META_VISIBLE.filter((k) => typeof c.meta[k] === 'string' || typeof c.meta[k] === 'boolean').map((k) => `${ROTULO_META[k] ?? k}: ${String(c.meta[k])}`);
+  // Valores copiados de Supabase, Cloudflare y GitHub (nombre del proyecto, zona, repo, rama…): los controles bidi se ven
+  // y cada valor va aislado en su <bdi>, para que no reordene los rótulos vecinos del mismo párrafo.
+  const meta = META_VISIBLE.filter((k) => typeof c.meta[k] === 'string' || typeof c.meta[k] === 'boolean')
+    .map((k) => ({ k, rotulo: ROTULO_META[k] ?? k, valor: sinBidi(String(c.meta[k])) }));
   const solo = org.puedeEscribir ? undefined : SOLO_LECTURA;
 
   return (
@@ -77,11 +81,12 @@ function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: 
       <div className="flex flex-wrap items-center gap-2">
         {titulo ? <span className="text-sm font-semibold">{titulo}</span> : null}
         <Etiqueta texto={estado.texto} rol={estado.rol} />
-        {c.last4 ? <span className="font-mono text-[13px] text-muted-foreground">••••{c.last4}</span> : null}
+        {c.last4 ? <span className="font-mono text-[13px] text-muted-foreground">••••<bdi dir="ltr">{sinBidi(c.last4)}</bdi></span> : null}
         {c.expires_at ? <span className="text-[12.5px] text-texto-3">caduca {cuando(c.expires_at)}</span> : null}
       </div>
-      {c.scopes.length ? <div className="flex flex-wrap gap-1.5">{c.scopes.map((s) => <Etiqueta key={s} texto={nombrePermiso(s)} />)}</div> : null}
-      {meta.length ? <p className="font-mono text-[13px] break-all text-muted-foreground">{meta.join(' · ')}</p> : null}
+      {c.scopes.length ? <div className="flex flex-wrap gap-1.5">{c.scopes.map((s) => <Etiqueta key={s} texto={sinBidi(nombrePermiso(s))} />)}</div> : null}
+      {meta.length ? <p className="font-mono text-[13px] break-all text-muted-foreground">
+        {meta.map((m, i) => <Fragment key={m.k}>{i ? ' · ' : ''}{m.rotulo}: <bdi dir="ltr">{m.valor}</bdi></Fragment>)}</p> : null}
       {c.last_error && c.status !== 'active' ? <p className="text-sm text-mal">{fraseError(c)}</p> : null}
       {prueba ? <ListaChecks checks={prueba.checks} /> : null}
       {probar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(probar.error)}</p> : null}
@@ -159,7 +164,8 @@ export function TarjetaIngesta({ conexiones }: { conexiones: ConnectionPublic[] 
       </div>
       <p className="text-sm text-muted-foreground">Tu app nos manda sus peticiones firmadas y detectamos ataques en segundos.</p>
       {quitada ? <AvisoQuitada q={quitada} /> : null}
-      {ingest.map((c) => <LineaConexion key={c.id} c={c} titulo={c.label} alQuitar={setQuitada} />)}
+      {/* El «Nombre de tu app» lo escribió un miembro y lo ven todos: los controles bidi se ven. */}
+      {ingest.map((c) => <LineaConexion key={c.id} c={c} titulo={sinBidi(c.label)} alQuitar={setQuitada} />)}
       <div>
         <Button variant={ingest.length ? 'secundaria' : 'principal'} disabled={!org.puedeEscribir} onClick={() => navegar(`/o/${org.id}/connections/ingest`)}>
           <KeyRound />{ingest.length ? 'Conectar otra app' : 'Conectar tu app'}

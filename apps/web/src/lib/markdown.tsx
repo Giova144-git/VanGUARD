@@ -2,6 +2,7 @@
 // Subconjunto propio → elementos de React con texto: «#»/«##»/«###», párrafos, listas «-» y «1.», **negrita** y
 // `código`. Nada de HTML, enlaces ni imágenes: un «<script>» o un «[x](javascript:…)» se pinta como texto literal.
 import type { ReactNode } from 'react';
+import { sinBidi } from './bidi';
 
 export type Bloque =
   | { t: 'h'; nivel: 1 | 2 | 3; texto: string }
@@ -55,7 +56,7 @@ export function enLinea(texto: string): ReactNode[] {
 
 // Pinta los bloques; `despues(titulo)` permite insertar algo al final de una sección «##» (p. ej. el diagrama).
 export function Markdown({ md, despues }: { md: string; despues?: (titulo: string) => ReactNode }) {
-  const bs = bloques(md);
+  const bs = bloques(sinBidi(md));   // los controles bidi del modelo se ven (lib/bidi.ts), también en títulos y `código`
   const nodos: ReactNode[] = [];
   let seccion: string | null = null;
   const cerrarSeccion = (k: string) => { if (seccion && despues) { const x = despues(seccion); if (x) nodos.push(<div key={`d-${k}`}>{x}</div>); } };

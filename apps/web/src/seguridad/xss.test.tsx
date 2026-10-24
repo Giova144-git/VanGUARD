@@ -318,6 +318,8 @@ const idsSinCodificar = (html: string) => hrefs(html).filter((h) => [...h.matchA
 
 // Lo que debe verse escapado. El texto técnico (rutas, IPs, UA, recurso, JSON) va además en un <bdi dir="ltr">: un
 // <bdi> sin dir vale dir=auto y una primera letra árabe o hebrea reordenaría la ruta o la IP a la vista.
+// Todo texto del servidor que se pinta pasa por sinBidi (lib/bidi.ts): lo esperado se compara ya con los controles
+// a la vista («⟨U+202E⟩»), así un control crudo en la página hace fallar el caso. sinBidi es idempotente.
 type Ver = string | { ltr: string };
 const ltr = (s: string): Ver => ({ ltr: s });
 const enBdiLtr = (html: string) => [...html.matchAll(/<bdi dir="ltr">([\s\S]*?)<\/bdi>/g)].map((m) => m[1]!);
@@ -327,7 +329,7 @@ function revisar(html: string, carga: string, base: string, ver: Ver[], enlaces:
   expect(estructura(html)).toEqual(estructura(base));
   for (const crudo of ['<img src=x', '<script>alert', '<svg onload']) expect(html).not.toContain(crudo);
   for (const v of ver) {
-    const s = typeof v === 'string' ? v : v.ltr;
+    const s = sinBidi(typeof v === 'string' ? v : v.ltr);
     expect(html, `debe verse escapado: ${s.slice(0, 80)}`).toContain(esc(s));
     if (typeof v !== 'string') expect(enBdiLtr(html).some((b) => b.includes(esc(s))), `debe ir en <bdi dir="ltr">: ${s.slice(0, 80)}`).toBe(true);
   }
@@ -812,7 +814,7 @@ describe('XSS · Mermaid de la wiki', () => {
     const html = renderToStaticMarkup(<DiagramaWiki fuente={fuente} />);
     expect(parsearMermaid(fuente)).toBeNull();
     expect(html.startsWith('<pre')).toBe(true);                     // fuera de la lista blanca: código, no dibujo
-    expect(html).toContain(esc(fuente));
+    expect(html).toContain(esc(sinBidi(fuente)));
     expect(peligros(html, true)).toEqual([]);
     expect(etiquetas(html).map((t) => t.nombre)).toEqual(['pre']);
     return html;

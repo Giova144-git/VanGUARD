@@ -9,6 +9,7 @@ import { Spinner } from '@/componentes/ui/spinner';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { chapaEstado } from '@/modulos/conexiones/TarjetaConexion';
+import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useEstadoModulo } from '@/lib/consultas';
 import { rutaDe } from '@/lib/destino';
 import { cuando } from '@/lib/formato';
@@ -98,10 +99,11 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
           <h3 id={`ahora-${modulo}`} className="text-[17px] font-semibold">Ahora</h3>
           {filtro ? (
             // Se ve como chapa, pero la zona de toque mide 44 px (L8) sin agrandar la fila.
+            // ?filtro= lo puede armar un enlace ajeno: sus controles bidi se ven (lib/bidi.ts), también en el aria-label.
             <button type="button" onClick={() => { params.delete('filtro'); setParams(params); }}
-              className="group -my-2 inline-flex h-11 items-center outline-none" aria-label={`Quitar filtro: ${filtro}`}>
+              className="group -my-2 inline-flex h-11 items-center outline-none" aria-label={`Quitar filtro: ${sinBidi(filtro)}`}>
               <span className="inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[12.5px] font-medium group-hover:bg-muted group-focus-visible:ring-2 group-focus-visible:ring-ring">
-                Filtro: <span className="font-mono">{filtro}</span><X className="size-3.5" />
+                Filtro: <span className="font-mono"><bdi dir="ltr">{sinBidi(filtro)}</bdi></span><X className="size-3.5" />
               </span>
             </button>
           ) : null}

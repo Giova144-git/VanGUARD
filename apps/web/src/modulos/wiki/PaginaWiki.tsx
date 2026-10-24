@@ -33,7 +33,8 @@ import { cn } from '@/lib/utils';
 const PASO: Record<WikiRun['steps'][number]['name'], string> = {
   arbol: 'Árbol del repo', triage: 'Elegir los archivos que importan', area: 'Explicar cada área', sintesis: 'Resumen para el directivo', fin: 'Listo',
 };
-const corto = (sha: string | null) => (sha ? sha.slice(0, 7) : '—');
+// Con los controles bidi a la vista (lib/bidi.ts): en producción api() no impone el formato de CommitSha.
+const corto = (sha: string | null) => (sha ? sinBidi(sha.slice(0, 7)) : '—');
 // El estado de cada paso también en texto: el color del punto no basta (§14.6).
 const ESTADO_PASO: Record<WikiRun['steps'][number]['status'], string> = {
   done: 'Hecho', running: 'En curso', failed: 'Falló', pending: 'Pendiente', skipped: 'Omitido',
@@ -48,7 +49,7 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado, anterior
       <div className="flex flex-wrap items-center gap-2">
         <Coins className="size-5 text-info" />
         <h3 className="flex-1 text-[17px] font-semibold">Estimación</h3>
-        <span className="font-mono text-[13px] text-muted-foreground">{e.repo_full_name}@{e.branch} · {corto(e.commit_sha)}</span>
+        <span className="font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(`${e.repo_full_name}@${e.branch}`)}</bdi> · {corto(e.commit_sha)}</span>
       </div>
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[['Archivos en el repo', miles(e.files_total)], ['Candidatos', miles(e.files_candidatos)], ['A leer (máx.)', miles(e.files_a_leer_max)], ['Áreas (máx.)', miles(e.areas_max)]].map(([t, v]) => (
@@ -62,12 +63,12 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado, anterior
         <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
           {e.est.desglose.map((d) => (
             <li key={d.paso} className="flex flex-wrap gap-x-2"><span className="font-medium text-foreground">{deMapa(PASO, d.paso, '—')}</span>
-              <span className="font-mono text-[12.5px]">{d.modelo}</span><span>· {d.llamadas} {d.llamadas === 1 ? 'llamada' : 'llamadas'} · {usd(d.usd)}</span></li>
+              <span className="font-mono text-[12.5px]"><bdi dir="ltr">{sinBidi(d.modelo)}</bdi></span><span>· {d.llamadas} {d.llamadas === 1 ? 'llamada' : 'llamadas'} · {usd(d.usd)}</span></li>
           ))}
         </ul>
-        <p className="text-[12.5px] text-texto-3">Modelos: rápido <span className="font-mono">{e.models.fast}</span> · fino <span className="font-mono">{e.models.smart}</span></p>
+        <p className="text-[12.5px] text-texto-3">Modelos: rápido <span className="font-mono"><bdi dir="ltr">{sinBidi(e.models.fast)}</bdi></span> · fino <span className="font-mono"><bdi dir="ltr">{sinBidi(e.models.smart)}</bdi></span></p>
       </div>
-      {e.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{a}</p>)}
+      {e.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{sinBidi(a)}</p>)}
       {e.cached_run_id ? (
         <div className="flex flex-wrap items-start gap-3">
           {/* Texto largo: a 375 px parte en dos líneas en vez de desbordar (max-w-full por el shrink-0 de Button). */}
@@ -112,7 +113,7 @@ export function Progreso({ run, alReintentar, puedeEscribir, estancada }: { run:
               hueco={s.status === 'pending' || s.status === 'skipped'} girando={s.status === 'running'} />
             <span className="font-medium">{deMapa(PASO, s.name, '—')}</span>
             <span className="text-sm text-muted-foreground">{deMapa(ESTADO_PASO, s.status, '—')}</span>
-            {s.detalle ? <span className="text-muted-foreground">{s.detalle}</span> : null}
+            {s.detalle ? <span className="text-muted-foreground">{sinBidi(s.detalle)}</span> : null}
           </li>
         ))}
       </ol>
@@ -144,9 +145,9 @@ function Documento({ d }: { d: WikiDoc }) {
   return (
     <article className="flex flex-col gap-5 rounded-xl border bg-card p-5" aria-label="Wiki del repo">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="font-mono text-[15px] font-semibold">{d.repo_full_name}@{d.branch}</span>
+        <span className="font-mono text-[15px] font-semibold"><bdi dir="ltr">{sinBidi(`${d.repo_full_name}@${d.branch}`)}</bdi></span>
         <span className="font-mono text-[13px] text-muted-foreground">{corto(d.commit_sha)}</span>
-        <span className="text-[12.5px] text-texto-3">{cuando(d.generated_at)} · {d.models.fast} y {d.models.smart} · {usd(d.stats.cost_usd)}</span>
+        <span className="text-[12.5px] text-texto-3">{cuando(d.generated_at)} · <bdi dir="ltr">{sinBidi(d.models.fast)}</bdi> y <bdi dir="ltr">{sinBidi(d.models.smart)}</bdi> · {usd(d.stats.cost_usd)}</span>
         <span className="ml-auto"><BotonCopiar valor={comoMarkdown(d)} texto="Copiar como Markdown" /></span>
       </header>
       <p className="text-[12.5px] text-muted-foreground">Escrito por una IA a partir del código: es un dato no confiable, revísalo antes de decidir.</p>
@@ -160,7 +161,7 @@ function Documento({ d }: { d: WikiDoc }) {
           <CollapsiblePrimitive.Root key={p.id} className="rounded-xl border">
             <CollapsiblePrimitive.Trigger className="group flex min-h-14 w-full items-center gap-3 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <FileText className="size-4 text-info" />
-              <span className="flex flex-1 flex-col"><span className="text-[15px] font-semibold">{p.titulo}</span><span className="text-[12.5px] text-texto-3"><bdi dir="ltr">{sinBidi(p.area)}</bdi></span></span>
+              <span className="flex flex-1 flex-col"><span className="text-[15px] font-semibold">{sinBidi(p.titulo)}</span><span className="text-[12.5px] text-texto-3"><bdi dir="ltr">{sinBidi(p.area)}</bdi></span></span>
               <ChevronDown className="size-5 text-texto-3 transition-transform group-data-[state=open]:rotate-180" />
             </CollapsiblePrimitive.Trigger>
             <CollapsiblePrimitive.Content className="flex flex-col gap-3 px-4 pb-4">
@@ -173,7 +174,7 @@ function Documento({ d }: { d: WikiDoc }) {
           </CollapsiblePrimitive.Root>
         ))}
       </section>
-      {d.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{a}</p>)}
+      {d.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{sinBidi(a)}</p>)}
       <p className="text-[12.5px] text-texto-3 tabular-nums">
         Leímos {miles(d.stats.files_leidos)} de {miles(d.stats.files_total)} archivos en {miles(d.stats.areas)} áreas · {miles(d.stats.input_tokens)} tokens de entrada y {miles(d.stats.output_tokens)} de salida · {usd(d.stats.cost_usd)}
       </p>
@@ -191,7 +192,7 @@ function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string
           <button type="button" onClick={() => alElegir(r.id)} aria-current={r.id === actual || undefined}
             className={cn('flex min-h-12 w-full flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-2 text-left last:border-b-0 hover:bg-muted', r.id === actual && 'bg-info-relleno')}>
             <span className="font-mono text-[13px]">{corto(r.commit_sha)}</span>
-            <span className="text-sm text-muted-foreground">{r.branch ?? '—'}</span>
+            <span className="text-sm text-muted-foreground">{r.branch ? <bdi dir="ltr">{sinBidi(r.branch)}</bdi> : '—'}</span>
             <Etiqueta texto={deMapa(ESTADO, r.status, '—')} rol={r.status === 'failed' ? 'aviso' : 'neutra'} />
             {r.cached || r.cost_usd === 0 ? <Etiqueta texto="caché" rol="info" /> : null}
             <span className="ml-auto text-sm tabular-nums">{r.cost_usd == null ? '—' : usd(r.cost_usd)}</span>

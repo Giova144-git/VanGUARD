@@ -1,4 +1,7 @@
-// Error de la API tal como lo ve la UI (S14 §14.8). El `message` del servidor ya viene en español y se muestra tal cual.
+import { sinBidi } from './bidi';
+
+// Error de la API tal como lo ve la UI (S14 §14.8). El `message` del servidor ya viene en español y se muestra tal cual,
+// salvo los controles bidi (lib/bidi.ts), que se ven: así ningún sitio que pinte un error los deja pasar crudos.
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -6,11 +9,11 @@ export class ApiError extends Error {
   readonly details?: Record<string, unknown>;
 
   constructor(status: number, code: string, message: string, requestId?: string, details?: Record<string, unknown>) {
-    super(message);
+    super(typeof message === 'string' ? sinBidi(message) : message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
-    this.requestId = requestId;
+    this.requestId = typeof requestId === 'string' ? sinBidi(requestId) : requestId;
     this.details = details;
   }
 }

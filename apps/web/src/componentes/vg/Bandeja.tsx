@@ -27,22 +27,24 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
   const org = useOrg();
   const loc = useLocation();
   const estilo = accion.principal ? 'border-foreground bg-transparent text-foreground hover:bg-muted' : 'bg-card hover:bg-muted';
+  // El verbo lo manda el servidor: sus controles bidi se ven (lib/bidi.ts). Lo que se copia se queda tal cual llega.
+  const verbo = typeof accion.verbo === 'string' ? sinBidi(accion.verbo) : undefined;
   switch (accion.clase) {
     case 'prompt': {
       const id = typeof accion.args?.finding_id === 'string' ? accion.args.finding_id : null;
-      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{accion.verbo}<ChevronRight className="size-4" /></Link> : null;
+      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{verbo}<ChevronRight className="size-4" /></Link> : null;
     }
     case 'copiar':
-      return accion.copiar ? <BotonCopiar valor={accion.copiar} texto={accion.verbo} /> : null;
+      return accion.copiar ? <BotonCopiar valor={accion.copiar} texto={verbo} /> : null;
     case 'navegar':
-      return accion.destino ? <Link to={rutaDe(org.id, accion.destino, loc.pathname)} className={cn(enlace, estilo)}>{accion.verbo}<ChevronRight className="size-4" /></Link> : null;
+      return accion.destino ? <Link to={rutaDe(org.id, accion.destino, loc.pathname)} className={cn(enlace, estilo)}>{verbo}<ChevronRight className="size-4" /></Link> : null;
     case 'confirmar': {
       // block_ip con simulación y código llega con Incidentes (hito 5); mientras tanto se lleva al incidente.
       const inc = typeof accion.args?.incident_id === 'string' ? accion.args.incident_id : null;
       if (accion.args?.kind === 'block_ip' && inc)
         return puedeEscribir
-          ? <Link to={`/o/${org.id}/incidents/${encodeURIComponent(inc)}`} className={cn(enlace, 'border-mal-borde bg-mal-relleno text-mal hover:bg-mal/15')}>{accion.verbo}<ChevronRight className="size-4" /></Link>
-          : <BotonAccion variante="peligro" disabled ayuda={SOLO_LECTURA}>{accion.verbo}</BotonAccion>;
+          ? <Link to={`/o/${org.id}/incidents/${encodeURIComponent(inc)}`} className={cn(enlace, 'border-mal-borde bg-mal-relleno text-mal hover:bg-mal/15')}>{verbo}<ChevronRight className="size-4" /></Link>
+          : <BotonAccion variante="peligro" disabled ayuda={SOLO_LECTURA}>{verbo}</BotonAccion>;
       return <Button disabled title="Acción no disponible">Acción no disponible</Button>;
     }
     default:
@@ -89,7 +91,7 @@ export function Bandeja({ grupos, puedeEscribir, filtro, hora }: { grupos: Grupo
       {visibles.map((g) => {
         const rol = rolVisible(g.rol, g.filas.flatMap((x) => x.acciones));
         return (
-          <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={g.etiqueta}>
+          <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={sinBidi(g.etiqueta)}>
             <header className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
               <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
               <h4 className="flex-1 text-sm font-semibold wrap-anywhere">{sinBidi(g.etiqueta)}</h4>

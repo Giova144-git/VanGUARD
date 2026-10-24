@@ -87,9 +87,9 @@ export default function PaginaIncidentes() {
                   {/* Absoluta y codificada: un id «//host/x» relativo saldría como enlace externo. */}
                   <Link to={`/o/${org.id}/incidents/${encodeURIComponent(i.id)}`} className={cn('grid grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring', PISTAS)}>
                     <ChapaSeveridad severity={i.severity} />
-                    <span className="font-mono text-[13px]">{i.code}</span>
+                    <span className="font-mono text-[13px]">{sinBidi(i.code)}</span>
                     <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(i.title)}</span>
-                    <span className="truncate font-mono text-[13px] text-muted-foreground">{origen(i.resource)}</span>
+                    <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(origen(i.resource))}</bdi></span>
                     <span className="text-sm tabular-nums">{miles(i.event_count)} <span className="text-texto-3 @min-[66rem]:sr-only">eventos</span></span>
                     <span className="text-sm text-muted-foreground tabular-nums">{cuando(i.started_at)}</span>
                     <Etiqueta texto={est.texto} rol={est.rol} className="w-fit" />

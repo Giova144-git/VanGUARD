@@ -9,6 +9,7 @@ import { PantallaModulo } from '@/componentes/vg/PantallaModulo';
 import { useOrg } from '@/app/guardas';
 import { ActivarBlindaje } from '@/modulos/conexiones/ActivarBlindaje';
 import { useConexiones, useIncidentes, useTrafico } from '@/lib/consultas';
+import { sinBidi } from '@/lib/bidi';
 
 export default function PaginaCloudflare() {
   const org = useOrg();
@@ -53,7 +54,7 @@ export default function PaginaCloudflare() {
       {zona ? (
         <section className="flex flex-col gap-1" aria-label="Tu zona">
           <h3 className="text-[17px] font-semibold">Tu zona</h3>
-          <p className="text-[15px]"><span className="font-mono">{zona}</span>{plan ? <span className="text-muted-foreground"> · plan {plan}</span> : null}</p>
+          <p className="text-[15px]"><span className="font-mono"><bdi dir="ltr">{sinBidi(zona)}</bdi></span>{plan ? <span className="text-muted-foreground"> · plan {sinBidi(plan)}</span> : null}</p>
         </section>
       ) : null}
       <BotonRevisar kind="cloudflare" titulo="Revisar Cloudflare ahora" descripcion="Tu zona: tráfico, IPs y configuración" />

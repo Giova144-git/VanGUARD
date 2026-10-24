@@ -36,7 +36,8 @@ const TIPO_ACCION: Record<ActionKind, string> = {
   under_attack_off: 'Under Attack desactivado', rate_limit: 'Límite de peticiones',
 };
 const ESTADO_ACCION: Record<ActionStatus, string> = { executed: 'Activo', undone: 'Deshecho', proposed: 'En curso', failed: 'Falló' };
-const crudo = (v: unknown) => (typeof v === 'string' && v ? v : '—');
+// El texto crudo, con los controles bidi a la vista (lib/bidi.ts).
+const crudo = (v: unknown) => (typeof v === 'string' && v ? sinBidi(v) : '—');
 
 // Sin acción al lado (no hay reenvío), así que todo va en neutro (L3): el texto ya dice qué pasó.
 function estadoAviso(n: NotificationPublic): string {
@@ -163,7 +164,7 @@ function Detalle({ incidentId }: { incidentId: string }) {
           <header className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <ChapaSeveridad severity={i.severity} grande />
-              <span className="font-mono text-[13px] text-muted-foreground">{i.code}</span>
+              <span className="font-mono text-[13px] text-muted-foreground">{sinBidi(i.code)}</span>
               <Etiqueta texto={est.texto} rol={est.rol} />
             </div>
             <h2 className="text-[22px] font-semibold wrap-anywhere">{sinBidi(i.title)}</h2>
@@ -187,7 +188,7 @@ function Detalle({ incidentId }: { incidentId: string }) {
             <h3 className="text-[15px] font-semibold">Reglas que dispararon</h3>
             {i.rule_ids.map((r) => (
               <div key={r} className="flex flex-col gap-1">
-                <Etiqueta texto={r} mono className="w-fit" />
+                <Etiqueta texto={sinBidi(r)} mono className="w-fit" />
                 {porQueImporta(r) ? <p className="text-sm text-muted-foreground">{porQueImporta(r)}</p> : null}
               </div>
             ))}
@@ -201,7 +202,7 @@ function Detalle({ incidentId }: { incidentId: string }) {
                   return (
                     <li key={n.id} className="flex flex-wrap items-center gap-2 text-sm">
                       <Icono className="size-4 text-muted-foreground" aria-label={deMapa(NOMBRE_CANAL, n.channel, 'Otro canal')} />
-                      <span className="font-mono text-[13px]">{n.recipient_masked}</span>
+                      <span className="font-mono text-[13px]"><bdi dir="ltr">{sinBidi(n.recipient_masked)}</bdi></span>
                       <Etiqueta texto={estadoAviso(n)} />
                       <span className="ml-auto text-[12.5px] text-texto-3 tabular-nums">{cuando(n.created_at)}</span>
                     </li>

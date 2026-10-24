@@ -8,6 +8,7 @@ import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
 import { Spinner } from '@/componentes/ui/spinner';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
+import { sinBidi } from '@/lib/bidi';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
 import { deMapa } from '@/lib/severidad';
@@ -24,6 +25,10 @@ const RAZON: Record<string, string> = {
 const SOLO_PRODUCCION = 'Solo disponible en officialvanguard.com';
 // El resultado ocupa el sitio del botón de 56 px que sustituye (L6, L7): mismo alto, letra legible a 3 m; en móvil parte línea.
 const RESULTADO = 'h-auto min-h-14 shrink gap-2 px-4 py-2 text-base font-semibold [&_svg]:size-5';
+
+// error o aviso de RespuestaEscritura: llega como dato, no como ApiError (que ya sanea su message), así que aquí se
+// ponen a la vista los controles bidi (lib/bidi.ts). api() en producción no impone el esquema: lo que no sea texto, respaldo.
+const motivo = (m: unknown, respaldo: string) => (typeof m === 'string' ? sinBidi(m) : respaldo);
 
 function errorPropuesta(e: unknown): string {
   if (esApiError(e) && e.status === 403) return SOLO_PRODUCCION;
@@ -105,7 +110,7 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
     try {
       const r = await b.confirmar(p.approval_id, c);
       if (r.ok && r.action_id) { enfocar.current = true; setFase({ f: 'hecho', accion: { id: r.action_id, en: r.en ?? new Date().toISOString(), expira: null } }); }
-      else setFase({ f: 'vista', p, desde, error: r.error ?? r.aviso ?? 'No pudimos bloquearla' });
+      else setFase({ f: 'vista', p, desde, error: motivo(r.error ?? r.aviso, 'No pudimos bloquearla') });
     } catch (e) {
       if (esApiError(e) && e.status === 409) { enfocar.current = true; setFase({ f: 'reposo', error: e.message }); }
       else if (esApiError(e) && e.details?.reason === 'wrong_code') {
@@ -122,7 +127,7 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
     try {
       const r = await b.deshacer(id);
       if (r.ok) { enfocar.current = true; setFase({ f: 'deshecho', en: r.en ?? new Date().toISOString() }); }
-      else setErrorDeshacer(r.error ?? r.aviso ?? 'No pudimos desbloquearla');   // sigue bloqueada: se dice en el sitio (L6)
+      else setErrorDeshacer(motivo(r.error ?? r.aviso, 'No pudimos desbloquearla'));   // sigue bloqueada: se dice en el sitio (L6)
     } catch (e) {
       if (esApiError(e) && e.status === 409) { enfocar.current = true; setFase({ f: 'deshecho', en: new Date().toISOString() }); }   // ya deshecha: cuenta como hecho
       else setErrorDeshacer(esApiError(e) && e.status === 403 ? SOLO_PRODUCCION : mensajeDe(e));
@@ -183,12 +188,12 @@ export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, camp
 }) {
   return (
     <form onSubmit={alConfirmar} className="flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4">
-      <p className="text-[15px] font-semibold text-mal">{p.efecto}</p>
-      {p.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{a}</p>)}
+      <p className="text-[15px] font-semibold text-mal">{sinBidi(p.efecto)}</p>
+      {p.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{sinBidi(a)}</p>)}
       <p className="text-sm text-muted-foreground">
         {p.delivery === 'whatsapp'
           ? 'Te lo enviamos por WhatsApp. También puedes aprobar con el botón del mensaje.'
-          : <>No pudimos enviarte el WhatsApp: tu código es <span className="font-mono font-semibold text-foreground">{p.code}</span>.</>}
+          : <>No pudimos enviarte el WhatsApp: tu código es <span className="font-mono font-semibold text-foreground">{p.code ? sinBidi(p.code) : '—'}</span>.</>}
         {' '}Vence en <CuentaAtras hasta={p.expires_at} alVencer={alVencer} />.
       </p>
       <div className="flex flex-wrap items-end gap-2">
@@ -202,7 +207,7 @@ export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, camp
           {escribiendo ? <Spinner /> : <Ban />}Confirmar bloqueo
         </Button>
       </div>
-      {error ? <p role="alert" className="text-sm font-medium text-mal">{error}</p> : null}
+      {error ? <p role="alert" className="text-sm font-medium text-mal">{sinBidi(error)}</p> : null}
     </form>
   );
 }

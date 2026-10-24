@@ -5,6 +5,7 @@ import { PantallaModulo } from '@/componentes/vg/PantallaModulo';
 import { GraficaComparativa } from '@/componentes/vg/GraficaComparativa';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { useOrg } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { usePerfRuns } from '@/lib/consultas';
 import { esApiError } from '@/lib/errores';
 import { cuando, decimal, duracion } from '@/lib/formato';
@@ -14,12 +15,13 @@ import { cn } from '@/lib/utils';
 const METRICAS: [Metrica, string][] = [['perf_score', 'Puntaje'], ['lcp_ms', 'LCP'], ['tbt_ms', 'TBT'], ['cls', 'CLS']];
 const formato = (m: Metrica, v: number | null) => v == null ? '—' : m === 'cls' ? decimal(v, 2) : m === 'perf_score' ? String(v) : duracion(v);
 
+// El texto de cada botón va en <bdi dir="ltr">: en el grupo «URL» es la URL del servidor (ya con sinBidi).
 function Grupo<T extends string>({ valor, opciones, onCambio, etiqueta }: { valor: T; opciones: [T, string][]; onCambio: (v: T) => void; etiqueta: string }) {
   return (
     <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label={etiqueta}>
       {opciones.map(([v, t]) => (
         <button key={v} type="button" aria-pressed={valor === v} onClick={() => onCambio(v)}
-          className={cn('h-11 rounded-md px-3 text-sm font-medium', valor === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>{t}</button>
+          className={cn('h-11 rounded-md px-3 text-sm font-medium', valor === v ? 'bg-card text-foreground' : 'text-muted-foreground')}><bdi dir="ltr">{t}</bdi></button>
       ))}
     </div>
   );
@@ -58,8 +60,10 @@ function Historico() {
         <h3 id="t-historico" className="text-[17px] font-semibold">Histórico</h3>
         <p className="text-sm text-muted-foreground">Mediana de cada medición (3 repeticiones de Lighthouse vía PageSpeed Insights). Solo lectura.</p>
       </div>
-      {urls.length > 1 ? <Grupo etiqueta="URL" valor={actual ?? ''} opciones={urls.map((u) => [u, u.replace(/^https?:\/\//, '')])} onCambio={setUrl} />
-        : <p className="font-mono text-[13px] text-muted-foreground">{actual}</p>}
+      {/* La URL, la versión y la de Lighthouse llegan del servidor: los controles bidi se ven (lib/bidi.ts). La URL cruda
+          sigue como clave y estado del grupo; solo se sanea lo que se pinta. */}
+      {urls.length > 1 ? <Grupo etiqueta="URL" valor={actual ?? ''} opciones={urls.map((u) => [u, sinBidi(u.replace(/^https?:\/\//, ''))])} onCambio={setUrl} />
+        : <p className="font-mono text-[13px] text-muted-foreground">{actual ? <bdi dir="ltr">{sinBidi(actual)}</bdi> : null}</p>}
       <div className="flex flex-wrap gap-2">
         <Grupo etiqueta="Estrategia" valor={estrategia} opciones={[['mobile', 'Móvil'], ['desktop', 'Escritorio']]} onCambio={setEstrategia} />
         <Grupo etiqueta="Métrica" valor={metrica} opciones={METRICAS} onCambio={setMetrica} />
@@ -75,8 +79,8 @@ function Historico() {
           <tbody>
             {serie.map((m, i) => (
               <tr key={m.clave} className="h-12 border-b last:border-b-0">
-                <td className="pr-3">{m.version ?? `Medición ${i + 1}`} <span className="text-[12.5px] text-texto-3">· {cuando(m.at)}</span></td>
-                <td className="pr-3 font-mono text-[13px]">{m.lighthouse ?? '—'}</td>
+                <td className="pr-3">{m.version ? <bdi dir="ltr">{sinBidi(m.version)}</bdi> : `Medición ${i + 1}`} <span className="text-[12.5px] text-texto-3">· {cuando(m.at)}</span></td>
+                <td className="pr-3 font-mono text-[13px]">{m.lighthouse ? <bdi dir="ltr">{sinBidi(m.lighthouse)}</bdi> : '—'}</td>
                 {METRICAS.map(([k]) => <td key={k} className={cn('pr-3', peorQueAntes(i, k) && 'text-aviso')}>{formato(k, m[k])}</td>)}
                 <td><Delta m={metrica} antes={serie[i - 1]} ahora={m} /></td>
               </tr>
@@ -89,8 +93,8 @@ function Historico() {
         {serie.map((m, i) => (
           <li key={m.clave} className="flex flex-col gap-2 rounded-lg border px-3 py-3">
             <div className="flex flex-wrap items-baseline gap-x-2">
-              <span className="text-[15px] font-medium">{m.version ?? `Medición ${i + 1}`}</span>
-              <span className="text-[12.5px] text-texto-3">{cuando(m.at)} · Lighthouse <span className="font-mono">{m.lighthouse ?? '—'}</span></span>
+              <span className="text-[15px] font-medium">{m.version ? <bdi dir="ltr">{sinBidi(m.version)}</bdi> : `Medición ${i + 1}`}</span>
+              <span className="text-[12.5px] text-texto-3">{cuando(m.at)} · Lighthouse <span className="font-mono">{m.lighthouse ? <bdi dir="ltr">{sinBidi(m.lighthouse)}</bdi> : '—'}</span></span>
             </div>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[15px] tabular-nums">
               {METRICAS.map(([k, t]) => (

@@ -1,13 +1,15 @@
 // Mapa de la wiki como SVG propio (sin la librería mermaid ni innerHTML): cajas por columna y flechas con su texto.
-// Si el Mermaid no parsea con la lista blanca, se muestra como bloque de código.
+// Si el Mermaid no parsea con la lista blanca, se muestra como bloque de código, con los controles bidi a la vista
+// (lib/bidi.ts) y en dir="ltr": el <pre> es un bloque, así que ya va aislado del texto vecino sin un <bdi> dentro.
 import { useMemo } from 'react';
+import { sinBidi } from '@/lib/bidi';
 import { parsearMermaid, partir } from '@/lib/mermaid';
 
 const W = 168, H = 52, GX = 72, GY = 28, M = 16;
 
 export function DiagramaWiki({ fuente }: { fuente: string }) {
   const g = useMemo(() => parsearMermaid(fuente), [fuente]);
-  if (!g) return <pre className="overflow-auto rounded-lg border bg-background p-3 font-mono text-[13px] whitespace-pre-wrap">{fuente}</pre>;
+  if (!g) return <pre dir="ltr" className="overflow-auto rounded-lg border bg-background p-3 font-mono text-[13px] whitespace-pre-wrap">{sinBidi(fuente)}</pre>;
   const alto = Math.max(...Array.from({ length: g.columnas }, (_, c) => g.nodos.filter((n) => n.col === c).length));
   const ancho = M * 2 + g.columnas * W + (g.columnas - 1) * GX;
   const altura = M * 2 + alto * H + (alto - 1) * GY;

@@ -37,7 +37,7 @@ function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
       <ChapaSeveridad severity={item.severity} />
       <div className="flex min-w-0 flex-1 flex-col" title={item.rule_id}>
         <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(item.title)}</span>
-        <span className="truncate font-mono text-[13px] text-muted-foreground">{item.resource}</span>
+        <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(item.resource)}</bdi></span>
       </div>
       <Link to={href} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">
         {item.kind === 'incident' ? 'Ver incidente' : 'Ver y corregir'}<ChevronRight className="size-4" />

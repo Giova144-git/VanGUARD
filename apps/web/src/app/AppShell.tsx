@@ -65,10 +65,10 @@ function SelectorOrg({ compacto }: { compacto: boolean }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" aria-label={`Organización: ${org.name}`}
+        <button type="button" aria-label={`Organización: ${sinBidi(org.name)}`}
           className={cn('flex h-12 w-full items-center gap-2 rounded-lg border bg-card px-3 text-left text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring', compacto && 'justify-center px-0')}>
-          {compacto ? <span className="text-[15px] font-semibold">{org.name.slice(0, 1).toUpperCase()}</span> : <>
-            <span className="flex-1 truncate">{org.name}</span>
+          {compacto ? <span className="text-[15px] font-semibold">{sinBidi(org.name).slice(0, 1).toUpperCase()}</span> : <>
+            <span className="flex-1 truncate">{sinBidi(org.name)}</span>
             {org.is_demo ? <Etiqueta texto="Demo" rol="info" /> : null}
             <ChevronsUpDown className="size-4 text-texto-3" />
           </>}
@@ -78,7 +78,7 @@ function SelectorOrg({ compacto }: { compacto: boolean }) {
         <DropdownMenuLabel>Tus organizaciones</DropdownMenuLabel>
         {org.me.orgs.map((o) => (
           <DropdownMenuItem key={o.id} onSelect={() => navegar(`/o/${o.id}`)}>
-            <span className="flex-1 truncate">{o.name}</span>
+            <span className="flex-1 truncate">{sinBidi(o.name)}</span>
             {o.is_demo ? <Etiqueta texto="Demo" rol="info" /> : null}
             {o.id === org.id ? <Check className="size-4 text-foreground" /> : null}
           </DropdownMenuItem>
@@ -124,7 +124,7 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
           <Clock className="size-3.5" />{cuando(overview.dataUpdatedAt || null)}
         </span>
         {compacto ? null : <div className="flex items-center gap-2 px-1">
-          <span className="flex-1 truncate text-sm">{org.me.user.email ?? 'Invitado · demo'}</span>
+          <span className="flex-1 truncate text-sm">{org.me.user.email ? <bdi dir="ltr">{sinBidi(org.me.user.email)}</bdi> : 'Invitado · demo'}</span>
           <Etiqueta texto={deMapa(ROL_TEXTO, org.role, '—')} rol={org.role === 'owner' || org.role === 'admin' ? 'info' : 'neutra'} />
         </div>}
         <Button variant="fantasma" size="fila" onClick={salir} className={cn('justify-start text-muted-foreground', compacto && 'size-11 justify-center px-0')} aria-label="Cerrar sesión">

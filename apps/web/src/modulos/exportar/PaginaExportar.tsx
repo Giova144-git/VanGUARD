@@ -9,6 +9,7 @@ import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { useOrg } from '@/app/guardas';
+import { sinBidi } from '@/lib/bidi';
 import { useExportMd } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { descargarExport } from '@/lib/mutaciones';
@@ -33,7 +34,8 @@ function BotonDescargar({ org, formato }: { org: string; formato: 'md' | 'json' 
 export default function PaginaExportar() {
   const org = useOrg();
   const md = useExportMd(org.id);
-  const vista = md.data?.split('\n').slice(0, 80).join('\n');
+  // Lo que se ve, con los controles bidi a la vista (lib/bidi.ts); lo que se copia y se descarga es el .md de E25 tal cual.
+  const vista = md.data ? sinBidi(md.data.split('\n').slice(0, 80).join('\n')) : undefined;
 
   return (
     <div className="flex flex-col gap-6">

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { CifraDato } from '@vanguard/contracts';
+import { sinBidi } from '@/lib/bidi';
 import { cifra } from '@/lib/formato';
 import { TEXTO_ROL, type Rol } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
@@ -8,15 +9,16 @@ import { cn } from '@/lib/utils';
 type Props = Pick<CifraDato, 'etiqueta' | 'n' | 'de' | 'unidad' | 'decimales' | 'sub'> & { rol?: Rol; href?: string; valor?: string; accion?: ReactNode };
 
 // Cifra de alto fijo (L7, S14 §14.7): n = null → «—» neutra; el color solo con una acción al lado (L3).
+// `etiqueta` y `sub` llegan del servidor (EstadoModulo.cifras): sus controles bidi se ven aquí dentro (lib/bidi.ts).
 export function Cifra({ etiqueta, n, de, unidad, decimales, sub, rol, href, valor, accion }: Props) {
   const r: Rol = n == null ? 'neutra' : (rol === 'mal' || rol === 'aviso') && !href && !accion ? 'neutra' : rol ?? 'neutra';
   const cuerpo = (
     <>
-      <span className="font-mono text-[12.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{etiqueta}</span>
+      <span className="font-mono text-[12.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{typeof etiqueta === 'string' ? sinBidi(etiqueta) : etiqueta}</span>
       <span className={cn('text-3xl font-semibold tabular-nums', r === 'neutra' ? (n == null ? 'text-texto-3' : 'text-foreground') : TEXTO_ROL[r])}>
         {valor ?? cifra({ n, de, unidad, decimales })}
       </span>
-      {sub ? <span className="truncate text-[12.5px] text-texto-3">{sub}</span> : null}
+      {sub ? <span className="truncate text-[12.5px] text-texto-3">{typeof sub === 'string' ? sinBidi(sub) : sub}</span> : null}
       {accion}
     </>
   );

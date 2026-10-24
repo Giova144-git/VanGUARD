@@ -12,6 +12,7 @@ import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { ListaChecks } from '@/componentes/vg/ListaChecks';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import NoEncontrada from '@/app/paginas/NoEncontrada';
+import { sinBidi } from '@/lib/bidi';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { GUIAS_CONEXION } from '@/lib/guias';
 import { useConectar } from '@/lib/mutaciones';
@@ -52,7 +53,7 @@ export function Resultado({ r, alTerminar }: { r: ConnectionCreated; alTerminar:
       <div className="flex flex-wrap items-center gap-2">
         <CircleCheck className="size-6 text-bien" />
         <span ref={titulo} tabIndex={-1} className="text-[17px] font-semibold outline-none">Conectado</span>
-        {c.last4 ? <span className="font-mono text-[13px] text-muted-foreground">••••{c.last4}</span> : null}
+        {c.last4 ? <span className="font-mono text-[13px] text-muted-foreground">••••<bdi dir="ltr">{sinBidi(c.last4)}</bdi></span> : null}
         {r.action_connection ? <Etiqueta texto="Modo blindaje activo" rol="info" /> : null}
       </div>
       <ListaChecks checks={r.checks} />
@@ -80,7 +81,7 @@ function Dato({ etiqueta, valor }: { etiqueta: string; valor: string }) {
     <div className="flex flex-col gap-1.5">
       <span className="text-[12.5px] font-medium text-texto-3">{etiqueta}</span>
       <div className="flex flex-wrap items-center gap-2">
-        <code className="min-w-0 flex-1 rounded-lg border bg-card px-3 py-2 font-mono text-[13px] break-all">{valor}</code>
+        <code className="min-w-0 flex-1 rounded-lg border bg-card px-3 py-2 font-mono text-[13px] break-all">{sinBidi(valor)}</code>
         <BotonCopiar valor={valor} />
       </div>
     </div>
@@ -155,13 +156,14 @@ export default function Asistente() {
     try {
       setResultado(await conectar(cuerpo));
     } catch (e) {
+      // e.message ya llega sin controles bidi (ApiError); `details` no, así que lo que se saca de ahí pasa por sinBidi.
       const d = esApiError(e) ? e.details : undefined;
       if (esApiError(e) && e.code === 'key_rejected') setErrores({ token: { titulo: 'Rechazamos esa clave', explicacion: e.message } });
       else if (esApiError(e) && e.code === 'provider_rejected' && Array.isArray(d?.missing_permissions))
-        setErrores({ general: `Te falta: ${(d.missing_permissions as string[]).map(nombrePermiso).join(', ')}` });
+        setErrores({ general: `Te falta: ${sinBidi((d.missing_permissions as string[]).map(nombrePermiso).join(', '))}` });
       else if (esApiError(e) && e.code === 'invalid_body' && d?.field_errors && typeof d.field_errors === 'object') {
         const fe = d.field_errors as Record<string, string[] | undefined>;
-        setErrores({ general: Object.values(fe).flat().filter(Boolean).join(' · ') || e.message });
+        setErrores({ general: sinBidi(Object.values(fe).flat().filter(Boolean).join(' · ')) || e.message });
       } else setErrores({ general: mensajeDe(e) });
     } finally {
       vaciarTokens();                                                // éxito o error: el token no se queda en el estado

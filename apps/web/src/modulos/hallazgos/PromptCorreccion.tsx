@@ -1,11 +1,13 @@
 // Prompt de corrección (S14 §14.15). Un único texto armado por el BACK con su envoltorio determinista: se pinta en
-// <pre> (L9, nada de Markdown) y «Copiar para mi IA» lo copia entero, sin transformarlo.
+// <pre> (L9, nada de Markdown) con los controles bidi a la vista (lib/bidi.ts), y «Copiar para mi IA» lo copia entero,
+// sin transformarlo.
 import { Sparkles } from 'lucide-react';
 import type { Finding, FixPromptResponse } from '@vanguard/contracts';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { BotonCopiar } from '@/componentes/vg/BotonCopiar';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
+import { sinBidi } from '@/lib/bidi';
 import { useFixPrompt } from '@/lib/consultas';
 import { esApiError } from '@/lib/errores';
 import { useGenerarPrompt } from '@/lib/mutaciones';
@@ -21,12 +23,12 @@ function TextoPrompt({ r, plantilla }: { r: Pick<FixPromptResponse, 'prompt' | '
           IA» quedaba casi dos pantallas más abajo (F-15). */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <BotonCopiar valor={r.prompt} texto="Copiar para mi IA" variante="principal" tam="grande" />
-        {plantilla ? null : <p className="text-[12.5px] text-texto-3">Generado por <span className="font-mono">{r.model}</span> · {r.cached ? 'guardado' : 'nuevo'}</p>}
+        {plantilla ? null : <p className="text-[12.5px] text-texto-3">Generado por <span className="font-mono"><bdi dir="ltr">{sinBidi(r.model)}</bdi></span> · {r.cached ? 'guardado' : 'nuevo'}</p>}
       </div>
       <p className="text-[12.5px] text-muted-foreground">
         Este texto incluye evidencia de sistemas externos. Léelo antes de dárselo a una IA que pueda escribir en tu código o tu base.
       </p>
-      <pre className="max-h-[28rem] overflow-auto rounded-lg border bg-background p-3 font-mono text-[13px] whitespace-pre-wrap">{r.prompt}</pre>
+      <pre className="max-h-[28rem] overflow-auto rounded-lg border bg-background p-3 font-mono text-[13px] whitespace-pre-wrap"><bdi dir="ltr">{sinBidi(r.prompt)}</bdi></pre>
     </div>
   );
 }

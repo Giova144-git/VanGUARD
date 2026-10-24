@@ -1,7 +1,9 @@
 // Línea de tiempo del incidente (S14 §14.16): los hitos fijos con su «+N s» medido por el servidor y, plegado, el resto
-// de timeline[] tal como llega. El hito de WhatsApp es el que vende la demo (A8): va destacado.
+// de timeline[] tal como llega (salvo los controles bidi, que se ven: lib/bidi.ts). El hito de WhatsApp es el que vende
+// la demo (A8): va destacado.
 import type { TimelineItem } from '@vanguard/contracts';
 import type { Hito } from '@/modulos/incidentes/hitos';
+import { sinBidi } from '@/lib/bidi';
 import { cuando } from '@/lib/formato';
 import { deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
@@ -46,7 +48,7 @@ export function LineaTiempo({ hitos, resto }: { hitos: Hito[]; resto: TimelineIt
           <ul className="flex flex-col gap-2">
             {resto.map((t, i) => (
               <li key={`${t.kind}-${i}`} className="flex flex-wrap items-center gap-x-3 text-sm">
-                <span className={cn('flex-1', t.kind === 'call_failed' ? 'text-aviso' : '')}>{t.label ?? deMapa(TIPO, t.kind, String(t.kind))}</span>
+                <span className={cn('flex-1', t.kind === 'call_failed' ? 'text-aviso' : '')}>{sinBidi(t.label ?? deMapa(TIPO, t.kind, String(t.kind)))}</span>
                 <span className="font-mono text-[13px] text-texto-3 tabular-nums">+{(t.ms / 1000).toFixed(1).replace('.', ',')} s</span>
               </li>
             ))}

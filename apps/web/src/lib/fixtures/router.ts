@@ -342,12 +342,29 @@ export function simularAprobacionWhatsApp(org: string, incidentId: string) {
 }
 
 // ── Ajustes: contactos (E26/E27) y prueba de canal (E28) ─────────────────────────────────────────────────────
-type ContactoFx = { id: string; name: string; phone_e164: string; whatsapp: boolean; voice: boolean; priority: number; verified_at: string | null };
+type VerificacionFx = { codigo: string; enlace: string };
+type ContactoFx = { id: string; name: string; phone_e164: string; whatsapp: boolean; voice: boolean; priority: number;
+  verified_at: string | null; verificacion?: VerificacionFx | null };
 const contactos = new Map<string, ContactoFx[]>();
 const contactosDe = (org: string) => {
   if (!contactos.has(org)) contactos.set(org, vacia(org) ? [] : structuredClone(fx.contacts as unknown as ContactoFx[]));
   return contactos.get(org)!;
 };
+// Número de VanGUARD de los fixtures (el del enlace de Luis): sirve para armar el wa.me de un contacto nuevo.
+const NUMERO_FX = (fx.contacts as unknown as ContactoFx[]).find((c) => c.verificacion)?.verificacion?.enlace.match(/wa\.me\/(\d+)/)?.[1] ?? '15550100';
+const nuevaVerificacion = (): VerificacionFx => {
+  const codigo = crypto.randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase();
+  return { codigo, enlace: `https://wa.me/${NUMERO_FX}?text=VERIFICAR%20${codigo}` };
+};
+// «Tras 3 consultas, Luis vuelve verificado» (espec del ORQUESTADOR): simula que llegó su «VERIFICAR <código>» al webhook.
+const consultasContactos = new Map<string, number>();
+function listarContactos(org: string) {
+  exigirAdmin();
+  const n = (consultasContactos.get(org) ?? 0) + 1;
+  consultasContactos.set(org, n);
+  if (n > 3) for (const c of contactosDe(org)) if (c.verificacion) { c.verified_at = new Date().toISOString(); c.verificacion = null; }
+  return structuredClone(contactosDe(org));
+}
 function exigirAdmin() { if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura'); }
 function guardarContactos(org: string, body: unknown) {
   exigirAdmin();
@@ -357,7 +374,13 @@ function guardarContactos(org: string, body: unknown) {
   if (new Set(lista.map((c) => c.phone_e164)).size !== lista.length) falla(422, 'invalid_body', 'Hay teléfonos repetidos');
   // vg_replace_contacts conserva verified_at por teléfono (S05): un contacto nuevo nace sin verificar.
   const antes = new Map(contactosDe(org).map((c) => [c.phone_e164, c]));
-  const nuevos = lista.map((c) => ({ ...c, id: antes.get(c.phone_e164)?.id ?? crypto.randomUUID(), verified_at: antes.get(c.phone_e164)?.verified_at ?? null }));
+  // La verificación solo existe para contactos sin verificar con WhatsApp: se conserva la que había o se crea una nueva.
+  const nuevos = lista.map((c) => {
+    const previo = antes.get(c.phone_e164);
+    const verified_at = previo?.verified_at ?? null;
+    const verificacion = verified_at || !c.whatsapp ? null : previo?.verificacion ?? nuevaVerificacion();
+    return { ...c, id: previo?.id ?? crypto.randomUUID(), verified_at, verificacion };
+  });
   contactos.set(org, nuevos);
   return structuredClone(nuevos);
 }
@@ -422,7 +445,7 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r(`${ORG}\\/wiki\\/runs`),             () => fx.wikiRuns],
   ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), () => fx.wikiDoc],
   ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[2]!)],
-  ['GET',  r(`${ORG}\\/contacts`),                (m) => { exigirAdmin(); return structuredClone(contactosDe(m[1]!)); }],
+  ['GET',  r(`${ORG}\\/contacts`),                (m) => listarContactos(m[1]!)],
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],
   ['GET',  r(`${ORG}\\/ai\\/usage`),              () => fx.aiUsage],

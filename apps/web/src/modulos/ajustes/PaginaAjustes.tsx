@@ -6,13 +6,15 @@ import { ArrowDown, ArrowUp, LogOut, MessageCircle, Phone, Plus, Save, Trash2 } 
 import type { Contact } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
+import { Spinner } from '@/componentes/ui/spinner';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
+import { BotonCopiar } from '@/componentes/vg/BotonCopiar';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { useOrg } from '@/app/guardas';
-import { armarContactos, type FilaContacto } from '@/lib/contactos';
+import { armarContactos, normalizarTelefono, type FilaContacto } from '@/lib/contactos';
 import { useContactos, useOverview } from '@/lib/consultas';
 import { COMMIT, REPO_JUECES } from '@/lib/env';
 import { esApiError, mensajeDe } from '@/lib/errores';
@@ -63,16 +65,59 @@ function ProbarCanal({ org, canal, deshabilitado }: { org: string; canal: 'whats
   );
 }
 
+// Verificación por WhatsApp: tras abrir el enlace se consulta GET contacts cada 5 s durante 2 min (solo con la pestaña
+// visible) hasta que el servidor marque verified_at. El código y el enlace vienen del servidor y no se guardan en ningún
+// almacenamiento del navegador ni en el historial.
+const ESPERA_VERIFICAR_MS = 120_000;
+type Espera = { id: string; nombre: string; hasta: number };
+
+function Verificar({ c, esperando, alAbrir }: { c: Contact; esperando: boolean; alAbrir: () => void }) {
+  if (!c.verificacion) return null;
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+      <p className="text-sm text-muted-foreground">Solo enviamos alertas a teléfonos que confirman ser suyos.</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button asChild variant="principal">
+          <a href={c.verificacion.enlace} target="_blank" rel="noopener noreferrer" onClick={alAbrir}>
+            <MessageCircle />Verificar por WhatsApp
+          </a>
+        </Button>
+        <span className="text-sm">
+          O escribe <code className="rounded bg-muted px-1.5 font-mono text-[13px]">VERIFICAR {c.verificacion.codigo}</code> a VanGUARD desde ese teléfono
+        </span>
+        <BotonCopiar valor={`VERIFICAR ${c.verificacion.codigo}`} texto="Copiar" />
+      </div>
+      {esperando ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner />Esperando tu mensaje…</p> : null}
+    </div>
+  );
+}
+
 function Contactos({ org }: { org: string }) {
-  const q = useContactos(org, true);
+  const [espera, setEspera] = useState<Espera | null>(null);
+  const [aviso, setAviso] = useState<{ texto: string; bien: boolean } | null>(null);
+  const q = useContactos(org, true, espera ? 5_000 : false);
   const guardar = useGuardarContactos(org);
   const [filas, setFilas] = useState<FilaContacto[] | null>(null);
   const [errores, setErrores] = useState<Record<string, string>>({});
   const [guardado, setGuardado] = useState<string | null>(null);
   useEffect(() => { if (q.data && filas === null) setFilas([...q.data].sort((a, b) => a.priority - b.priority).map(aFila)); }, [q.data, filas]);
 
+  // La verdad de cada fila guardada sale del servidor: la chapa cambia en cuanto llega verified_at.
+  const servidor = new Map((q.data ?? []).map((c) => [c.id, c]));
+  useEffect(() => {
+    if (!espera) return;
+    if (q.data?.find((c) => c.id === espera.id)?.verified_at) {
+      setAviso({ texto: `${espera.nombre} quedó verificado: ya le enviamos alertas reales.`, bien: true });
+      setEspera(null);
+      return;
+    }
+    const t = setTimeout(() => { setAviso({ texto: 'No nos llegó. Vuelve a intentarlo.', bien: false }); setEspera(null); }, Math.max(0, espera.hasta - Date.now()));
+    return () => clearTimeout(t);
+  }, [espera, q.data]);
+
   if (q.isError) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   if (!filas) return <p className="text-texto-3" aria-busy="true">—</p>;
+  const hayVerificacion = (q.data ?? []).some((c) => c.verificacion);
   const cambiar = (clave: string, p: Partial<FilaContacto>) => { setGuardado(null); setFilas(filas.map((f) => f.clave === clave ? { ...f, ...p } : f)); };
   const mover = (i: number, d: -1 | 1) => { const n = [...filas]; const [x] = n.splice(i, 1); n.splice(i + d, 0, x!); setFilas(n); setGuardado(null); };
   const enviar = () => {
@@ -92,12 +137,19 @@ function Contactos({ org }: { org: string }) {
       </div>
       <p className="text-sm text-muted-foreground">«Probar» envía al contacto con más prioridad que tenga ese canal activo.</p>
       {SANDBOX_KAPSO ? <p className="rounded-lg border bg-info-relleno px-3 py-2 text-sm">{SANDBOX_KAPSO}</p> : null}
+      <p className="sr-only" role="status" aria-live="polite">{aviso?.texto ?? ''}</p>
+      {aviso ? <p className={cn('text-sm font-medium', aviso.bien ? 'text-bien' : 'text-mal')}>{aviso.texto}</p> : null}
       <ol className="flex flex-col gap-3" aria-label="Contactos de alerta">
-        {filas.map((f, i) => (
+        {filas.map((f, i) => {
+          const s = f.id ? servidor.get(f.id) : undefined;
+          const verificado = !!(s?.verified_at ?? f.verified_at);
+          // El enlace es del teléfono guardado: si la fila tiene cambios sin guardar, no se ofrece.
+          const sinCambios = !!s && normalizarTelefono(f.phone) === s.phone_e164 && f.whatsapp === s.whatsapp;
+          return (
           <li key={f.clave} className="flex flex-col gap-3 rounded-xl border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
               <span className="flex size-7 items-center justify-center rounded-full bg-info-relleno text-sm font-semibold text-info tabular-nums" role="img" aria-label={`Prioridad ${i + 1}`}>{i + 1}</span>
-              <Etiqueta texto={f.verified_at ? 'Verificado' : 'Sin verificar'} rol={f.verified_at ? 'bien' : 'aviso'} />
+              <Etiqueta texto={verificado ? 'Verificado' : 'Sin verificar'} rol={verificado ? 'bien' : 'aviso'} />
               <span className="flex-1" />
               <Button variant="fantasma" size="icono" disabled={i === 0} onClick={() => mover(i, -1)} aria-label="Subir prioridad"><ArrowUp /></Button>
               <Button variant="fantasma" size="icono" disabled={i === filas.length - 1} onClick={() => mover(i, 1)} aria-label="Bajar prioridad"><ArrowDown /></Button>
@@ -111,8 +163,13 @@ function Contactos({ org }: { org: string }) {
               <label className="flex items-center gap-2 text-sm"><Interruptor activo={f.voice} onCambio={(v) => cambiar(f.clave, { voice: v })} etiqueta="Llamada" />Llamada</label>
             </div>
             {errores[f.clave] ? <p role="alert" className="text-sm text-mal">{errores[f.clave]}</p> : null}
+            {s && sinCambios && !verificado ? (
+              <Verificar c={s} esperando={espera?.id === s.id}
+                alAbrir={() => { setAviso(null); setEspera({ id: s.id, nombre: s.name, hasta: Date.now() + ESPERA_VERIFICAR_MS }); }} />
+            ) : null}
           </li>
-        ))}
+          );
+        })}
       </ol>
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="secundaria" disabled={filas.length >= 5}
@@ -125,7 +182,9 @@ function Contactos({ org }: { org: string }) {
         {errores._ ? <span role="alert" className="text-sm text-mal">{errores._}</span> : null}
       </div>
       <p className="text-[12.5px] text-muted-foreground">
-        Solo los contactos verificados reciben WhatsApp y llamadas reales. Por ahora la verificación la hace a mano el equipo de VanGUARD; la verificación automática por WhatsApp está en camino.
+        {hayVerificacion
+          ? 'Solo los contactos verificados reciben WhatsApp y llamadas reales. Cada uno se verifica enviando su código a VanGUARD desde su propio teléfono.'
+          : 'Solo los contactos verificados reciben WhatsApp y llamadas reales. Por ahora la verificación la hace a mano el equipo de VanGUARD; la verificación automática por WhatsApp está en camino.'}
       </p>
     </div>
   );

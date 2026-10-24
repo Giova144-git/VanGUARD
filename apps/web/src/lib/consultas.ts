@@ -121,8 +121,9 @@ export const useExportMd = (org: string) => useQuery({
 });
 
 // Contactos: solo admin (E26). Para el viewer no se llama: el bloque dice que solo los ve un administrador.
-export const useContactos = (org: string, habilitado: boolean) => useQuery({
-  queryKey: ['org', org, 'contacts'], enabled: habilitado, refetchIntervalInBackground: false,
+// `cadaMs`: espera activa mientras alguien verifica su teléfono por WhatsApp (5 s, solo con la pestaña visible).
+export const useContactos = (org: string, habilitado: boolean, cadaMs: number | false = false) => useQuery({
+  queryKey: ['org', org, 'contacts'], enabled: habilitado, refetchIntervalInBackground: false, refetchInterval: cadaMs,
   queryFn: () => api(`/api/orgs/${org}/contacts`, { esquema: z.array(Contact) }),
 });
 

@@ -1,0 +1,11 @@
+{
+  "name": "deepwiki-claude",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DeepWiki propio sobre la API de Claude: repo de GitHub -> documentacion .md no tecnica con diagramas Mermaid",
+  "scripts": {
+    "generate": "node src/index.mjs"
+  },
+  "engines": { "node": ">=20.12" }
+}

@@ -79,6 +79,24 @@ describe('armarPromptCorreccion', () => {
     expect(p.split('\n')[0]).toBe(ADVERTENCIA_EVIDENCIA);
     expect(p.endsWith('</evidencia_no_confiable>')).toBe(true);
   });
+  it('controles bidi a la vista en recurso, evidencia y campos (caso del FRONT); con miles en la evidencia cabe igual', () => {
+    const rlo = String.fromCharCode(0x202e), rlm = String.fromCharCode(0x200f);
+    const p = armarPromptCorreccion({ ...base, resource: `src/${rlo}gnp.js`, evidence: { path: `src/${rlo}gnp.js`, ua: `x${rlm}y` } },
+      { ...campos, contexto: `Mira src/${rlo}gnp.js.` }, FECHA);
+    expect(p).toContain('<evidencia_no_confiable recurso="src/⟨U+202E⟩gnp.js">');
+    expect(p).toContain('"path":"src/⟨U+202E⟩gnp.js"');
+    expect(p).toContain('"ua":"x⟨U+200F⟩y"');
+    expect(p).toContain('Mira src/⟨U+202E⟩gnp.js.');
+    expect(p.includes(rlo) || p.includes(rlm)).toBe(false);
+    const hostil = armarPromptCorreccion({ ...base, resource: rlo.repeat(300), evidence: { ua: rlo.repeat(5000) } },
+      { ...campos, prompt_para_tu_ia: rlo.repeat(3000) }, FECHA);
+    expect(hostil.length).toBeLessThanOrEqual(MAX_PROMPT_GUARDADO);
+    expect(hostil.includes(rlo)).toBe(false);
+    expect(hostil.trimEnd().endsWith('</evidencia_no_confiable>')).toBe(true);
+    expect(() => FixPromptResponse.parse({ prompt: conSabor(hostil, 'claude_code'), model: 'template', cached: false,
+      injection_flags: [] })).not.toThrow();
+  });
+
   it('con la plantilla de cada hallazgo de los fixtures cabe en FixPromptResponse', () => {
     for (const f of fixtures.findings) {
       const p = conSabor(armarPromptCorreccion(f, plantillaCorreccion(f), FECHA), 'claude_code');

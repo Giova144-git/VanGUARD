@@ -4,6 +4,7 @@
 // <evidencia_no_confiable> con `<` y `>` escapados como fence(). Mismos bytes que el fixture de contracts (hallazgos.ts).
 import type { Severity } from '@vanguard/contracts';
 import { redact } from '../redact.ts';
+import { bidiAVista } from '../untrusted.ts';
 import { SEVERIDAD_ES } from './titles.ts';
 
 export { plantillaCorreccion } from './fix/index.ts';
@@ -34,9 +35,11 @@ function evidenciaCompacta(ev: unknown, max: number): string {
 /** `recurso` del cercado: sin comillas ni `<` `>`, en una línea y ≤ 300. */
 const recursoEtiqueta = (r: string) => String(r).replace(/["<>]/g, '').replace(/[\p{Cc}\u2028\u2029]+/gu, ' ').slice(0, 300);
 
+// Con los controles bidi a la vista (bidiAVista) sobre el texto entero: los recortes de abajo miden ya lo expandido. Las
+// marcas suman como mucho 140 caracteres (MAX_MARCAS_BIDI) y E15 tiene 200 de margen hasta el máximo del contrato.
 function render(f: HallazgoPrompt, c: CamposFix, fechaIso: string, evidencia: string): string {
   const sev = (SEVERIDAD_ES as Record<string, string>)[String(f.severity)] ?? String(f.severity);
-  return `${ADVERTENCIA_EVIDENCIA}
+  return bidiAVista(`${ADVERTENCIA_EVIDENCIA}
 
 **Corrección de seguridad · ${f.rule_id} · severidad ${sev}**
 > Generado por VanGUARD (officialvanguard.com) el ${fechaIso}. Revísalo antes de ejecutarlo.
@@ -60,7 +63,7 @@ ${c.prueba_de_aceptacion}
 
 <evidencia_no_confiable recurso="${recursoEtiqueta(f.resource)}">
 ${evidencia}
-</evidencia_no_confiable>`;
+</evidencia_no_confiable>`);
 }
 
 const cortar = (s: string, n: number) => (n <= 0 ? s : s.length > n + 1 ? s.slice(0, s.length - n - 1) + '…' : '…');

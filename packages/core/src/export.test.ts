@@ -74,6 +74,14 @@ describe('redactarParaExport', () => {
     expect(redactarParaExport(r, M)).toEqual(r);
   });
 
+  it('bidi: también las claves; con miles de controles, 20 marcas como mucho y el resto fuera (sin ×8 de CPU)', () => {
+    const rlo = String.fromCharCode(0x202e);
+    const r = redactarParaExport({ evidence: { [`/admin/${rlo}gnp.js`]: 12, ua: rlo.repeat(5000) + 'fin' } }, M);
+    expect(r.evidence).toEqual({ '/admin/⟨U+202E⟩gnp.js': 12, ua: '⟨U+202E⟩'.repeat(20) + 'fin' });
+    expect(redactarParaExport(r, M)).toEqual(r);
+    expect(ms(() => redactarParaExport({ t: rlo.repeat(12_000) }, M))).toBeLessThan(20);
+  });
+
   it('lineal con texto hostil (sin cuadráticos)', () => {
     const hostil = ['://'.repeat(4000), '/a'.repeat(6000), ':1'.repeat(6000) + ':', '+5'.repeat(6000), '1.'.repeat(6000)];
     for (const h of hostil) expect(ms(() => redactarParaExport({ t: h }, M))).toBeLessThan(150);

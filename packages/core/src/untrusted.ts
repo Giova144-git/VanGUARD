@@ -222,6 +222,20 @@ export function fence(origen: string, datos: unknown): { block: string; flags: s
 export const detectInjection = scanInjection;                                               // alias (S11 11.11–11.12)
 export const checkModelText = (texto: string, extraHosts: string[] = []) => checkFixPrompt(texto, extraHosts); // alias
 
+// ── Controles de dirección a la vista (Trojan Source, CVE-2021-42574) ───────────────────────────────────────────────
+// U+202A–202E, U+2066–2069, U+200E, U+200F y U+061C salen como «⟨U+202E⟩», con el mismo criterio que sinBidi del FRONT:
+// «src/<U+202E>gnp.js» ya no se lee «src/sj.png» en lo que copia el dueño para su IA. Las letras árabes o hebreas y los
+// emojis con ZWJ no se tocan. Idempotente: el marcador no lleva ningún control.
+const BIDI = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+// Solo las primeras MAX_MARCAS_BIDI de cada texto salen como marcador; las demás se quitan (invisibles igual, y sin ellas
+// tampoco reordenan nada). Así el texto crece como mucho 140 caracteres: con miles de controles, expandirlos todos ×8
+// antes del recorte multiplicaba la CPU de las pasadas de redacción del export (de ~6 a ~30 ms con 15 hallazgos hostiles).
+export const MAX_MARCAS_BIDI = 20;
+export function bidiAVista(s: string, max = MAX_MARCAS_BIDI): string {
+  let n = 0;
+  return s.replace(BIDI, (c) => (n++ < max ? `⟨U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}⟩` : ''));
+}
+
 // ── Markdown de export (S13 13.4) ────────────────────────────────────────────────────────────────────────────────
 /** Evidencia cercada para el Markdown: JSON con 2 espacios donde `<`, `>` y el acento grave van como \u003c, \u003e y
  *  \u0060 (solo pueden aparecer dentro de strings JSON, así que el JSON sigue siendo válido y no puede cerrar ni la

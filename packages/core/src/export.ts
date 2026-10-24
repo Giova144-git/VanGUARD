@@ -7,7 +7,7 @@ import { parseIp } from './ip.ts';
 import { redactForExport, type OpcionesExport } from './redact.ts';
 import { armarPromptCorreccion, plantillaCorreccion } from './templates/fix-prompt.ts';
 import { enCodigo, SEVERIDAD_ES } from './templates/titles.ts';
-import { escapeMdInline, fenceMd } from './untrusted.ts';
+import { bidiAVista, escapeMdInline, fenceMd } from './untrusted.ts';
 
 const ESQUEMA: VanguardExport['$schema'] = 'https://officialvanguard.com/api/schemas/vanguard-export.v1.json';
 /** Topes para caber en los 10 ms de CPU de Workers Free (A7), más bajos que los de S13 13.3 (500/100, y 100/50 tras su
@@ -47,12 +47,6 @@ const IPV4_LIBRE = new RegExp(`(?<![\\w.@])(?<![Vv]ersi[oó]n\\w{0,20}["']?\\s{0
 // opcional probaba cada posición del texto: ~20 µs por fix.text).
 const PISTA_V6 = /:[0-9a-f]{0,4}:/gi;
 const HEX_O_DOS_PUNTOS = /[0-9a-f:]/i;
-// Controles de dirección (Trojan Source, CVE-2021-42574) a la vista, igual que sinBidi del FRONT: «src/<U+202E>gnp.js» sale
-// «src/⟨U+202E⟩gnp.js» en el JSON y en el Markdown, y la IA que lo lea no ve «src/sj.png». Las letras árabes o hebreas
-// no se tocan. Va lo primero de cadena(): el tope de longitud de redactForExport cae ya sobre el texto expandido, y el
-// marcador no lleva nada que las pasadas de URL, teléfono o IP reconozcan.
-const BIDI = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
-const bidiVisible = (c: string) => `⟨U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}⟩`;
 
 const telefono = (t: string) => {
   const d = t.replace(/\D/g, '');
@@ -86,7 +80,7 @@ function ipv6Libres(t: string): string {
   return desde ? out + t.slice(desde) : t;
 }
 function cadena(s: string, clave: string, o: OpcionesExport): string {
-  let t = s.replace(BIDI, bidiVisible);
+  let t = bidiAVista(s);                                // primero: el tope de longitud cae ya sobre el texto expandido
   if (t.includes('://')) t = t.replace(URL_TRAMO, sinCola);
   if (t.includes('/') && (t.includes('?') || t.includes('#'))) t = t.replace(RUTA_TRAMO, '$1$2');
   if (CLAVE_TELEFONO.test(clave) && TELEFONO_SOLO.test(t)) t = telefono(t);
@@ -103,7 +97,8 @@ function previa(v: unknown, o: OpcionesExport, clave: string, prof: number): unk
   if (Array.isArray(v)) return v.map((x) => previa(x, o, clave, prof + 1));
   if (v && typeof v === 'object') {
     const out: Record<string, unknown> = {};
-    for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = previa(x, o, k, prof + 1);
+    // La clave también, a la vista: una evidencia {"/admin/<U+202E>gnp.js": 12} saldría cruda en el JSON y en el cercado.
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[bidiAVista(k)] = previa(x, o, k, prof + 1);
     return out;
   }
   return v;

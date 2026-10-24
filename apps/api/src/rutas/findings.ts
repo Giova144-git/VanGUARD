@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { Finding, FindingPatch, FindingStatus, FixPromptRequest, FixPromptResponse, Id, Module, Severity } from '@vanguard/contracts';
-import { armarPromptCorreccion, conSabor, plantillaCorreccion } from '@vanguard/core';
+import { armarPromptCorreccion, bidiAVista, conSabor, plantillaCorreccion } from '@vanguard/core';
 import { pedirFixPrompt } from '../ia/claude.ts';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
@@ -13,6 +13,7 @@ import { requireAdmin } from '../mw/admin.ts';
 // E13 · GET findings, E13b · GET findings/:id y E14 · PATCH findings/:id (S15 15.4). El texto de fix_prompt lo da E15.
 export const findings = new Hono<AppEnv>();
 
+const MAX_PROMPT = 12_000;                                                  // FixPromptResponse.prompt
 export const COLUMNAS_FINDING = 'id, module, rule_id, severity, confirmed, origin, title, resource, evidence, fix_prompt, fix_model, '
   + 'status, status_reason, suspected_injection, scan_run_id, connection_id, first_seen_at, last_seen_at, verified_at';
 
@@ -90,6 +91,9 @@ findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
     if (!b.success) throw new ApiError('invalid_body', 'Revisa los campos marcados', { field_errors: { flavor: ['Sabor no válido'] } });
     flavor = b.data.flavor;
   }
+  // Todo lo que sale va con su sabor y con los controles bidi a la vista (lo nuevo ya los trae así de armarPromptCorreccion;
+  // un fix_prompt guardado antes, no): «Copiar para mi IA» lo copia tal cual.
+  const entrega = (t: string) => bidiAVista(conSabor(t, flavor));
   const admin = db(c.env);
   const orgId = c.get('orgId');
   const { data: f, error } = await admin.from('findings')
@@ -98,23 +102,27 @@ findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
   if (error) throw new ApiError('internal', 'No pudimos leer el hallazgo');
   if (!f) throw new ApiError('not_found', 'Hallazgo no encontrado');
   const evidencia = (f.evidence ?? {}) as Record<string, unknown>;
+  const base = { rule_id: f.rule_id, severity: f.severity, resource: f.resource, evidence: evidencia, title: f.title };
+  const plantilla = () => armarPromptCorreccion(base, plantillaCorreccion(base));
   if (typeof f.fix_prompt === 'string' && f.fix_prompt) {
-    return c.json(FixPromptResponse.parse({ prompt: conSabor(f.fix_prompt, flavor), model: f.fix_model ?? 'template', cached: true,
-      injection_flags: [] }));
+    // Un prompt guardado antes de las marcas bidi puede pasar del máximo al expandirse (≤ 140 de más): entonces va la
+    // plantilla, con su cercado entero, en vez de cortarlo por el final.
+    const guardado = entrega(f.fix_prompt);
+    return c.json(FixPromptResponse.parse(guardado.length <= MAX_PROMPT
+      ? { prompt: guardado, model: f.fix_model ?? 'template', cached: true, injection_flags: [] }
+      : { prompt: entrega(plantilla()), model: 'template', cached: false, injection_flags: [] }));
   }
   const rol = c.get('role');
   if (c.get('isAnon') || (rol !== 'owner' && rol !== 'admin')) {
     throw new ApiError('forbidden', 'Este prompt todavía no está generado. Pídeselo a un administrador de la organización.');
   }
-  const base = { rule_id: f.rule_id, severity: f.severity, resource: f.resource, evidence: evidencia, title: f.title };
-  const plantilla = () => armarPromptCorreccion(base, plantillaCorreccion(base));
   const r = await pedirFixPrompt(c.env, { org_id: orgId, hallazgo: { rule_id: f.rule_id, severity: f.severity,
     confirmed: f.confirmed, title: f.title, resource: f.resource, module: f.module, evidence: evidencia } });
   if (!r.ok) {
-    if (r.code === 'budget') throw new ApiError('budget_exceeded', 'Llegaste al tope de IA de hoy. Te dejamos la corrección base.', { fallback_prompt: conSabor(plantilla(), flavor) });
-    if (r.code === 'disabled') throw new ApiError('ai_disabled', 'La IA está en pausa. Te dejamos la corrección base.', { fallback_prompt: conSabor(plantilla(), flavor) });
+    if (r.code === 'budget') throw new ApiError('budget_exceeded', 'Llegaste al tope de IA de hoy. Te dejamos la corrección base.', { fallback_prompt: entrega(plantilla()) });
+    if (r.code === 'disabled') throw new ApiError('ai_disabled', 'La IA está en pausa. Te dejamos la corrección base.', { fallback_prompt: entrega(plantilla()) });
     log('info', 'fix_prompt.plantilla', { rid: c.get('rid'), code: r.code, flags: r.injection_flags.length });
-    return c.json(FixPromptResponse.parse({ prompt: conSabor(plantilla(), flavor), model: 'template', cached: false,
+    return c.json(FixPromptResponse.parse({ prompt: entrega(plantilla()), model: 'template', cached: false,
       injection_flags: r.injection_flags }));
   }
   const prompt = armarPromptCorreccion(base, r.data);
@@ -122,8 +130,8 @@ findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
   if (eu) {
     // 23514 = el cable trampa vio un secreto en la salida: no se guarda ni se devuelve; va la plantilla.
     log('warn', 'fix_prompt.no_guardado', { rid: c.get('rid'), code: eu.code });
-    return c.json(FixPromptResponse.parse({ prompt: conSabor(plantilla(), flavor), model: 'template', cached: false,
+    return c.json(FixPromptResponse.parse({ prompt: entrega(plantilla()), model: 'template', cached: false,
       injection_flags: [...r.injection_flags, 'secreto'] }));
   }
-  return c.json(FixPromptResponse.parse({ prompt: conSabor(prompt, flavor), model: r.model, cached: false, injection_flags: r.injection_flags }));
+  return c.json(FixPromptResponse.parse({ prompt: entrega(prompt), model: r.model, cached: false, injection_flags: r.injection_flags }));
 });

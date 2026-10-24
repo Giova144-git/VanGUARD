@@ -56,6 +56,27 @@ describe('E15 · fix-prompt', () => {
     expect(ia.pedirFixPrompt).not.toHaveBeenCalled();
   });
 
+  it('caché guardada con controles bidi crudos → sale con ⟨U+XXXX⟩ (20 como mucho); si se pasa del máximo, va la plantilla', async () => {
+    const rlo = String.fromCharCode(0x202e);
+    fila = hallazgo({ fix_prompt: `# Corrige src/${rlo}gnp.js`, fix_model: 'claude-sonnet-5-5' });
+    const b = FixPromptResponse.parse(await (await post({ flavor: 'cursor' })).json());
+    expect(b).toMatchObject({ cached: true, model: 'claude-sonnet-5-5' });
+    expect(b.prompt).toContain('# Corrige src/⟨U+202E⟩gnp.js');
+    expect(b.prompt.includes(rlo)).toBe(false);
+    fila = hallazgo({ fix_prompt: 'a'.repeat(9000) + rlo.repeat(2800), fix_model: 'claude-sonnet-5-5' });
+    const c = FixPromptResponse.parse(await (await post({ flavor: 'claude_code' })).json());
+    expect(c.cached).toBe(true);
+    expect(c.prompt.split('⟨U+202E⟩').length - 1).toBe(20);
+    expect(c.prompt.includes(rlo)).toBe(false);
+    fila = hallazgo({ fix_prompt: 'a'.repeat(11_950) + rlo.repeat(20), fix_model: 'claude-sonnet-5-5' });
+    const r = await post({ flavor: 'claude_code' });
+    expect(r.status).toBe(200);
+    const d = FixPromptResponse.parse(await r.json());
+    expect(d).toMatchObject({ cached: false, model: 'template' });
+    expect(d.prompt.trimEnd().endsWith('</evidencia_no_confiable>')).toBe(true);
+    expect(ia.pedirFixPrompt).not.toHaveBeenCalled();
+  });
+
   it('viewer sin caché → 403 sin gastar IA', async () => {
     rol = 'viewer';
     expect((await post()).status).toBe(403);

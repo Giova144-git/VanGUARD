@@ -1,6 +1,9 @@
 // Las 8 pruebas de cripto de S05 05.12 (las 3 primeras literales). El material se genera en cada corrida: ningún secreto en el repo.
 import { describe, it, expect } from 'vitest';
-import { deriveKeys, seal, open, rewrap, fingerprint, b64, type SecretCtx } from './crypto.ts';
+import { CodeReviewSaved } from '@vanguard/contracts';
+import { deriveKeys, seal, open, rewrap, fingerprint, b64, newIngestSecret, newWebhookSecret,
+  type SecretCtx } from './crypto.ts';
+import { redact, redactString } from './redact.ts';
 const rnd = () => b64(crypto.getRandomValues(new Uint8Array(32)));
 const mk = (kid = 'v1') => deriveKeys({ kid, vaultKekB64: rnd(), kekPepperB64: rnd(), vaultFpB64: rnd(), fpPepperB64: rnd() });
 const A: SecretCtx = { orgId: 'org-a', connectionId: 'c1', provider: 'cloudflare', kind: 'read' };
@@ -46,5 +49,26 @@ describe('crypto', () => {
       .rejects.toThrow('CRYPTO_MATERIAL_BAD_LENGTH');
     await expect(deriveKeys({ kid: 'v1', vaultKekB64: rnd(), kekPepperB64: rnd(), vaultFpB64: rnd(), fpPepperB64: corto }))
       .rejects.toThrow('CRYPTO_MATERIAL_BAD_LENGTH');
+  });
+});
+
+describe('secretos de alta (vgi_ de ingesta, vgw_ del webhook de GitHub)', () => {
+  it('newWebhookSecret: vgw_ + 43 de base64url (256 bits), distinto cada vez y válido para CodeReviewSaved', () => {
+    const xs = Array.from({ length: 50 }, newWebhookSecret);
+    for (const s of xs) {
+      expect(s).toMatch(/^vgw_[A-Za-z0-9_-]{43}$/);
+      expect(CodeReviewSaved.shape.webhook_secret.safeParse(s).success).toBe(true);
+    }
+    expect(new Set(xs).size).toBe(xs.length);
+  });
+  it('newIngestSecret sigue igual: vgi_ + 43 de base64url', () => {
+    expect(newIngestSecret()).toMatch(/^vgi_[A-Za-z0-9_-]{43}$/);
+  });
+  it('redact tapa el secreto del webhook en texto libre y bajo cualquier clave', () => {
+    const s = newWebhookSecret();
+    const out = redactString(`secreto del hook: ${s} (no lo registres)`);
+    expect(out).not.toContain(s.slice(4));
+    expect(out).toContain('[REDACTADO:token]');
+    expect(JSON.stringify(redact({ webhook_secret: s, nota: `x ${s}` }))).not.toContain(s.slice(4));
   });
 });

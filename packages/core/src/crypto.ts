@@ -77,5 +77,10 @@ export function ctEqual(a: string, b: string): boolean {          // tiempo cons
   return d === 0;
 }
 export const last4 = (s: string) => { const t = s.trim(); return t.length >= 12 ? t.slice(-4) : ''; };
-export const newIngestSecret = () =>
-  'vgi_' + b64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+/** 32 bytes aleatorios en base64url sin relleno: 43 caracteres. */
+const aleatorio43 = () =>
+  b64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+export const newIngestSecret = () => 'vgi_' + aleatorio43();
+/** Secreto del webhook de GitHub de la revisión de código (E46): 'vgw_' + 32 bytes en base64url, 256 bits. Casa con
+ *  CodeReviewSaved.webhook_secret (/^vgw_[A-Za-z0-9_-]{43}$/) y redact.ts lo tapa. */
+export const newWebhookSecret = () => 'vgw_' + aleatorio43();

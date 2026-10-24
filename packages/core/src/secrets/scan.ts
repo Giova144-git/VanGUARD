@@ -33,7 +33,9 @@ export function rolJwt(tok: string): string | null {             // solo clasifi
 export type Coincidencia = { rule_id: ReglaSecretoId; valor: string; path: string; line: number; snippet: string; severity: Severity };
 
 const LOCKFILES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'composer.lock']);
-const EXT_BINARIA = /\.(png|jpe?g|gif|webp|avif|ico|bmp|pdf|zip|gz|tgz|bz2|7z|rar|woff2?|ttf|otf|eot|mp[34]|mov|webm|wasm|exe|dll|so|dylib|class|jar|bin|sqlite3?)$/i;
+/** Lo que no se escanea por extensión. También en revision/diff.ts: un binario con una de estas no corta la revisión, y
+ *  un TEXTO con una de estas sí (aquí se saltaría aunque git diga que es texto). */
+export const EXT_BINARIA = /\.(png|jpe?g|gif|webp|avif|ico|bmp|pdf|zip|gz|tgz|bz2|7z|rar|woff2?|ttf|otf|eot|mp[34]|mov|webm|wasm|exe|dll|so|dylib|class|jar|bin|sqlite3?)$/i;
 const nombre = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 /** Lockfiles fuera: sus hashes de integridad solo dan ruido (09.9). */
 export const esLockfile = (path: string) => LOCKFILES.has(nombre(path)) || nombre(path).endsWith('.lock');
@@ -119,6 +121,19 @@ function snippets(t: string, cs: readonly Cruda[], saltos: readonly number[]): s
   });
 }
 
+/** ¿Algún valor de una específica pisa [ini, fin)? Antes se comparaba cada genérica con todas las específicas del archivo
+ *  (`e.includes(valor) || valor.includes(e)`): con miles de cada en un mismo archivo (un diff de 512 KB) eran cientos de
+ *  ms. Lo que importa es el mismo sitio: un valor repetido en otro sitio también lo casa ahí la específica. Ordenadas por
+ *  inicio y con el fin máximo acumulado, cada genérica es una búsqueda binaria. Se arma al llegar la genérica, la última
+ *  regla: para entonces ya están todas las específicas del archivo. */
+function pisaEspecifica(es: readonly Cruda[]): (ini: number, fin: number) => boolean {
+  const orden = [...es].sort((a, b) => a.idx - b.idx);
+  const inicios = orden.map((c) => c.idx), finMax: number[] = [];
+  let m = -1;
+  for (const c of orden) finMax.push(m = Math.max(m, c.idx + c.valor.length));
+  return (ini, fin) => { const j = saltosAntes(inicios, fin); return j > 0 && (finMax[j - 1] ?? -1) > ini; };
+}
+
 /** (1) salta lockfiles y binarios; (2) cambia nuestros marcadores por un NUL; (3) prefiltro por clave; (4) matchAll;
  *  (5) validación. Línea = saltos de línea antes del valor + 1. */
 export function scanArchivo(path: string, texto: string): Coincidencia[] {
@@ -129,7 +144,7 @@ export function scanArchivo(path: string, texto: string): Coincidencia[] {
   const t = texto.replace(MARCADORES, '\0');
   let minus: string | undefined;
   const crudas: Cruda[] = [];
-  const especificos: string[] = [];
+  let pisa: ((ini: number, fin: number) => boolean) | undefined;
   for (const r of REGLAS_SECRETO) {
     // Prefiltro siempre en minúsculas: es solo un atajo, y la genérica no lleva la `i` (distingue mayúsculas por clases).
     const base = (minus ??= t.toLowerCase());
@@ -138,19 +153,20 @@ export function scanArchivo(path: string, texto: string): Coincidencia[] {
     for (const m of t.matchAll(r.re)) {
       const valor = m[r.grupo];
       if (!valor) continue;
-      // Genérica: el filtro compartido con redact (dígito, no JWT…) y fuera lo que ya dio una específica
-      // (`env.SUPABASE_SECRET_KEY`, `body.read_token.trim`, `actions_org_id_fkey`: falsos positivos de nuestro repo).
-      if (r.rule_id === 'CB_SECRET_GENERIC' && (!valorGenerico(valor) || especificos.some((e) => e.includes(valor) || valor.includes(e)))) continue;
+      const idx = (m.index ?? 0) + m[0].lastIndexOf(valor);
+      // Genérica: el filtro compartido con redact (dígito, no JWT…; fuera `env.SUPABASE_SECRET_KEY`,
+      // `body.read_token.trim`, `actions_org_id_fkey`: falsos positivos de nuestro repo) y fuera lo que en ese sitio ya
+      // dio una específica (`GITHUB_TOKEN=ghp_…`). crudas solo trae específicas cuando llega la genérica.
+      if (r.rule_id === 'CB_SECRET_GENERIC'
+        && (!valorGenerico(valor) || (pisa ??= pisaEspecifica(crudas))(idx, idx + valor.length))) continue;
       const severity = validar(r, valor, m);
       if (!severity) continue;
-      const idx = (m.index ?? 0) + m[0].lastIndexOf(valor);
       let fin = idx + primeraLinea(valor).length;
       // La cola entera del valor (más de 150 car., contraseña con símbolos, hasta la comilla de cierre si va entre
       // comillas): el marcador no deja en claro el resto. hasta crece en cada coincidencia, así que cada carácter de cola
       // se mira una vez; las comillas, como mucho 256 car. por valor.
       if (r.rule_id === 'CB_SECRET_GENERIC') fin = hasta = Math.max(finColaGenerica(t, Math.max(fin, hasta)), finComillas(t, idx, fin));
       crudas.push({ rule_id: r.rule_id, valor, idx, fin, severity });
-      if (r.rule_id !== 'CB_SECRET_GENERIC') especificos.push(valor);
     }
   }
   if (!crudas.length) return [];
@@ -168,6 +184,9 @@ export type OpcionesSecretos = {
   huella?: (valor: string) => Promise<string> | string;
   /** Prefijo del `resource` para el ZIP: `zip:<filename>/` (09.11). */
   prefijo?: string;
+  /** Baja a low el secreto que solo aparece en rutas de prueba. Por defecto true (la auditoría). La revisión de código
+   *  pasa false: allí la ruta la elige quien empuja y solo la genérica baja (asignaciones/revision-codigo.md §2.4). */
+  rebajarPruebas?: boolean;
 };
 export type ResultadoSecretos = {
   hallazgos: BorradorCodebase[];
@@ -200,7 +219,8 @@ const recortarIzq = (s: string, max: number) => (s.length > max ? '…' + s.slic
 /** Ubicación principal primero: archivos que no son `.env*` antes que `.env*`; luego path y línea. */
 const porUbicacion = (a: { path: string; line: number }, b: { path: string; line: number }) =>
   Number(ES_ENV.test(a.path)) - Number(ES_ENV.test(b.path)) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || a.line - b.line;
-const recurso = (prefijo: string, s: string) => recortarIzq(prefijo + s, RESOURCE_MAX);
+/** `resource` de un hallazgo: prefijo + `ruta[:línea]`, recortado por la izquierda a 300 car. (también revision/diff.ts). */
+export const recurso = (prefijo: string, s: string) => recortarIzq(prefijo + s, RESOURCE_MAX);
 
 export async function escanearSecretos(archivos: readonly ArchivoTexto[], opts: OpcionesSecretos = {}): Promise<ResultadoSecretos> {
   const grupos = new Map<string, { cs: Coincidencia[]; huella?: string }>();
@@ -227,7 +247,10 @@ export async function escanearSecretos(archivos: readonly ArchivoTexto[], opts: 
     const evidence: CodebaseEvidence = { path: p.path, line: p.line, preview: enmascarar(p.valor, p.rule_id), snippet: p.snippet, ubicaciones };
     if (huella && /^[0-9a-f]{8}/i.test(huella)) evidence.fingerprint_short = huella.slice(0, 8).toLowerCase();
     if (enPruebas) evidence.en_pruebas = true;
-    hallazgos.push({ module: 'codebase', rule_id: p.rule_id, severity: enPruebas ? 'low' : p.severity, confirmed: true, origin: 'rule',
+    // Sin rebajarPruebas, una clave live en `pagos.test.ts` sigue critical; en_pruebas y el sufijo del título se quedan.
+    const baja = enPruebas && (opts.rebajarPruebas !== false || p.rule_id === 'CB_SECRET_GENERIC');
+    hallazgos.push({ module: 'codebase', rule_id: p.rule_id, severity: baja ? 'low' : p.severity, confirmed: true,
+      origin: 'rule',
       title: enPruebas ? unaLinea(tituloSecreto(p.rule_id, p.path), MAX_TITULO - EN_PRUEBAS.length) + EN_PRUEBAS : tituloSecreto(p.rule_id, p.path),
       resource, evidence, dedupe_input: resource });
     if (huella) huellas.set(huella, resource);

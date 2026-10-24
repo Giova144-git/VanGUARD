@@ -98,6 +98,28 @@ describe('cada regla de 09.9 dispara con su forma y no con la parecida', () => {
   });
   it('la genérica no repite lo que ya dio una específica', async () => {
     expect(await reglas('.env', `GITHUB_TOKEN=${T.ghp}\nSUPABASE_SECRET_KEY=${T.sbSecret}\n`)).toEqual(['CB_SECRET_GITHUB_PAT', 'CB_SECRET_SB_SECRET']);
+    // El mismo valor en otro sitio: allí también lo casa la específica (un hallazgo con dos ubicaciones, sin genérica).
+    const hs = await uno('.env', `GITHUB_TOKEN=${T.ghp}\nA=1\nOTRO_TOKEN=${T.ghp}\n`);
+    expect(hs.map((h) => [h.rule_id, h.evidence.ubicaciones?.map((u) => u.line)])).toEqual([['CB_SECRET_GITHUB_PAT', [1, 3]]]);
+  });
+  // Revisión de ataque (diff de 512 KB): cada genérica se comparaba con TODAS las específicas del archivo (cuadrático);
+  // 3 500 + 3 500 en 300 KB costaban ~300 ms frente a ~70 ms por separado.
+  it('lineal: miles de específicas y genéricas en un mismo archivo cuestan como por separado', () => {
+    const ALF = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const varia = (i: number, n: number) => {
+      let s = '', x = Math.imul(i + 1, 2654435761) >>> 0;
+      for (let k = 0; k < n; k++) { x = (Math.imul(x, 1103515245) + 12345) >>> 0; s += ALF[x % 62]; }
+      return s;
+    };
+    const N = 4000, stripe = 'sk' + '_live_';
+    const esp = Array.from({ length: N }, (_, i) => `a = "${stripe}${varia(i, 30)}"`);
+    const gen = Array.from({ length: N }, (_, i) => `api_key = "${varia(i + 99_999, 9)}9${varia(i + 5, 20)}"`);
+    const mezcla = esp.flatMap((l, i) => [l, gen[i]!]).join('\n');
+    expect(scanArchivo('src/x.ts', mezcla)).toHaveLength(2 * N);
+    const mejor = (f: () => void) => Math.min(...[0, 1, 2].map(() => { const t0 = performance.now(); f(); return performance.now() - t0; }));
+    const junto = mejor(() => scanArchivo('src/x.ts', mezcla));
+    const aparte = mejor(() => { scanArchivo('src/a.ts', esp.join('\n')); scanArchivo('src/b.ts', gen.join('\n')); });
+    expect(junto).toBeLessThan(2 * aparte + 50);
   });
 });
 
@@ -134,6 +156,15 @@ describe('qué archivos se miran', () => {
     expect(hs).toHaveLength(1);
     expect(hs[0]).toMatchObject({ severity: 'low', evidence: { en_pruebas: true } });
     expect(hs[0]!.title.endsWith('(en pruebas)')).toBe(true);
+  });
+  it('rebajarPruebas: false (revisión de código): las específicas no bajan, la genérica sí; en_pruebas se queda', async () => {
+    const a: ArchivoTexto = { path: 'src/pagos.test.ts',
+      content: `const k = "${T.stripe}";\nconst apiKey = "${T.generico}";\n` };
+    const sin = (await escanearSecretos([a], { rebajarPruebas: false })).hallazgos;
+    expect(sin.map((h) => [h.rule_id, h.severity, h.evidence.en_pruebas, h.title.endsWith(' (en pruebas)')]))
+      .toEqual([['CB_SECRET_STRIPE_LIVE', 'critical', true, true], ['CB_SECRET_GENERIC', 'low', true, true]]);
+    for (const opts of [{}, { rebajarPruebas: true }])                              // la auditoría no cambia
+      expect((await escanearSecretos([a], opts)).hallazgos.map((h) => h.severity)).toEqual(['low', 'low']);
   });
 });
 

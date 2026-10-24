@@ -2,8 +2,9 @@
 // de demo (M10 de §02.5.1), tope global de llamadas y escalamiento de voz (P1, S12 12.5).
 import { describe, expect, it } from 'vitest';
 import {
-  type ContactoAviso, ESTADOS_QUE_CUENTAN, type IncidenteAviso, MAX_LLAMADAS_INCIDENTE, planAvisos, planEscalamiento,
-  planNotifications, type Planned, TOPE_GLOBAL_LLAMADAS_HORA, TOPES_AVISOS, topesDeOrg,
+  type ContactoAviso, ESTADOS_QUE_CUENTAN, type IncidenteAviso, MAX_LLAMADAS_INCIDENTE, planAvisoRevision, planAvisos,
+  planEscalamiento, planNotifications, type Planned, superaUmbral, TOPE_GLOBAL_LLAMADAS_HORA, TOPES_AVISOS, TOPES_REVISION,
+  topesDeOrg, type UmbralAviso, umbralWhatsapp,
 } from './notify-plan.ts';
 
 const AHORA = new Date('2026-10-24T19:02:00.000Z');
@@ -178,5 +179,113 @@ describe('planEscalamiento (P1): critical a los 45 s, high a los 15 min de 07:00
       new Date('2026-10-24T14:04:59.000Z'))).toMatchObject({ motivo: 'temprano' });               // 14:59 min
     expect(planEscalamiento({ ...crit, severity: 'high' }, voz, 1, new Date('2026-10-24T14:00:00.000Z')))
       .toMatchObject({ motivo: 'tope_incidente' });
+  });
+});
+
+// ── Revisión de código (asignaciones/revision-codigo.md §5.1 y pruebas mínimas de B2 en §8.2) ─────────────────────
+describe('planAvisoRevision: umbral por canal, parcial, contactos, cupo propio y ventana de demo', () => {
+  const PREFS = { whatsapp: 'high', voice: 'critical' } as const;                 // los de por defecto
+  type Rev = { max: IncidenteAviso['severity'] | null; parcial: boolean };
+  const rev = (max: Rev['max'], parcial = false): Rev => ({ max, parcial });
+  const cupo = TOPES_REVISION.normal;
+  const p = (r: Rev, o: { prefs?: { whatsapp: UmbralAviso; voice: UmbralAviso }; c?: ContactoAviso[]; avisadas?: number;
+    fueraDeVentanaDemo?: boolean; vozDisponible?: boolean } = {}) => {
+    const x = planAvisoRevision(r, o.prefs ?? PREFS, o.c ?? C, o.avisadas ?? 0, cupo,
+      { fueraDeVentanaDemo: o.fueraDeVentanaDemo, vozDisponible: o.vozDisponible });
+    return { envios: corto(x.envios), voz: x.voz_pendiente, motivo: x.motivo };
+  };
+  const AMBOS = ['whatsapp:c1:code_review_v1:queued', 'whatsapp:c2:code_review_v1:queued'];
+
+  it('critical nuevo con los umbrales por defecto → code_review_v1 por WhatsApp a los dos y voz pendiente', () => {
+    expect(p(rev('critical'))).toEqual({ envios: AMBOS, voz: true, motivo: null });
+    expect(p(rev('high'))).toEqual({ envios: AMBOS, voz: false, motivo: null });
+    const x = planAvisoRevision(rev('critical'), PREFS, C, 0, cupo);
+    expect(x.envios.every((e) => e.channel === 'whatsapp' && !e.p1 && !e.skipped_cap)).toBe(true);   // la voz no genera filas
+  });
+  it('los dos umbrales en off → nada (bajo_umbral), aunque sea critical o parcial', () => {
+    const off = { whatsapp: 'off', voice: 'off' } as const;
+    expect(p(rev('critical'), { prefs: off })).toEqual({ envios: [], voz: false, motivo: 'bajo_umbral' });
+    expect(p(rev(null, true), { prefs: off })).toEqual({ envios: [], voz: false, motivo: 'bajo_umbral' });
+  });
+  it('por debajo del umbral → bajo_umbral; sin nuevos y completa → sin_hallazgos', () => {
+    expect(p(rev('medium'))).toEqual({ envios: [], voz: false, motivo: 'bajo_umbral' });
+    expect(p(rev('info'), { prefs: { whatsapp: 'low', voice: 'off' } }).motivo).toBe('bajo_umbral');
+    expect(p(rev('low'), { prefs: { whatsapp: 'low', voice: 'off' } }).envios).toEqual(AMBOS);
+    expect(p(rev(null))).toEqual({ envios: [], voz: false, motivo: 'sin_hallazgos' });
+  });
+  it('solo el umbral de voz: sin llamadas (vozDisponible false) sale por WhatsApp; con llamadas, no por WhatsApp', () => {
+    const soloVoz = { whatsapp: 'off', voice: 'critical' } as const;
+    expect(p(rev('critical'), { prefs: soloVoz })).toEqual({ envios: AMBOS, voz: true, motivo: null });
+    expect(p(rev('critical'), { prefs: soloVoz, vozDisponible: false }).envios).toEqual(AMBOS);
+    expect(p(rev('high'), { prefs: soloVoz })).toEqual({ envios: [], voz: false, motivo: 'bajo_umbral' });
+    expect(p(rev('critical'), { prefs: soloVoz, vozDisponible: true }).envios).toEqual([]);
+    // WhatsApp desde critical y llamada desde medium: sin llamadas manda el más permisivo.
+    expect(p(rev('medium'), { prefs: { whatsapp: 'critical', voice: 'medium' } }))
+      .toEqual({ envios: AMBOS, voz: true, motivo: null });
+  });
+  it('parcial sin nuevos → envío (revisión incompleta), sin voz pendiente', () => {
+    expect(p(rev(null, true))).toEqual({ envios: AMBOS, voz: false, motivo: null });
+    expect(p(rev('low', true))).toEqual({ envios: AMBOS, voz: false, motivo: null });
+  });
+  it('contacto sin verificar → failed/unverified; el resto sale', () => {
+    const c: ContactoAviso[] = [{ ...C[1]!, verified_at: null }, C[0]!, C[2]!];
+    expect(p(rev('critical'), { c }).envios)
+      .toEqual(['whatsapp:c1:code_review_v1:failed:unverified', 'whatsapp:c2:code_review_v1:queued']);
+  });
+  it('cupo propio: 3 revisiones avisadas en la hora → todo skipped_cap/cap (el sin verificar sigue unverified)', () => {
+    expect(TOPES_REVISION).toEqual({ normal: 3, demo: 10 });
+    expect(p(rev('critical'), { avisadas: 2 }).envios).toEqual(AMBOS);             // cuenta revisiones, no filas
+    expect(p(rev('critical'), { avisadas: 3 }).envios)
+      .toEqual(['whatsapp:c1:code_review_v1:skipped_cap:cap', 'whatsapp:c2:code_review_v1:skipped_cap:cap']);
+    const c: ContactoAviso[] = [{ ...C[1]!, verified_at: null }, C[0]!];
+    expect(p(rev('critical'), { c, avisadas: 3 }).envios)
+      .toEqual(['whatsapp:c1:code_review_v1:failed:unverified', 'whatsapp:c2:code_review_v1:skipped_cap:cap']);
+    expect(corto(planAvisoRevision(rev('critical'), PREFS, C, 9, TOPES_REVISION.demo).envios)).toEqual(AMBOS);
+  });
+  it('fuera de la ventana de demo → todo skipped_cap/fuera_de_ventana_demo, también el sin verificar', () => {
+    const c: ContactoAviso[] = [{ ...C[1]!, verified_at: null }, C[0]!];
+    expect(p(rev('critical'), { c, avisadas: 3, fueraDeVentanaDemo: true }).envios).toEqual([
+      'whatsapp:c1:code_review_v1:skipped_cap:fuera_de_ventana_demo',
+      'whatsapp:c2:code_review_v1:skipped_cap:fuera_de_ventana_demo']);
+  });
+  it('sin contactos con WhatsApp → sin_contactos; como mucho 5, por prioridad', () => {
+    expect(p(rev('critical'), { c: [C[2]!] })).toEqual({ envios: [], voz: true, motivo: 'sin_contactos' });
+    expect(p(rev('critical'), { c: [] })).toEqual({ envios: [], voz: false, motivo: 'sin_contactos' });
+    const siete: ContactoAviso[] = [7, 3, 5, 1, 6, 2, 4]
+      .map((n) => ({ id: 'w' + n, whatsapp: true, voice: false, priority: n, verified_at: V }));
+    expect(p(rev('high'), { c: siete }).envios.map((e) => e.split(':')[1])).toEqual(['w1', 'w2', 'w3', 'w4', 'w5']);
+  });
+  it('voz pendiente solo con un contacto con voz verificado', () => {
+    const c: ContactoAviso[] = [{ ...C[1]!, verified_at: null }, C[0]!, { ...C[2]!, verified_at: null }];
+    expect(p(rev('critical'), { c }).voz).toBe(false);
+  });
+  it('no muta la lista de contactos y el orden no depende del de entrada', () => {
+    const copia = JSON.stringify(C);
+    expect(p(rev('critical'))).toEqual(p(rev('critical'), { c: [...C].reverse() }));
+    expect(JSON.stringify(C)).toBe(copia);
+  });
+});
+
+describe('umbralWhatsapp y superaUmbral', () => {
+  it('sin llamadas: el más permisivo de los dos; off solo si los dos lo son', () => {
+    const casos: Array<[UmbralAviso, UmbralAviso, UmbralAviso]> = [
+      ['off', 'off', 'off'], ['off', 'critical', 'critical'], ['high', 'off', 'high'], ['high', 'critical', 'high'],
+      ['critical', 'medium', 'medium'], ['low', 'critical', 'low'], ['medium', 'medium', 'medium'],
+    ];
+    for (const [whatsapp, voice, esperado] of casos)
+      expect(umbralWhatsapp({ whatsapp, voice }, false), `${whatsapp}/${voice}`).toBe(esperado);
+  });
+  it('con llamadas: el de WhatsApp tal cual', () => {
+    expect(umbralWhatsapp({ whatsapp: 'off', voice: 'critical' }, true)).toBe('off');
+    expect(umbralWhatsapp({ whatsapp: 'high', voice: 'low' }, true)).toBe('high');
+    expect(umbralWhatsapp({ whatsapp: 'off', voice: 'off' }, true)).toBe('off');
+  });
+  it('superaUmbral compara con rank y nunca pasa con null u off', () => {
+    expect(superaUmbral('high', 'high')).toBe(true);
+    expect(superaUmbral('critical', 'medium')).toBe(true);
+    expect(superaUmbral('medium', 'high')).toBe(false);
+    expect(superaUmbral('info', 'low')).toBe(false);
+    expect(superaUmbral(null, 'low')).toBe(false);
+    expect(superaUmbral('critical', 'off')).toBe(false);
   });
 });

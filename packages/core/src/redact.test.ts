@@ -28,6 +28,7 @@ const CASOS: Array<[string, string, string]> = [
   ['vgk_', 'vg' + 'k_' + R(40), '[REDACTADO:token]'],
   ['vgi_', 'vg' + 'i_' + R(43), '[REDACTADO:token]'],
   ['vgs_', 'vg' + 's_' + R(32), '[REDACTADO:token]'],
+  ['vgw_', 'vg' + 'w_' + R(43), '[REDACTADO:token]'],                       // secreto del webhook de la revisión de código
   ['cfk_', 'cf' + 'k_' + R(40), '[REDACTADO:cloudflare]'],
   ['cfut_', 'cf' + 'ut_' + R(40), '[REDACTADO:cloudflare]'],
   ['cfat_', 'cf' + 'at_' + R(40), '[REDACTADO:cloudflare]'],

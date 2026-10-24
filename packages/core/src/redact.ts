@@ -21,7 +21,9 @@ export const PATRONES_SECRETO: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bsk-[A-Za-z0-9_-]{20,}/g, '[REDACTADO:api_key]'],                                        // `sk-…` genérico (S15 15.11)
   [/\b(?:sk|rk)_live_[A-Za-z0-9]{10,}/g, '[REDACTADO:api_key]'],
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, '[REDACTADO:token]'],                                  // Slack (S13)
-  [/\bvg[iks]_[A-Za-z0-9_-]{20,}/g, '[REDACTADO:token]'],                                     // vgi_ ingesta (S05), vgk_ MCP, vgs_ (S13)
+  // vgi_ ingesta (S05), vgk_ MCP, vgs_ (S13), vgw_ webhook de GitHub (revisión de código). El cable trampa (edge.ts,
+  // comun.ts, looks_like_secret) sigue sin vgw_ a propósito: revision-codigo.md §11 VIA-1.
+  [/\bvg[iksw]_[A-Za-z0-9_-]{20,}/g, '[REDACTADO:token]'],
   [/\bcf(?:k|ut|at)_[A-Za-z0-9_-]{30,}/g, '[REDACTADO:cloudflare]'],                             // formatos nuevos de Cloudflare (token-formats)
   [/\bAIza[0-9A-Za-z_-]{35}\b/g, '[REDACTADO:api_key]'],                                       // clave de Google (PSI, S10)
   // Parámetros con secreto, dentro o fuera de una URL: key= de PSI, ?token=, &access_token=, client_secret=, sig=…

@@ -23,6 +23,7 @@ export * from './lockfiles/npm.ts';
 export * from './lockfiles/composer.ts';
 export * from './secrets/rules.ts';
 export * from './secrets/entropy.ts';
+export * from './revision/diff.ts';
 export * from './ip.ts';
 export * from './stack.ts';
 
@@ -31,6 +32,7 @@ export * from './templates/titles.ts';
 export * from './templates/summary.ts';
 export * from './templates/fix-prompt.ts';
 export * from './templates/whatsapp.ts';
+export * from './templates/revision.ts';
 
 // Motor en vivo (S15 15.9, S12 12.2–12.6): reglas del borde, decisión del incidente y plan de avisos; sin red ni base.
 export * from './engine/edge.ts';

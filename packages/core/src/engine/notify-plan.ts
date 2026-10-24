@@ -8,7 +8,9 @@ import { partesCaracas } from '../templates/whatsapp.ts';
 import { subioSeveridad, type Tormenta } from './incidente.ts';
 
 // Un template distinto por motivo: notifications es único por (incident_id, channel, recipient_masked, template).
-export type PlantillaAviso = 'incident_v1' | 'incident_up_v1' | 'reopened_v1' | 'storm_v1' | 'call_v1';
+// code_review_v1: el texto fijo de la revisión de código (templates/revision.ts), único por (code_review_id, channel,
+// recipient_masked).
+export type PlantillaAviso = 'incident_v1' | 'incident_up_v1' | 'reopened_v1' | 'storm_v1' | 'call_v1' | 'code_review_v1';
 export type CanalAviso = 'whatsapp' | 'voice';
 export type IncidenteAviso = {
   severity: Severity; prev_severity: Severity | null; is_new: boolean; reopened: boolean; muted_until: string | null;
@@ -96,6 +98,53 @@ export function planAvisos(i: IncidenteAviso, contacts: readonly ContactoAviso[]
 export function planNotifications(i: IncidenteAviso, contacts: readonly ContactoAviso[], used1h: UsoAvisos, caps: TopesAvisos,
   storm: Tormenta, now = new Date(), o: OpcionesPlan = {}): Planned[] {
   return planAvisos(i, contacts, used1h, caps, storm, now, o).envios;
+}
+
+// ── Revisión de código (asignaciones/revision-codigo.md §5, §5.1): umbral por canal de la org, cupo propio y texto fijo.
+// No pasa por planAvisos: aquel fija el umbral en high y no lee preferencias, y su tormenta (incidentes high/critical de
+// los últimos 2 min) podría degradar a storm_v1 el aviso de un ataque si alguien empuja durante la demo. ──────────────
+/** Severidad mínima de un hallazgo NUEVO para avisar por un canal; 'off' = nunca por ese canal. */
+export type UmbralAviso = Severity | 'off';
+export const superaUmbral = (s: Severity | null, u: UmbralAviso): boolean => s !== null && u !== 'off' && rank(s) >= rank(u);
+/** Umbral efectivo de WhatsApp: sin llamadas, el más permisivo de los dos ('off' solo si los dos lo son). Quien eligió
+ *  «llámame en crítico» y «WhatsApp: nunca» se entera por WhatsApp mientras no haya llamadas. */
+export function umbralWhatsapp(p: { whatsapp: UmbralAviso; voice: UmbralAviso }, vozDisponible: boolean): UmbralAviso {
+  if (vozDisponible || p.voice === 'off') return p.whatsapp;
+  if (p.whatsapp === 'off') return p.voice;
+  return rank(p.voice) < rank(p.whatsapp) ? p.voice : p.whatsapp;
+}
+/** Cupo propio de la revisión: revisiones avisadas por org y hora, aparte de TOPES_AVISOS. */
+export const TOPES_REVISION: Readonly<{ normal: number; demo: number }> = Object.freeze({ normal: 3, demo: 10 });
+const MAX_CONTACTOS_REVISION = 5;                 // como E26
+export type MotivoSinAvisoRevision = 'sin_hallazgos' | 'bajo_umbral' | 'sin_contactos';
+export type PlanAvisoRevision = { envios: Planned[]; voz_pendiente: boolean; motivo: MotivoSinAvisoRevision | null };
+const filaRevision = (c: ContactoAviso, status: Planned['status'], error: ErrorAviso | null): Planned => ({
+  channel: 'whatsapp', contact_id: c.id, template: 'code_review_v1', status, error,
+  skipped_cap: status === 'skipped_cap', p1: false,
+});
+
+/** Revisión de código: plantilla code_review_v1 por WhatsApp a cada contacto con whatsapp (por prioridad, ≤ 5). Hay
+ *  envío si la peor severidad nueva pasa el umbral efectivo o si la revisión es parcial y ese umbral no es 'off' (un push
+ *  grande no pasa en silencio). Por envío, el mismo orden que planAvisos: ventana de demo → sin verificar → cupo. El cupo
+ *  cuenta revisiones, no filas: `avisadas1h` = revisiones avisadas en la última hora. La voz no genera envíos, solo
+ *  voz_pendiente (pasa el umbral de voz y hay algún contacto con voz verificado). Motivo sin envíos: sin_hallazgos (sin
+ *  nuevos y completa), bajo_umbral (nuevos o parcial que no pasan el umbral) o sin_contactos. */
+export function planAvisoRevision(r: { max: Severity | null; parcial: boolean },
+  prefs: { whatsapp: UmbralAviso; voice: UmbralAviso }, contacts: readonly ContactoAviso[], avisadas1h: number, cupo: number,
+  o: { fueraDeVentanaDemo?: boolean; vozDisponible?: boolean } = {}): PlanAvisoRevision {
+  const umbral = umbralWhatsapp(prefs, o.vozDisponible ?? false);
+  const voz_pendiente = superaUmbral(r.max, prefs.voice) && contacts.some((c) => c.voice && verificado(c));
+  const no = (motivo: MotivoSinAvisoRevision): PlanAvisoRevision => ({ envios: [], voz_pendiente, motivo });
+  if (r.max === null && !r.parcial) return no('sin_hallazgos');
+  if (!superaUmbral(r.max, umbral) && !(r.parcial && umbral !== 'off')) return no('bajo_umbral');
+  const conWa = [...contacts].sort((a, b) => a.priority - b.priority).filter((c) => c.whatsapp)   // filtrar ANTES de recortar
+    .slice(0, MAX_CONTACTOS_REVISION);
+  if (!conWa.length) return no('sin_contactos');
+  const sinCupo = avisadas1h >= cupo;
+  const envios = conWa.map((c) => o.fueraDeVentanaDemo ? filaRevision(c, 'skipped_cap', 'fuera_de_ventana_demo')
+    : !verificado(c) ? filaRevision(c, 'failed', 'unverified')
+    : sinCupo ? filaRevision(c, 'skipped_cap', 'cap') : filaRevision(c, 'queued', null));
+  return { envios, voz_pendiente, motivo: null };
 }
 
 // ── Escalamiento de voz (P1, S12 12.5): critical sin ack → siguiente contacto con voz a los 45 s; high sin ack → a los

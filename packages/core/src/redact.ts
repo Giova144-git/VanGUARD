@@ -4,15 +4,18 @@ import { CARACTER_VALOR, MARCADORES, REGLA_GENERICA, finColaGenerica, finComilla
 
 const CLAVE_SECRETA = /(^|[_-])(token|secret|password|passwd|pat|apikey|api[_-]key|authorization|cookie|sealed|wdek|ivk|private[_-]key)($|[_-])/i;
 const CLAVE_TELEFONO = /^(phone|phone_e164|to|from|to_number|wa_id|recipient)$/i;
-// Cuadráticos con muchas cabeceras sin pie o muchos `postgres://u:` sin @ (como en HEAD): tapaClaves usa su versión lineal
-// y redactString, tapaPrivadas y tapaConexiones (las mismas coincidencias que la regex, comprobado).
+// Cuadráticos con muchas cabeceras sin pie, muchos `postgres://u:` sin @ o `eyJ-` repetido (como en HEAD): tapaClaves
+// usa su versión lineal y redactString, tapaPrivadas, tapaConexiones y tapaJwt (las mismas coincidencias que la regex,
+// comprobado).
 const PRIVADA = /-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/g;
 const CONEXION = /\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/([^:\s/@]+):[^@\s]+@/g;
+// JWT con la firma opcional, como el cable trampa de S05. Si cambia, cambia también siguienteJwt (su versión lineal).
+const JWT = /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g;
 /** [patrón con bandera g, reemplazo]. Lo que el reemplazo conserva va al principio, en grupos ($1, $2) o en el grupo 1 si
  *  es literal (Bearer): tapaClaves calcula con eso qué tapa cada uno. */
 export const PATRONES_SECRETO: ReadonlyArray<readonly [RegExp, string]> = [
   [PRIVADA, '[REDACTADO:clave_privada]'],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g, '[REDACTADO:jwt]'],      // firma opcional, como el cable trampa de S05
+  [JWT, '[REDACTADO:jwt]'],
   [/\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{16,}/g, '[REDACTADO:supabase]'],
   [/\bsbp_[A-Za-z0-9_]{20,}/g, '[REDACTADO:supabase]'],
   [/\bgithub_pat_\w{20,}/g, '[REDACTADO:github]'],
@@ -107,9 +110,10 @@ function tapadoPorHead(t: string): { patrones: Tramo[]; queries: Tramo[] } {
   const out: Tramo[] = [], queries: Tramo[] = [];
   let w = t;
   for (const [re, rep] of PATRONES_SECRETO) {
-    if (re === PRIVADA || re === CONEXION) {
+    if (re === PRIVADA || re === CONEXION || re === JWT) {
       const ts: Tramo[] = [];
-      if (re === PRIVADA) {
+      if (re === JWT) for (let j = siguienteJwt(w, 0); j; j = siguienteJwt(w, j[1])) ts.push(j);   // sin nada que conservar
+      else if (re === PRIVADA) {
         const pies = [...w.matchAll(PRIVADA_FIN)];
         let pie = 0, finBloque = 0;
         for (const m of w.matchAll(PRIVADA_INI)) {
@@ -270,6 +274,39 @@ export function tapaPrivadas(t: string): string {
   }
   return out + t.slice(desde);
 }
+// JWT en lineal: la regex es cuadrática con `eyJ-` o `-eyJ` repetidos (560 ms con 48 KB en redactString, y tapaClaves la
+// corría dos veces o más), porque hay un \b tras cada guion y cada inicio recorre el tramo de [A-Za-z0-9_-] entero buscando
+// el punto. El tramo no lleva el punto: acaba en el mismo sitio para todos los \beyJ que caen en él, y lo que sigue (la
+// cola .eyJ…{10,}. y la firma) es el mismo para todos. Basta el primero desde donde acabó la coincidencia anterior (el que
+// deja más sitio a los 10) y la cola una vez por tramo; si no casa, no casa ninguno del tramo. Cada tramo se mira como
+// tramo y como el de una cola, nada más. checkFixPrompt lo usa como test() lineal del JWT.
+const JWT_INI = /\beyJ/g, TRAMO_JWT = /[A-Za-z0-9_-]*/y, COLA_JWT = /\.eyJ[A-Za-z0-9_-]{10,}\./y;
+/** La coincidencia de JWT que da su exec con lastIndex = desde, como [inicio, fin], o null. */
+export function siguienteJwt(t: string, desde: number): Tramo | null {
+  for (JWT_INI.lastIndex = desde; ;) {
+    const m = JWT_INI.exec(t);
+    if (!m) return null;
+    TRAMO_JWT.lastIndex = m.index + 3;
+    TRAMO_JWT.test(t);
+    const fin = TRAMO_JWT.lastIndex;
+    COLA_JWT.lastIndex = fin;
+    if (fin - m.index - 3 >= 10 && COLA_JWT.test(t)) {
+      TRAMO_JWT.lastIndex = COLA_JWT.lastIndex;
+      TRAMO_JWT.test(t);                                                    // la firma, hasta el fin de su tramo
+      return [m.index, TRAMO_JWT.lastIndex];
+    }
+    JWT_INI.lastIndex = fin;                                                // los demás inicios del tramo, saltados
+  }
+}
+/** JWT con su reemplazo: lo que da t.replace(JWT, '[REDACTADO:jwt]'), cada búsqueda desde el fin de la anterior. */
+function tapaJwt(t: string): string {
+  let out = '', desde = 0;
+  for (let j = siguienteJwt(t, 0); j; j = siguienteJwt(t, j[1])) {
+    out += t.slice(desde, j[0]) + '[REDACTADO:jwt]';
+    desde = j[1];
+  }
+  return out + t.slice(desde);
+}
 // Atajo de CPU: las capas de asignación necesitan una de sus palabras clave y un separador (: = %3D &#61;); la mayoría de
 // los strings de una evidencia no traen las dos cosas y se ahorran seis pasadas.
 const PISTA_CLAVE = /access|api|auth|cred|key|pass|secret|token/i, PISTA_SEP = /[:=%&]/;
@@ -279,7 +316,8 @@ export function redactString(entrada: string): string {
   const s = conClave ? tapaClaves(entrada) : entrada;
   let fin = s;
   for (const [re, rep] of PATRONES_SECRETO)
-    fin = re === PRIVADA ? tapaPrivadas(fin) : re === CONEXION ? tapaConexiones(fin) : fin.replace(re, rep);
+    fin = re === PRIVADA ? tapaPrivadas(fin) : re === CONEXION ? tapaConexiones(fin) : re === JWT ? tapaJwt(fin)
+      : fin.replace(re, rep);
   fin = fin.replace(URL_QUERY, (u: string, url: string, q?: string) => (q === undefined ? u : url));   // query strings fuera
   fin = tapaCorreos(fin).replace(/\+\d{8,15}\b/g, tel);                                      // a***@dominio y +58•••4567
   // Otra vez si algo cambió: a***@ y +58••• alargan un valor corto, un patrón puede llevarse el `example` que descartaba

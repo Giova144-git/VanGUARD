@@ -1,7 +1,7 @@
 // Casos de S15 15.11/15.13, S06 06.5 y S13 13.2 para redact.ts. Todo valor con forma de secreto se construye en tiempo
 // de ejecución (S06 06.4, prueba 10): ningún escáner, ni el nuestro ni el del jurado, encuentra literales en el repo.
 import { describe, it, expect } from 'vitest';
-import { redact, redactString, redactForExport, PATRONES_SECRETO } from './redact.ts';
+import { redact, redactString, redactForExport, PATRONES_SECRETO, siguienteJwt } from './redact.ts';
 import { REGLAS_SECRETO, REGLA_GENERICA, valorGenerico } from './secrets/rules.ts';
 import { scanArchivo } from './secrets/scan.ts';
 
@@ -656,7 +656,9 @@ describe('parámetros y cabeceras con secreto fuera de una URL (prueba de fuga, 
 // cuadrático, y las dos medidas sufren la misma carga de la suite. Antes, con 24 KB: el correo 250 ms (`+5`, `1.`: un \b
 // en cada posición de un tramo largo de [\w.+-]; 25 veces la CPU de un Worker), `postgres://u:` sin @ 20 ms y las
 // cabeceras de clave privada sin pie 1 ms (85 ms con 192 KB). De 192 a 384 KB: con menos, el margen tapaba la privada.
-describe('lineal por proporción con texto hostil: correo, cadena de conexión y clave privada', () => {
+// El JWT, con 48 KB: `eyJ-` y `-eyJ` 560 ms (un \b tras cada guion y el tramo entero desde cada uno) y, tras una clave con
+// un valor que tapar, 1,7 s (tapaClaves corría la regex dos veces más); ahora menos de 2 ms.
+describe('lineal por proporción con texto hostil: correo, cadena de conexión, clave privada y JWT', () => {
   /** Mejor de 3 corridas, en ms (como export.test.ts): un coste cuadrático tumba la prueba; el ruido, no. */
   const ms = (f: () => unknown) => {
     let mejor = Infinity;
@@ -681,6 +683,26 @@ describe('lineal por proporción con texto hostil: correo, cadena de conexión y
   it('cadenas de conexión sin @ y cabeceras de clave privada sin pie', () => lineal(['postgres://u:', 'postgresql://a.b:',
     'redis://u:', 'mongodb+srv://a:', PRIVADA, '-----BEGIN RSA ' + 'PRIVATE KEY-----END ',
     (n) => 'key=x ' + largo('postgres://u:', n), (n) => `token=${R(20)} ` + largo(PRIVADA, n)]));
+  const J = 'ey' + 'J', D = '0123456789';
+  it('JWT: un \\b tras cada guion y tramos sin punto, solos y tras una clave (pasan también por tapaClaves)', () => lineal([
+    J + '-', '-' + J, J + D + '-', J + 'a.' + J, J + D + '.' + J + '-', J + '1-', (n) => largo(J + '-', n) + '.' + J,
+    (n) => 'api_key=a1b2c3d4e5f6g7h8 ' + largo(J + '-', n), (n) => 'token=' + largo(J + D + '-', n),
+    (n) => 'Authorization: Bearer abc123def456ghi789 ' + largo('-' + J, n), (n) => `token=${R(20)} ` + largo(J + '1-', n),
+    (n) => `password=${R(24)} ` + largo(J + D + '.' + J + '-', n), (n) => largo(`${J}${D}.${J}${D}.firma `, n)]));
+  // siguienteJwt es la regex del JWT en lineal: si alguien cambia la regex y no ella, esto lo dice.
+  it('siguienteJwt da las coincidencias de la regex del JWT (propiedad con semilla)', () => {
+    const jwt = PATRONES_SECRETO.find(([, rep]) => rep === '[REDACTADO:jwt]')![0];
+    const TROZOS = [J, 'ey', 'J', '-', '_', 'a', '1', '.', ' ', 'é', 'a'.repeat(9), D, '.' + J + D + '.'];
+    let x = 0x2545f491;
+    const azar = (n: number) => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) % n; };
+    for (let i = 0; i < 20_000; i++) {
+      let s = '';
+      for (let j = azar(14); j > 0; j--) s += TROZOS[azar(TROZOS.length)]!;
+      const regex = [...s.matchAll(jwt)].map((m) => [m.index, m.index + m[0].length]), lineales: number[][] = [];
+      for (let m = siguienteJwt(s, 0); m; m = siguienteJwt(s, m[1])) lineales.push([...m]);
+      expect(lineales, s).toEqual(regex);
+    }
+  });
   // Lo que hacían las regex en los casos raros, fijado (contra la versión anterior, corpus y fuzz dieron lo mismo en todo).
   it('mismo resultado que las regex: correo que empieza donde acabó otro, dominio sin letras, pies solapados, sin @', () => {
     expect(redactString('a@b.com.x@y.org')).toBe('a***@b.com.***@y.org');
@@ -692,5 +714,18 @@ describe('lineal por proporción con texto hostil: correo, cadena de conexión y
       .toBe('[REDACTADO:clave_privada]');
     expect(redactString('postgres://u:p postgres://u:q@h redis://a:b:c@d mysql://x:y'))
       .toBe('postgres://u:p postgres://u:[REDACTADO]@h redis://a:[REDACTADO]@d mysql://x:y');
+  });
+  it('mismo resultado que la regex del JWT: el primer eyJ del tramo, los 10 justos, \\b, sin firma y encadenados', () => {
+    const tal = (t: string) => expect(redactString(t), t).toBe(t);
+    expect(redactString(`x-${J}${D}.${J}${D}.firma y`)).toBe('x-[REDACTADO:jwt] y');
+    expect(redactString(`${J}-${J}${D}.${J}${D}.`)).toBe('[REDACTADO:jwt]');                  // desde el primer eyJ
+    for (const t of [`abc-${J}012345678.${J}${D}.`, `${J}${D}.${J}012345678.`, `${J}${D}.${J}${D}`, `${J}${D}.-${J}${D}.`])
+      tal(t);                                                         // 9 en vez de 10, sin el punto final o con -eyJ
+    expect(redactString(`${J}${D}.${J}${D}.${J}${D}.${J}${D}.`)).toBe(`[REDACTADO:jwt].${J}${D}.`);
+    expect(redactString(`${J}${D}..${J}${D}.${J}${D}.`)).toBe(`${J}${D}..[REDACTADO:jwt]`);
+    expect(redactString(`a${J}${D}.${J}${D}. _${J}${D}.${J}${D}. é${J}${D}.${J}${D}.x`))     // sin \b tras a y _; tras é sí
+      .toBe(`a${J}${D}.${J}${D}. _${J}${D}.${J}${D}. é[REDACTADO:jwt]`);
+    expect(redactString(`Bearer ${J}${D}.${J}${D}.`)).toBe('Bearer [REDACTADO:jwt]');
+    expect(redactString(`token=${J}${D}.${J}${D}.sig ${J}-`)).toBe(`token=[REDACTADO] ${J}-`);
   });
 });

@@ -3,7 +3,7 @@
 // Todo texto se mira en NFKC (＜system＞ → <system>, U+00A0 → espacio) y, además, sin invisibles y sin comentarios /* */:
 // una bandera salta si casa en cualquiera de las tres variantes. Cuantificadores acotados: nada cuadrático (las regex que
 // lo eran con texto hostil se prueban con su versión lineal, que da la misma respuesta: LINEAL, SECRETO y CONEXION).
-import { CONEXION_LINEAL, PATRONES_SECRETO, tapaPrivadas } from './redact.ts';
+import { CONEXION_LINEAL, PATRONES_SECRETO, siguienteJwt, tapaPrivadas } from './redact.ts';
 export const CANARIO = 'VG-CANARIO-3F9A71C2';                                              // S11 capa 8
 export const DOMINIOS_OK = ['supabase.com', 'cloudflare.com', 'github.com', 'osv.dev', 'nvd.nist.gov']; // canónicas §8
 const BORRADO = new RegExp([
@@ -115,26 +115,12 @@ const negado = (antes: string) => { const n = NEGADO.exec(antes); return !!n && 
 // Bandera `secreto`: los formatos de proveedor (los que redact() tapa con [REDACTADO:tipo]) con sus flags. Los genéricos
 // (Authorization/Bearer, param=valor, cadena de conexión) solo cuentan si el valor parece un secreto real: un prompt de
 // corrección legítimo dice «Authorization: Bearer $SUPABASE_ANON_KEY», «API_KEY=tu_clave» o «Bearer <TU_TOKEN>».
-// Dos formatos son cuadráticos como regex con texto hostil y van con su test() en lineal: la clave privada, con
-// tapaPrivadas de redact.ts (cabeceras sin pie; tapa algo si y solo si la regex casa), y el JWT, con hayJwt (`eyJ-`
-// repetido: un \b tras cada guion y el tramo de [\w-] entero desde cada uno; 0,6 s con 48 KB). Si cambia la regex del JWT,
-// deja de casar con JWT y se vuelve a ella.
+// Dos formatos son cuadráticos como regex con texto hostil y van con su test() en lineal, con las piezas de redact.ts: la
+// clave privada, con tapaPrivadas (cabeceras sin pie; tapa algo si y solo si la regex casa), y el JWT, con siguienteJwt
+// (`eyJ-` repetido: un \b tras cada guion y el tramo de [\w-] entero desde cada uno; 0,6 s con 48 KB). Si cambia la regex
+// del JWT, deja de casar con JWT y se vuelve a ella.
 const JWT = String.raw`\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*`;
-const JWT_INI = /\beyJ/g, TRAMO_JWT = /[A-Za-z0-9_-]*/y, COLA_JWT = /\.eyJ[A-Za-z0-9_-]{10,}\./y;
-/** El tramo de [\w-] no lleva el punto: acaba en el mismo sitio para todos los \beyJ que caen en él. Basta el primero
- *  (el que deja más sitio a los 10) y la cola una vez por tramo. */
-function hayJwt(v: string): boolean {
-  for (JWT_INI.lastIndex = 0; ;) {
-    const m = JWT_INI.exec(v);
-    if (!m) return false;
-    TRAMO_JWT.lastIndex = m.index + 3;
-    TRAMO_JWT.test(v);
-    const fin = TRAMO_JWT.lastIndex;
-    COLA_JWT.lastIndex = fin;
-    if (fin - m.index - 3 >= 10 && COLA_JWT.test(v)) return true;
-    JWT_INI.lastIndex = fin;                                                // los demás inicios del tramo, saltados
-  }
-}
+const hayJwt = (v: string) => siguienteJwt(v, 0) !== null;
 const SECRETO: ReadonlyArray<(v: string) => boolean> = PATRONES_SECRETO.filter(([, rep]) => rep.startsWith('[REDACTADO:'))
   .map(([re, rep]) => {
     if (rep === '[REDACTADO:clave_privada]') return (v: string) => tapaPrivadas(v) !== v;

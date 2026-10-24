@@ -1,0 +1,27 @@
+# apps/api/.dev.vars · solo NOMBRES (valores vacíos a propósito). Giovanni copia aquí el bloque de apps/api del
+# .env de la raíz; ningún chat de IA lee .dev.vars. Formato y origen de cada valor: catálogo de .env.example (§03.6).
+VG_ENV=local
+APP_ORIGIN=http://localhost:5173
+VG_VERSION=
+SUPABASE_URL=
+SUPABASE_SECRET_KEY=
+VG_KEK_PEPPER=
+VG_FP_PEPPER=
+ANTHROPIC_API_KEY=
+IA_CORTE=
+TEST_USER_A_PASSWORD=
+TEST_USER_B_PASSWORD=
+KAPSO_API_KEY=
+KAPSO_PHONE_NUMBER_ID=
+KAPSO_WABA_ID=
+KAPSO_WEBHOOK_SECRET=
+ELEVENLABS_API_KEY=
+ELEVENLABS_AGENT_ID=
+ELEVENLABS_PHONE_NUMBER_ID=
+ELEVENLABS_WEBHOOK_SECRET=
+TWILIO_ACCOUNT_SID=
+TWILIO_API_KEY=
+TWILIO_API_SECRET=
+TWILIO_FROM=
+PSI_API_KEY=
+VG_EDGE_SECRET=

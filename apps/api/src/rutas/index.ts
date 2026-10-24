@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.ts';
+import { actions } from './actions.ts';
 import { connections } from './connections.ts';
 import { contacts } from './contacts.ts';
 import { demo } from './demo.ts';
@@ -32,5 +33,6 @@ rutas.route('/', contacts);
 rutas.route('/', notifications);
 rutas.route('/', traffic);
 rutas.route('/', incidents);
+rutas.route('/', actions);
 rutas.route('/', wiki);
 rutas.route('/', exportRuta);

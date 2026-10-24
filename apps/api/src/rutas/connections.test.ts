@@ -335,15 +335,67 @@ describe('E7, E9 y E10', () => {
     expect(otra.status).toBe(404);
   });
 
-  it('E10: un token de acciones con bloqueos vigentes → 409 y no borra', async () => {
-    tabla = (op) => {
-      if (op.table === 'connections' && op.action === 'select') return { data: fila({ provider: 'cloudflare', kind: 'action' }) };
-      if (op.table === 'actions') return { count: 1 };
-      return undefined;
-    };
-    const r = await app.request(`https://officialvanguard.com/api/orgs/${ORG}/connections/${CONN}`,
-      { method: 'DELETE', headers: { authorization: 'Bearer ana' } }, envDoble().env);
-    expect(r.status).toBe(409);
-    expect(doble.ops.some((o) => o.action === 'delete')).toBe(false);
+  describe('E10 con un token de acciones y bloqueos executed (§05.8)', () => {
+    const PROD = { VG_ENV: 'production' as const, APP_ORIGIN: 'https://officialvanguard.com' };
+    const REF = 'f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6';
+    let bloqueos: Record<string, unknown>[];
+    let enCurso: Record<string, unknown>[];
+    beforeEach(() => {
+      bloqueos = [{ id: 'a1', org_id: ORG, provider_ref: REF, previous: { connection_id: CONN, zone_id: ZONA, existed: false } }];
+      enCurso = [];
+      tabla = (op) => {
+        if (op.table === 'connections' && op.action === 'select') return { data: fila({ provider: 'cloudflare', kind: 'action', meta: { zone_id: ZONA } }) };
+        if (op.table === 'actions' && op.action === 'select') return { data: eqDe(op, 'status') === 'proposed' ? enCurso : bloqueos };
+        return undefined;
+      };
+      cred.withSecret.mockImplementation(async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn(CF_ACCIONES));
+    });
+    const borrar = (env: Partial<CloudflareBindings> = PROD) => app.request(`https://officialvanguard.com/api/orgs/${ORG}/connections/${CONN}`,
+      { method: 'DELETE', headers: { authorization: 'Bearer ana' } }, envDoble(env).env);
+
+    it('primero deshace sus bloqueos (DELETE de la regla, undone) y luego borra la conexión → 204', async () => {
+      const r = await borrar();
+      expect(r.status).toBe(204);
+      const sel = doble.ops.find((o) => o.table === 'actions' && o.action === 'select')!;
+      expect([eqDe(sel, 'org_id'), eqDe(sel, 'status'), eqDe(sel, 'previous->>connection_id')]).toEqual([ORG, 'executed', CONN]);
+      expect(cred.withSecret.mock.calls[0]![2]).toEqual({ orgId: ORG, connectionId: CONN, provider: 'cloudflare', kind: 'action' });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect([url, init.method]).toEqual([`https://api.cloudflare.com/client/v4/zones/${ZONA}/firewall/access_rules/rules/${REF}`, 'DELETE']);
+      const undone = doble.ops.find((o) => o.table === 'actions' && o.action === 'update')!;
+      expect(undone.payload).toMatchObject({ status: 'undone' });
+      const borrado = doble.ops.find((o) => o.action === 'delete')!;
+      expect(doble.ops.indexOf(undone)).toBeLessThan(doble.ops.indexOf(borrado));
+    });
+
+    it('si un bloqueo no se puede retirar (Cloudflare 403 o caído) → 409 y no borra nada', async () => {
+      for (const status of [403, 503]) {
+        fetchMock.mockImplementation(async () => new Response('{}', { status }));
+        const r = await borrar();
+        expect(r.status).toBe(409);
+        expect((await error(r)).message).toBe('Hay bloqueos activos que no pudimos retirar');
+      }
+      expect(doble.ops.some((o) => o.action === 'delete')).toBe(false);
+    });
+
+    it('un bloqueo aplicándose ahora (proposed de < 2 min) → 409 block_in_progress sin tocar Cloudflare ni borrar', async () => {
+      enCurso = [{ id: 'a9' }];
+      bloqueos = [];
+      const r = await borrar();
+      expect([r.status, (await error(r)).details?.reason]).toEqual([409, 'block_in_progress']);
+      const q = doble.ops.find((o) => o.table === 'actions' && eqDe(o, 'status') === 'proposed')!;
+      expect(eqDe(q, 'org_id')).toBe(ORG);
+      expect(q.filters.some(([c, op]) => c === 'created_at' && op === 'gte')).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(doble.ops.some((o) => o.action === 'delete')).toBe(false);
+    });
+
+    it('fuera del host de producción con bloqueos → 409 sin tocar Cloudflare ni borrar; sin bloqueos borra igual', async () => {
+      const r = await borrar({});
+      expect(r.status).toBe(409);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(doble.ops.some((o) => o.action === 'delete')).toBe(false);
+      bloqueos = [];
+      expect((await borrar({})).status).toBe(204);
+    });
   });
 });

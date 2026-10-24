@@ -30,6 +30,7 @@ let recientes: Fila[];
 let storms: number;
 let errorQueued: { code: string } | null;
 let errorApprovals: { code: string } | null;
+let conexionAccion: Resp;
 let doble: ReturnType<typeof dbDoble>;
 let fetchMock: ReturnType<typeof vi.fn>;
 let logs: { mock: { calls: unknown[][] } };
@@ -50,8 +51,10 @@ beforeEach(() => {
   storms = 0;
   errorQueued = null;
   errorApprovals = null;
+  conexionAccion = { data: [] };            // sin Modo blindaje: la alerta no lleva «Bloquear IP»
   doble = dbDoble({
     tabla: (op: Op): Resp | undefined => {
+      if (op.table === 'connections') return conexionAccion;
       if (op.table === 'incidents' && op.action === 'select' && op.single) {
         return { data: eqDe(op, 'id') === INC && eqDe(op, 'org_id') === ORG ? incidente : null };
       }
@@ -276,5 +279,62 @@ describe('despachador · cuándo no avisa', () => {
     estado.client = { from: () => { throw new Error('boom'); } };
     await expect(avisar()).resolves.toBeUndefined();
     expect(lineas()).toContain('"despacho.error"');
+  });
+});
+
+describe('despachador · botón «Bloquear IP» (§12.6)', () => {
+  const botones = () => enviados().map((m) => m.interactive.action.buttons.map((b) => b.reply));
+  const consultaConexion = () => doble.ops.find((o) => o.table === 'connections');
+
+  it('CF_ con resource ip:<ip> y conexión Cloudflare action activa → tercer botón blk y su fila block_ip (etapa proponer)', async () => {
+    conexionAccion = { data: [{ id: 'conn-accion' }] };
+    await avisar();
+    const q = consultaConexion()!;
+    expect([eqDe(q, 'org_id'), eqDe(q, 'provider'), eqDe(q, 'kind'), eqDe(q, 'status')]).toEqual([ORG, 'cloudflare', 'action', 'active']);
+    const aprob = de('approvals', 'insert').flatMap((o) => o.payload as Fila[]);
+    expect(aprob).toHaveLength(6);
+    for (const bs of botones()) {
+      expect(bs.map((b) => b.title)).toEqual(['Lo estoy viendo', 'Silenciar 1 h', 'Bloquear IP']);
+      const blk = parsearBoton(bs[2]!.id)!;
+      expect([blk.accion, blk.codigo]).toEqual(['blk', 'A1F3C9']);
+      // En approvals solo el sha256 del nonce del botón, con su tipo, su etapa y la IP del incidente.
+      const hash = `\\x${await sha256Hex(blk.nonce)}`;
+      const fila = aprob.find((a) => a.nonce_hash === hash);
+      expect(fila).toMatchObject({ action_kind: 'block_ip', channel: 'whatsapp', incident_id: INC,
+        params: { etapa: 'proponer', target: IP, incident_id: INC } });
+    }
+    expect(lineas()).not.toContain(IP);
+  });
+
+  it('sin conexión action activa (o si su lectura falla) → solo ack y snz', async () => {
+    await avisar();
+    expect(botones().every((bs) => bs.length === 2)).toBe(true);
+    conexionAccion = { error: { code: '57014' } };
+    fetchMock.mockClear();
+    doble.ops.length = 0;
+    await avisar();
+    expect(botones().every((bs) => bs.length === 2)).toBe(true);
+  });
+
+  it('IP de Cloudflare o de documentación (E20 la rechazaría) → ni botón blk ni consulta de la conexión', async () => {
+    conexionAccion = { data: [{ id: 'conn-accion' }] };
+    for (const ip of [['104', '16', '0', '9'].join('.'), ['203', '0', '113', '7'].join('.'), ['2606', '4700', '', '1111'].join(':')]) {
+      incidente = { ...incidente, resource: `ip:${ip}`, details: { ...(incidente.details as Fila), ip } };
+      fetchMock.mockClear();
+      doble.ops.length = 0;
+      await avisar();
+      expect(consultaConexion()).toBeUndefined();
+      expect(botones().length).toBeGreaterThan(0);
+      expect(botones().every((bs) => bs.length === 2)).toBe(true);
+    }
+  });
+
+  it('incidente que no es de Cloudflare o sin ip: en resource → ni botón ni consulta de la conexión', async () => {
+    conexionAccion = { data: [{ id: 'conn-accion' }] };
+    incidente = { ...incidente, rule_ids: ['SB_CPU_HIGH'], resource: 'supabase:abcdefghijklmnopqrst:db', details: { servicio: 'tienda' } };
+    await avisar();
+    expect(consultaConexion()).toBeUndefined();
+    expect(botones().every((bs) => bs.length === 2)).toBe(true);
+    expect(de('approvals', 'insert').flatMap((o) => o.payload as Fila[]).some((a) => a.action_kind === 'block_ip')).toBe(false);
   });
 });

@@ -1,9 +1,11 @@
 import { Severity, type Module } from '@vanguard/contracts';
 import {
-  botonesAlerta, ESTADOS_QUE_CUENTAN, estadoTormenta, fueraDeVentanaDemo, mensajeIncidente, moduloDeRegla, planAvisos,
-  textoTormenta, topesDeOrg, TORMENTA_VENTANA_MS, type ContactoAviso, type IncidenteAviso, type Planned, type Tormenta,
+  botonesAlerta, ESTADOS_QUE_CUENTAN, estadoTormenta, fueraDeVentanaDemo, ipCanonica, mensajeIncidente, moduloDeRegla,
+  ofreceBloqueo, planAvisos, simularBloqueo, textoTormenta, topesDeOrg, TORMENTA_VENTANA_MS, type ContactoAviso,
+  type IncidenteAviso, type Planned, type Tormenta,
 } from '@vanguard/core';
 import { filasBotones, nuevoNonce } from '../actions/approvals.ts';
+import { RANGOS_CLOUDFLARE } from '../actions/block-ip.ts';
 import { db } from '../lib/db.ts';
 import { log } from '../lib/log.ts';
 import {
@@ -16,7 +18,9 @@ import {
 // escribe y se envía. Por cada WhatsApp: fila queued ANTES de enviar (el unique da 23505 si ya se avisó y entonces no
 // sale nada), una fila de approvals por botón con sha256(nonce), el interactivo por Kapso y cierre a sent | failed.
 // Lo que no sale (tope, ventana de demo, sin verificar) deja su fila con status y error y no llama a Kapso. La voz es
-// P1: sus entradas del plan se ignoran sin fila. Subpeticiones: 5–7 de lectura + ~4 por WhatsApp enviado.
+// P1: sus entradas del plan se ignoran sin fila. Subpeticiones: 5–8 de lectura + ~4 por WhatsApp enviado.
+// Tercer botón blk «Bloquear IP» (§12.6): solo si el incidente es CF_ con resource ip:<ip> bloqueable y la org tiene una
+// conexión Cloudflare kind:'action' activa (no se ofrece lo que no se puede hacer); su canje lo hace canjearBotonBloqueo (E31).
 
 type Obj = Record<string, unknown>;
 type Cliente = ReturnType<typeof db>;
@@ -93,7 +97,11 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
   }
 
   const desde2m = new Date(ahora - TORMENTA_VENTANA_MS).toISOString();
-  const [c, o, u, t] = await Promise.all([
+  // La consulta de la conexión de acciones solo se gasta si el incidente admite el botón blk y E20 aceptaría su IP (ni
+  // privada, ni de documentación, ni de Cloudflare; own_ip no aplica al botón).
+  const ipIncidente = ofreceBloqueo(inc, true) ? ipCanonica(inc.resource.slice(3)) : null;
+  const ipBloqueo = ipIncidente && simularBloqueo(ipIncidente, { zona: '-', cloudflare: RANGOS_CLOUDFLARE }).ok ? ipIncidente : null;
+  const [c, o, u, t, accion] = await Promise.all([
     admin.from('contacts').select('id, phone_e164, whatsapp, voice, priority, verified_at')
       .eq('org_id', orgId).order('priority').limit(10),
     admin.from('orgs').select('is_demo').eq('id', orgId).maybeSingle(),
@@ -102,6 +110,7 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
       .gte('created_at', new Date(ahora - 3600_000).toISOString()).in('status', ESTADOS_CUENTAN),
     // Tormenta: incidentes de la org con started_at en los últimos 2 min (incidents no tiene created_at), este incluido.
     admin.from('incidents').select('rule_ids', { count: 'exact' }).eq('org_id', orgId).gte('started_at', desde2m).limit(50),
+    ipBloqueo ? hayConexionAccion(admin, orgId, rid) : Promise.resolve(false),
   ]);
   if (c.error || o.error || u.error || t.error || !o.data) {
     // Sin el uso de la hora no se puede aplicar el tope: no se envía nada.
@@ -139,7 +148,8 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     const m = moduloDeRegla(Array.isArray(ids) && typeof ids[0] === 'string' ? ids[0] : undefined);
     if (m) porModulo[m] = (porModulo[m] ?? 0) + 1;
   }
-  const ctx: Despacho = { env, admin, orgId, incidentId, inc, rid, ahora, k, porModulo, notificado: inc.notified_at !== null };
+  const ctx: Despacho = { env, admin, orgId, incidentId, inc, rid, ahora, k, porModulo, notificado: inc.notified_at !== null,
+    ipBloqueo: accion ? ipBloqueo : null };
   // ≤ 5 contactos (E26): en paralelo, cada uno con su propia fila y su propio manejo de errores.
   await Promise.all(plan.envios.filter((p) => p.channel === 'whatsapp' && !p.p1).map(async (p) => {
     const contacto = porId.get(p.contact_id);
@@ -150,7 +160,16 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
 type Despacho = {
   env: CloudflareBindings; admin: Cliente; orgId: string; incidentId: string; inc: Incidente; rid: string; ahora: number;
   k: number; porModulo: Partial<Record<Module, number>>; notificado: boolean;
+  ipBloqueo: string | null;   // IP del botón blk, o null si no se ofrece
 };
+
+// ¿Tiene la org una conexión Cloudflare kind:'action' activa? Un error de lectura cuenta como no (sin botón blk).
+async function hayConexionAccion(admin: Cliente, orgId: string, rid: string): Promise<boolean> {
+  const { data, error } = await admin.from('connections').select('id').eq('org_id', orgId).eq('provider', 'cloudflare')
+    .eq('kind', 'action').eq('status', 'active').limit(1);
+  if (error) log('warn', 'despacho.conexion_accion_error', { rid, code: error.code ?? null });
+  return !error && Array.isArray(data) && data.length > 0;
+}
 
 async function enviarUno(d: Despacho, p: Planned, contacto: Contacto) {
   const { admin, orgId, rid } = d;
@@ -212,17 +231,17 @@ async function enviarUno(d: Despacho, p: Planned, contacto: Contacto) {
   }
 }
 
-// storm_v1: un texto sin botones. incident_v1 / incident_up_v1 / reopened_v1: el interactivo de §12.6 con ack y snz
-// (blk llega con E20), un nonce nuevo por botón y su sha256 en approvals. Si approvals falla, la alerta sale igual como
-// texto (la alerta importa más que los botones; el ack queda en la app).
+// storm_v1: un texto sin botones. incident_v1 / incident_up_v1 / reopened_v1: el interactivo de §12.6 con ack, snz y, si
+// aplica, blk, un nonce nuevo por botón y su sha256 en approvals. Si approvals falla, la alerta sale igual como texto (la
+// alerta importa más que los botones; el ack queda en la app).
 async function armarMensaje(d: Despacho, p: Planned, contacto: Contacto): Promise<MensajeKapso> {
   if (p.template === 'storm_v1') return cuerpoTexto(contacto.phone, textoTormenta(d.k, d.porModulo));
   if (p.template !== 'incident_v1' && p.template !== 'incident_up_v1' && p.template !== 'reopened_v1') throw new RangeError('PLANTILLA');
   const m = mensajeIncidente(d.inc, p.template);
-  const nonces = { ack: nuevoNonce(), snz: nuevoNonce() };
+  const nonces = { ack: nuevoNonce(), snz: nuevoNonce(), blk: d.ipBloqueo ? nuevoNonce() : null };
   const botones = botonesAlerta(d.inc.code, nonces);   // valida código y nonces antes de escribir nada
   const filas = await filasBotones({ org_id: d.orgId, incident_id: d.incidentId, recipient: contacto.phone.slice(1), nonces,
-    ahora: d.ahora });
+    target: d.ipBloqueo, ahora: d.ahora });
   const { error } = await d.admin.from('approvals').insert(filas);
   if (error) {
     log('warn', 'despacho.sin_botones', { rid: d.rid, incidente: d.inc.code, code: error.code ?? null });

@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0008i.
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0010.
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -980,6 +980,99 @@ export type Database = {
         }
         Relationships: []
       }
+      wiki_runs: {
+        Row: {
+          branch: string | null
+          cached: boolean
+          commit_sha: string | null
+          connection_id: string | null
+          cost_usd: number
+          created_at: string
+          doc: Json | null
+          error: string | null
+          est_usd: number | null
+          finished_at: string | null
+          huella: string | null
+          id: string
+          max_usd: number
+          models: Json
+          org_id: string
+          progress: number
+          repo_full_name: string
+          requested_by: string | null
+          started_at: string | null
+          state: Json | null
+          status: string
+          steps: Json
+          updated_at: string
+        }
+        Insert: {
+          branch?: string | null
+          cached?: boolean
+          commit_sha?: string | null
+          connection_id?: string | null
+          cost_usd?: number
+          created_at?: string
+          doc?: Json | null
+          error?: string | null
+          est_usd?: number | null
+          finished_at?: string | null
+          huella?: string | null
+          id?: string
+          max_usd?: number
+          models?: Json
+          org_id: string
+          progress?: number
+          repo_full_name: string
+          requested_by?: string | null
+          started_at?: string | null
+          state?: Json | null
+          status?: string
+          steps?: Json
+          updated_at?: string
+        }
+        Update: {
+          branch?: string | null
+          cached?: boolean
+          commit_sha?: string | null
+          connection_id?: string | null
+          cost_usd?: number
+          created_at?: string
+          doc?: Json | null
+          error?: string | null
+          est_usd?: number | null
+          finished_at?: string | null
+          huella?: string | null
+          id?: string
+          max_usd?: number
+          models?: Json
+          org_id?: string
+          progress?: number
+          repo_full_name?: string
+          requested_by?: string | null
+          started_at?: string | null
+          state?: Json | null
+          status?: string
+          steps?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wiki_runs_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wiki_runs_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       perf_points: {
@@ -1123,6 +1216,13 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      vg_resolve_idle_incidents: {
+        Args: { p_idle_seconds?: number; p_limit?: number }
+        Returns: {
+          id: string
+          org_id: string
+        }[]
+      }
       vg_rotate_secret: {
         Args: {
           p_capabilities: Json
@@ -1172,6 +1272,16 @@ export type Database = {
           severity: string
           status: string
         }[]
+      }
+      vg_wiki_avanzar: {
+        Args: {
+          p_n: number
+          p_org: string
+          p_patch: Json
+          p_run: string
+          p_state: Json
+        }
+        Returns: boolean
       }
     }
     Enums: {

@@ -5,8 +5,9 @@ import type { AiUsage, Contact } from '../api.ts';
 import { CONTACT_1, CONTACT_2 } from './ids.ts';
 
 // El de prioridad 1 recibe WhatsApp y la llamada de los críticos; el 2 solo WhatsApp (canónicas §9.3).
+// Ana verificada y Luis no: así la demo con fixtures enseña las dos chapas y el 409 unverified.
 export const contacts = [
-  { id: CONTACT_1, name: 'Ana', phone_e164: '+584120000001', whatsapp: true, voice: true, priority: 1, verified_at: null },
+  { id: CONTACT_1, name: 'Ana', phone_e164: '+584120000001', whatsapp: true, voice: true, priority: 1, verified_at: '2026-10-24T15:00:00.000Z' },
   { id: CONTACT_2, name: 'Luis', phone_e164: '+584120000002', whatsapp: true, voice: false, priority: 2, verified_at: null },
 ] satisfies Contact[];
 

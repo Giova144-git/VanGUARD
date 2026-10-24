@@ -427,6 +427,7 @@ las respuestas de WhatsApp.
 | Cruce hallazgo → página de la wiki en la interfaz | `paginaDeRuta` existe en `packages/deepwiki`, la web no lo usa |
 | Pruebas unitarias dentro del build de Workers Builds | Hoy el build corre lints y `tsc`; `pnpm test` se corre aparte |
 | Workflow `vg-scan` en vez de la cola | No se usa; `wrangler.jsonc` lo deja condicionado a una prueba de humo |
+| Adelgazar el bundle del Worker | Hoy ≈ 3,3 MB (≈ 0,63 MB gzip). El arranque lo domina parsear el script, no evaluar dependencias: cargar el SDK de Anthropic y deepwiki con `import()` no lo mejoró y se revirtió (12ca323). Pesos medidos: `@anthropic-ai/sdk` 946 KiB (36 %), `@supabase/auth-js` 351, `apps/api` 338, zod 183, core 147, storage-js 111, postgrest-js 108, realtime-js + phoenix 144, deepwiki 90. Palancas: `fetch` directo a `/v1/messages` en vez del SDK (≈ −900 KiB) y `postgrest-js` solo en vez de supabase-js entero (≈ −600 KiB; el servidor solo usa auth para `getClaims`). El Startup Time de Workers Builds varía 37–70 ms con el mismo bundle: medir con varias muestras |
 
 ---
 

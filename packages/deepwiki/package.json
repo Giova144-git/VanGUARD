@@ -1,0 +1,22 @@
+{
+  "name": "@vanguard/deepwiki",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit -p .",
+    "generate": "node --env-file-if-exists=../../.env src/cli.ts"
+  },
+  "dependencies": {
+    "@vanguard/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.12"
+  }
+}

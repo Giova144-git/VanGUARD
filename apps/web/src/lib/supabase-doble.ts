@@ -27,7 +27,8 @@ const fallo = (message: string, code: string) => ({ data: { session: null, user:
 export const tipoSesionFalsa = () => tipo;
 
 export function dobleSupabase() {
-  const canal = { on() { return canal; }, subscribe(cb?: (e: string) => void) { cb?.('CLOSED'); return canal; } };
+  // Canal mudo: nunca llama al callback, así suscribirOrg no reintenta y a los 10 s avisa que va por el respaldo.
+  const canal = { topic: 'realtime:fixtures', on() { return canal; }, subscribe() { return canal; } };
   return {
     auth: {
       getSession: async () => ({ data: { session: sesion() }, error: null }),
@@ -45,6 +46,7 @@ export function dobleSupabase() {
     },
     realtime: { setAuth: async () => {} },
     channel: () => canal,
+    getChannels: () => [],
     removeChannel: async () => 'ok',
   };
 }

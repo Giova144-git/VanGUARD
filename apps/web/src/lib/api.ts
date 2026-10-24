@@ -19,6 +19,8 @@ async function pedir(ruta: string, o: Opts<unknown>): Promise<Response> {
 }
 
 export async function api<T>(ruta: string, o: Opts<T> = {}): Promise<T> {
+  // Toda lectura y escritura de datos va por la API del mismo origen (decisión (a): el navegador no lee tablas).
+  if (!ruta.startsWith('/api/')) throw new ApiError(0, 'internal', 'Ruta fuera de /api');
   // Condición escrita en línea (no USA_FIXTURES importado) para que Vite la reemplace por literales y el
   // import dinámico desaparezca del build de producción: los fixtures no entran en el bundle (F-03).
   if (import.meta.env.MODE === 'fixtures' || import.meta.env.VITE_USE_FIXTURES === '1') {

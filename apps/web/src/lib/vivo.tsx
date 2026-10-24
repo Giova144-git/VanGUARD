@@ -9,13 +9,11 @@ const Ctx = createContext(false);
 export function VivoProvider({ org, children }: { org: string; children: ReactNode }) {
   const qc = useQueryClient();
   const [vivo, setVivo] = useState(false);
+  // suscribirOrg devuelve la limpieza al momento: con el doble montaje de StrictMode, la primera montura se cierra antes
+  // de crear su canal y la segunda se queda con uno propio.
   useEffect(() => {
-    let cerrar: (() => void) | undefined;
-    let activo = true;
-    suscribirOrg(org, qc, (v) => { if (activo) setVivo(v); })
-      .then((c) => { if (activo) cerrar = c; else c(); })
-      .catch(() => setVivo(false));
-    return () => { activo = false; cerrar?.(); };
+    setVivo(false);
+    return suscribirOrg(org, qc, setVivo);
   }, [org, qc]);
   return <Ctx.Provider value={vivo}>{children}</Ctx.Provider>;
 }

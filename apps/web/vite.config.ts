@@ -12,7 +12,9 @@ function cabecerasSeguridad(supabaseUrl: string): Plugin {
       const csp = [
         "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", // Recharts y shadcn Chart usan estilos en línea
         "img-src 'self' data: blob:", "font-src 'self'",
-        `connect-src 'self' https://${sb} wss://${sb}`,
+        // Solo Auth y Realtime: el navegador no habla con /rest/v1, /graphql/v1, /storage/v1 ni /functions/v1 (decisión (a)).
+        // Una ruta que termina en «/» casa por prefijo (CSP3).
+        `connect-src 'self' https://${sb}/auth/v1/ wss://${sb}/realtime/v1/`,
         "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'", "object-src 'none'",
       ].join('; ');
       // Cache-Control solo en bloques que no se solapan: si dos reglas ponen la misma cabecera, Cloudflare las une con coma.

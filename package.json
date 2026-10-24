@@ -1,0 +1,23 @@
+{
+  "name": "vanguard",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=24.12"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @vanguard/web dev",
+    "dev:api": "pnpm --filter @vanguard/api dev",
+    "dev:victima": "pnpm --filter @vanguard/victima dev",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "build": "pnpm --filter @vanguard/web build",
+    "lint:imports": "node scripts/lint-imports.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.12"
+  }
+}

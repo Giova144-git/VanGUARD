@@ -144,10 +144,11 @@ export const useWikiRuns = (org: string, repo: string | null, habilitado = true)
   queryFn: () => api(`/api/orgs/${org}/wiki/runs${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`, { esquema: z.array(WikiRun) }),
 });
 
-export const useWikiRun = (org: string, id: string | null) => useQuery({
+// `lento`: la corrida lleva 3 min sin avanzar (useEstancada); se sigue mirando, pero cada 15 s.
+export const useWikiRun = (org: string, id: string | null, lento = false) => useQuery({
   queryKey: ['org', org, 'wiki', 'run', id], enabled: esId(id), refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/wiki/runs/${id}`, { esquema: WikiRun }),
-  refetchInterval: (q) => !es404(q) && ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? 3_000 : false,
+  refetchInterval: (q) => !es404(q) && ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? (lento ? 15_000 : 3_000) : false,
 });
 
 export const useWikiDoc = (org: string, id: string | null, listo: boolean) => useQuery({

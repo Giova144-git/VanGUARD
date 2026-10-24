@@ -24,6 +24,7 @@ import { esId } from '@/lib/ids';
 import { cuando, miles, usd } from '@/lib/formato';
 import { Markdown } from '@/lib/markdown';
 import { comoMarkdown, consultaHistorial, topeUsd } from './texto';
+import { useEstancada } from './estancada';
 import { useEstimarWiki, useGenerarWiki } from '@/lib/mutaciones';
 import { extraerRepo, extraerRepoYRama } from '@/lib/pre-guardas';
 import { deMapa } from '@/lib/severidad';
@@ -84,7 +85,7 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado }: {   //
   );
 }
 
-function Progreso({ run, alReintentar, puedeEscribir }: { run: WikiRun; alReintentar: () => void; puedeEscribir: boolean }) {
+export function Progreso({ run, alReintentar, puedeEscribir, estancada }: { run: WikiRun; alReintentar: () => void; puedeEscribir: boolean; estancada: boolean }) {
   return (
     <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Progreso de la wiki">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
@@ -106,6 +107,13 @@ function Progreso({ run, alReintentar, puedeEscribir }: { run: WikiRun; alReinte
           </li>
         ))}
       </ol>
+      {estancada && run.status !== 'failed' ? (
+        // Neutro (L3): no es un fallo seguro; quizá solo tarda. Reintentar crea otra corrida con force.
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted px-4 py-3" role="status">
+          <span className="flex-1 text-sm">Se está tardando más de lo normal: lleva 3 minutos sin avanzar. Puedes esperar o reintentarla.</span>
+          <BotonAccion icono={RotateCw} disabled={!puedeEscribir} ayuda={SOLO_LECTURA} onClick={alReintentar}>Reintentar</BotonAccion>
+        </div>
+      ) : null}
       {run.status === 'failed' ? (
         <div className="flex flex-col gap-2">
           {/* Como ApiError, para que ErrorBloque muestre el motivo que manda el BACK y no «Algo falló». */}
@@ -213,7 +221,10 @@ export default function PaginaWiki() {
   const generar = useGenerarWiki(org.id);
   const historial = useWikiRuns(org.id, consulta.repo, consulta.consultar);
   const sinFormato = !consulta.consultar || (historial.isError && esApiError(historial.error) && historial.error.status === 422);
-  const run = useWikiRun(org.id, runId);
+  const [lento, setLento] = useState(false);
+  const run = useWikiRun(org.id, runId, lento);
+  const estancada = useEstancada(run.data);
+  useEffect(() => setLento(estancada), [estancada]);
   const doc = useWikiDoc(org.id, runId, run.data?.status === 'succeeded');
   // Repo de la conexión GitHub (privado: va con su connection_id) o texto libre para repos públicos.
   const e = { ref: rama.trim() || undefined, connection_id: repoValido && repoValido === repoConexion ? gh?.id : undefined };
@@ -227,6 +238,13 @@ export default function PaginaWiki() {
     if (!estimar.data) return;
     generar.mutate({ repo_full_name: estimar.data.repo_full_name, ...e, max_usd: topeUsd(estimar.data.est.usd), ...(force ? { force: true } : {}) },
       { onSuccess: (r) => elegir(r.wiki_run_id) });
+  };
+  // Reintentar sale de la propia corrida, no de la estimación: así también funciona tras recargar con ?run=. Sin
+  // est_usd no se manda max_usd y el servidor usa su tope por defecto.
+  const reintentar = (r: WikiRun) => {
+    generar.mutate({ repo_full_name: r.repo_full_name, ...(r.branch ? { ref: r.branch } : {}),
+      connection_id: r.repo_full_name === repoConexion ? gh?.id : undefined,
+      ...(r.est_usd != null ? { max_usd: topeUsd(r.est_usd) } : {}), force: true }, { onSuccess: (x) => elegir(x.wiki_run_id) });
   };
   // «Regenerar» espera la promesa: ConfirmarEnSitio pinta el resultado o el error en su sitio (L6).
   const regenerar = async () => {
@@ -259,7 +277,7 @@ export default function PaginaWiki() {
       {org.puedeEscribir && estimar.data ? <Estimacion e={estimar.data} ocupado={generar.isPending} alGenerar={lanzar} alRegenerar={regenerar} alVer={elegir} /> : null}
       {generar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(generar.error)}</p> : null}
 
-      {run.data && run.data.status !== 'succeeded' ? <Progreso run={run.data} puedeEscribir={org.puedeEscribir} alReintentar={() => lanzar(true)} /> : null}
+      {run.data && run.data.status !== 'succeeded' ? <Progreso run={run.data} puedeEscribir={org.puedeEscribir} estancada={estancada} alReintentar={() => reintentar(run.data!)} /> : null}
       {(crudo && !runId) || (run.isError && esApiError(run.error) && run.error.status === 404)
         ? <p className="text-[15px] text-muted-foreground">Esta wiki no existe o no es de esta organización.</p>
         : run.isError ? <ErrorBloque error={run.error} onReintentar={() => run.refetch()} /> : null}

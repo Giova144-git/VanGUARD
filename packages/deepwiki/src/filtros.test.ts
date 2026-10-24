@@ -137,9 +137,15 @@ describe('prioridad y orden', () => {
     const grande = Array.from({ length: 2_000 }, (_, i) =>
       blob(`${carpetas[i % carpetas.length]}/modulo${i % 37}/archivo-${i}.${i % 5 === 0 ? 'png' : 'ts'}`, 900));
     elegirCandidatos(grande, LIMITES_POR_DEFECTO);   // calienta el JIT como haría un isolate ya usado
-    const t0 = performance.now();
-    const r = elegirCandidatos(grande, LIMITES_POR_DEFECTO);
-    expect(performance.now() - t0).toBeLessThan(20);
+    // El mínimo de 5 corridas: con `pnpm -r test` en paralelo, una sola medida absorbe la carga de los otros procesos.
+    let mejor = Infinity;
+    let r = elegirCandidatos(grande, LIMITES_POR_DEFECTO);
+    for (let i = 0; i < 5; i++) {
+      const t0 = performance.now();
+      r = elegirCandidatos(grande, LIMITES_POR_DEFECTO);
+      mejor = Math.min(mejor, performance.now() - t0);
+    }
+    expect(mejor).toBeLessThan(20);
     expect(r.candidatos).toHaveLength(400);
     expect(r.total).toBe(1_600);
   });

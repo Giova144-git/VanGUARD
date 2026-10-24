@@ -65,12 +65,15 @@
 /* Logo (brand/logo/*.svg, copiados en public/marca/): máscara sobre currentColor, así toma el color del texto (hueso
    sobre oscuro, tinta sobre claro) sin meter sus 20 KB de trazos en el bundle ni repetir ids de <mask>. */
 @layer components {
-  .logo-vg { display: inline-block; flex-shrink: 0; background-color: currentColor;
+  .logo-vg { position: relative; display: inline-block; flex-shrink: 0; background-color: currentColor;
     -webkit-mask: var(--logo-vg) center / contain no-repeat; mask: var(--logo-vg) center / contain no-repeat; }
   .logo-vg-nombre { --logo-vg: url(/marca/logo.svg); aspect-ratio: 724.9 / 118; }      /* símbolo + nombre (≥ 160 px) */
   .logo-vg-simbolo { --logo-vg: url(/marca/simbolo.svg); aspect-ratio: 200 / 118; }    /* solo el ojo (≥ 64 px) */
   .logo-vg-compacto { --logo-vg: url(/marca/simbolo-compacto.svg); aspect-ratio: 200 / 118; }   /* < 64 px */
   @media (forced-colors: active) { .logo-vg { forced-color-adjust: none; background-color: CanvasText; } }
+  /* Llegó MarcaViva (Marca.tsx): sus trazos en línea ocupan la misma caja y la máscara sobra. */
+  .logo-vg-vivo { background-color: transparent; -webkit-mask: none; mask: none; }
+  @media (forced-colors: active) { .logo-vg > svg { fill: CanvasText; } }
 }
 /* Los tamaños en px de S14 §14.6 no siguen a la raíz: en presentación se pasan a rem (a 16 px se ven igual).
    Fuera de @layer a propósito: dentro, la capa utilities les ganaría. */

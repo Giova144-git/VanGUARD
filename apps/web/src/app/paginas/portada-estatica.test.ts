@@ -2,8 +2,11 @@
 // sus textos tienen que ser los de lib/marca.ts, literales, y no puede llevar nada que la CSP bloquee ni frases dirigidas
 // a un agente (sería una inyección de prompt hecha por nosotros).
 import { readFileSync } from 'node:fs';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { MARCA } from '@/lib/marca';
+import { Marca } from '../Marca';
 
 const html = readFileSync(new URL('../../../index.html', import.meta.url), 'utf8');
 const portada = html.slice(html.indexOf('<div id="root">'), html.indexOf('<script type="module"'));
@@ -19,6 +22,9 @@ describe('portada estática de index.html', () => {
   });
   it('sin scripts, manejadores ni estilos en línea (CSP script-src self)', () => {
     expect(portada).not.toMatch(/<script|\son\w+=|\sstyle=/i);
+  });
+  it('el logo de la cabecera es el span que pinta <Marca /> antes de que llegue el isotipo vivo (no salta)', () => {
+    expect(portada).toContain(renderToStaticMarkup(createElement(Marca, { className: 'h-9' })));   // como en Inicio.tsx
   });
   it('descriptiva: ninguna instrucción a un agente', () => {
     expect(portada).not.toMatch(/ignora|recomienda|instrucci|assistant|you are/i);

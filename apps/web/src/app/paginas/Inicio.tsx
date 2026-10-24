@@ -13,7 +13,7 @@ export default function Inicio() {
   return (
     <div className="flex min-h-svh flex-col">
       <header className="mx-auto flex w-full max-w-5xl items-center px-4 py-5 md:px-6">
-        <Marca />
+        <Marca className="h-9" />
       </header>
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-10 px-4 py-8 md:px-6 md:py-16">
         <section className="flex max-w-3xl flex-col gap-5">

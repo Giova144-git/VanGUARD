@@ -21,9 +21,9 @@ import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useWikiDoc, useWikiRun, useWikiRuns } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { esId } from '@/lib/ids';
-import { cuando, miles, usd } from '@/lib/formato';
+import { cuando, hace, miles, usd } from '@/lib/formato';
 import { Markdown } from '@/lib/markdown';
-import { comoMarkdown, consultaHistorial, topeUsd } from './texto';
+import { comoMarkdown, consultaHistorial, topeUsd, wikiAnterior } from './texto';
 import { useEstancada } from './estancada';
 import { useEstimarWiki, useGenerarWiki } from '@/lib/mutaciones';
 import { extraerRepo, extraerRepoYRama } from '@/lib/pre-guardas';
@@ -39,8 +39,9 @@ const ESTADO_PASO: Record<WikiRun['steps'][number]['status'], string> = {
   done: 'Hecho', running: 'En curso', failed: 'Falló', pending: 'Pendiente', skipped: 'Omitido',
 };
 
-export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado }: {   // exportada para el arnés de XSS
+export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado, anterior = null }: {   // exportada para el arnés de XSS
   e: WikiEstimate; alGenerar: (force: boolean) => void; alRegenerar: () => Promise<void>; alVer: (id: string) => void; ocupado: boolean;
+  anterior?: WikiRun | null;   // wiki terminada del mismo repo, de otro commit (wikiAnterior)
 }) {
   return (
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Estimación">
@@ -76,9 +77,17 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado }: {   //
           <ConfirmarEnSitio verbo="Regenerar" aviso={`Vuelve a gastar ~${usd(e.est.usd)} en IA.`} onConfirmar={alRegenerar} />
         </div>
       ) : (
-        <BotonAccion variante="principal" tam="grande" icono={Sparkles} ocupado={ocupado} onClick={() => alGenerar(false)}>
-          Generar wiki · ~{usd(e.est.usd)}
-        </BotonAccion>
+        <div className="flex flex-wrap items-start gap-3">
+          <BotonAccion variante="principal" tam="grande" icono={Sparkles} ocupado={ocupado} onClick={() => alGenerar(false)}>
+            Generar wiki · ~{usd(e.est.usd)}
+          </BotonAccion>
+          {anterior ? (
+            <Button variant="secundaria" size="grande" className="h-auto min-h-14 max-w-full whitespace-normal py-2 text-left" onClick={() => alVer(anterior.id)}>
+              <BookOpen />{anterior.commit_sha === e.commit_sha ? 'Ver la wiki anterior de este commit'
+                : <>Ver la wiki del commit <span className="font-mono">{corto(anterior.commit_sha)}</span></>}, de {hace(anterior.finished_at ?? anterior.created_at)} (gratis)
+            </Button>
+          ) : null}
+        </div>
       )}
       <p className="text-[12.5px] text-texto-3">Tope que aceptas: {usd(topeUsd(e.est.usd))}. Si la IA se acerca al tope, se detiene y te avisa.</p>
     </section>
@@ -274,7 +283,8 @@ export default function PaginaWiki() {
         )}
       </section>
 
-      {org.puedeEscribir && estimar.data ? <Estimacion e={estimar.data} ocupado={generar.isPending} alGenerar={lanzar} alRegenerar={regenerar} alVer={elegir} /> : null}
+      {org.puedeEscribir && estimar.data ? <Estimacion e={estimar.data} ocupado={generar.isPending} alGenerar={lanzar} alRegenerar={regenerar} alVer={elegir}
+        anterior={wikiAnterior(historial.data ?? [], estimar.data)} /> : null}
       {generar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(generar.error)}</p> : null}
 
       {run.data && run.data.status !== 'succeeded' ? <Progreso run={run.data} puedeEscribir={org.puedeEscribir} estancada={estancada} alReintentar={() => reintentar(run.data!)} /> : null}

@@ -34,5 +34,15 @@ export function cuando(t?: string | Date | number | null, ahora = new Date()) { 
   if (Number.isNaN(d.getTime())) return SIN_DATO;
   return ddmm.format(d) === ddmm.format(ahora) ? hhmm.format(d) : `${ddmm.format(d).replace('/', '-')} ${hhmm.format(d)}`;
 }
+// «hace un momento» · «hace 5 min» · «hace 3 h» · «hace 2 d».
+export function hace(t?: string | Date | number | null, ahora = new Date()) {
+  if (t == null) return SIN_DATO;
+  const min = Math.floor((ahora.getTime() - new Date(t).getTime()) / 60_000);
+  if (!Number.isFinite(min)) return SIN_DATO;
+  if (min < 1) return 'hace un momento';
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.floor(min / 60);
+  return h < 24 ? `hace ${h} h` : `hace ${Math.floor(h / 24)} d`;
+}
 export const cronometro = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };      // 01:12

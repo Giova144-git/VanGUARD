@@ -1,7 +1,7 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, AlertPrefsIn, CodeReviewPut, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
+  fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
   type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
   type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
   type WikiRun, type ZipFinding,
@@ -507,6 +507,35 @@ function listarContactos(org: string) {
   if (n > 3) for (const c of contactosDe(org)) if (c.verificacion) { c.verified_at = new Date().toISOString(); c.verificacion = null; }
   return structuredClone(contactosDe(org));
 }
+// Tokens MCP (E29/E29b): en memoria por org, como los contactos. El token sale una vez y aquí no se guarda.
+const tokensMcp = new Map<string, McpTokenPublic[]>();
+const tokensMcpDe = (org: string) => {
+  if (!tokensMcp.has(org)) tokensMcp.set(org, vacia(org) ? [] : structuredClone(fx.mcpTokens as McpTokenPublic[]));
+  return tokensMcp.get(org)!;
+};
+const ALCANCES_MCP = ['findings:read', 'incidents:read', 'metrics:read', 'export:read'];
+function crearTokenMcp(org: string, b: unknown): McpTokenCreated {
+  exigirAdmin();
+  const p = McpTokenCreate.safeParse(b);
+  if (!p.success) falla(422, 'invalid_body', 'Revisa los campos marcados');
+  const lista = tokensMcpDe(org);
+  if (lista.filter((t) => !t.revoked_at).length >= 10) falla(409, 'conflict', 'Ya hay 10 tokens activos. Revoca uno para crear otro.');
+  const token = 'vgk_' + btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const ahora = new Date();
+  const t: McpTokenPublic = { id: crypto.randomUUID(), name: p.data!.name, scopes: ALCANCES_MCP, last4: token.slice(-4),
+    created_at: ahora.toISOString(), last_used_at: null, revoked_at: null,
+    expires_at: new Date(ahora.getTime() + p.data!.expires_in_days * 86_400_000).toISOString() };
+  lista.unshift(t);
+  return { id: t.id, token, name: t.name, scopes: t.scopes, last4: t.last4 ?? undefined, expires_at: t.expires_at };
+}
+function revocarTokenMcp(org: string, id: string) {
+  exigirAdmin();
+  const t = tokensMcpDe(org).find((x) => x.id === id && !x.revoked_at);
+  if (!t) falla(404, 'not_found', 'Token no encontrado o ya revocado');
+  t!.revoked_at = new Date().toISOString();
+  return undefined;
+}
 function exigirAdmin() { if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura'); }
 
 // Revisión de código (E45/E46, asignaciones/revision-codigo.md §4.1 y §6.3). La org de demo arranca con el fixture
@@ -703,7 +732,9 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],
   ['GET',  r(`${ORG}\\/ai\\/usage`),              (m) => usoIa(m[1]!)],
   ['GET',  r(`${ORG}\\/perf\\/runs`),             (m) => (vacia(m[1]!) ? [] : fx.perfRuns)],
-  ['GET',  r(`${ORG}\\/mcp-tokens`),              (m) => (vacia(m[1]!) ? [] : fx.mcpTokens)],
+  ['GET',  r(`${ORG}\\/mcp-tokens`),              (m) => structuredClone(tokensMcpDe(m[1]!))],
+  ['POST', r(`${ORG}\\/mcp-tokens`),              (m, b) => crearTokenMcp(m[1]!, b)],
+  ['DELETE', r(`${ORG}\\/mcp-tokens\\/([^/]+)`), (m) => revocarTokenMcp(m[1]!, m[2]!)],
   // Rutas que el FRONT pide con {crudo:true} devuelven un Response de verdad.
   ['GET',  r(`${ORG}\\/export`),                  (m, _b, q) => exportar(m[1]!, q)],
 ];

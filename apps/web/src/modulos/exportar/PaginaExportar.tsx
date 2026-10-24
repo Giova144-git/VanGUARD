@@ -1,6 +1,6 @@
 // /o/:orgId/export «Llevar a tu IA» (S14 §14.17, S13 §13.10). El FRONT no transforma el archivo: lo redacta el BACK.
 import { useState } from 'react';
-import { Download, FileJson, FileText, KeyRound } from 'lucide-react';
+import { Download, FileJson, FileText } from 'lucide-react';
 import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
@@ -13,6 +13,7 @@ import { sinBidi } from '@/lib/bidi';
 import { useExportMd } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { descargarExport } from '@/lib/mutaciones';
+import { ConectarMcp } from './ConectarMcp';
 
 function BotonDescargar({ org, formato }: { org: string; formato: 'md' | 'json' }) {
   const [estado, setEstado] = useState<{ ocupado?: boolean; hecho?: string; error?: string }>({});
@@ -75,12 +76,7 @@ export default function PaginaExportar() {
           </div>
         ))}
       </section>
-      <section className="flex flex-col gap-2 rounded-xl border bg-card p-5" aria-label="Conectar por MCP">
-        <div className="flex items-center gap-2"><KeyRound className="size-5 text-info" /><h3 className="flex-1 text-[17px] font-semibold">Conecta tu IA por MCP</h3><Etiqueta texto="Próximamente" /></div>
-        <p className="text-sm text-muted-foreground">
-          {org.puedeEscribir ? 'Pronto podrás crear un token de solo lectura para que tu IA consulte VanGUARD directamente.' : 'Pide a un administrador que cree un token.'}
-        </p>
-      </section>
+      <ConectarMcp org={org.id} puedeEscribir={org.puedeEscribir} />
       <GuiaModulo id="export" />
     </div>
   );

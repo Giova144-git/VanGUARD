@@ -27,6 +27,28 @@ export function aFinding(fila: unknown): Finding {
     first_seen_at: iso(String(f.first_seen_at)), last_seen_at: iso(String(f.last_seen_at)), verified_at: t(f.verified_at) });
 }
 
+type FilaPrompt = { rule_id: string; severity: string; resource: string; title: string; evidence: unknown;
+  fix_prompt: string | null; fix_model: string | null };
+export type Sabor = 'generic' | 'claude_code' | 'cursor';
+
+// Todo lo que sale va con su sabor y con los controles bidi a la vista (lo nuevo ya los trae así de armarPromptCorreccion;
+// un fix_prompt guardado antes, no): «Copiar para mi IA» lo copia tal cual.
+const entregar = (t: string, flavor: Sabor) => bidiAVista(conSabor(t, flavor));
+const baseDe = (f: FilaPrompt) => ({ rule_id: f.rule_id, severity: f.severity, resource: f.resource,
+  evidence: (f.evidence ?? {}) as Record<string, unknown>, title: f.title });
+export const plantillaDe = (f: FilaPrompt, flavor: Sabor) => entregar(armarPromptCorreccion(baseDe(f), plantillaCorreccion(baseDe(f))), flavor);
+
+/** Prompt de corrección sin llamar al modelo (E15 con caché y el MCP): el guardado o, si no hay o no cabe, la plantilla. */
+export function promptSinIA(f: FilaPrompt, flavor: Sabor): { prompt: string; model: string; cached: boolean } {
+  if (typeof f.fix_prompt === 'string' && f.fix_prompt) {
+    // Un prompt guardado antes de las marcas bidi puede pasar del máximo al expandirse (≤ 140 de más): entonces va la
+    // plantilla, con su cercado entero, en vez de cortarlo por el final.
+    const guardado = entregar(f.fix_prompt, flavor);
+    if (guardado.length <= MAX_PROMPT) return { prompt: guardado, model: f.fix_model ?? 'template', cached: true };
+  }
+  return { prompt: plantillaDe(f, flavor), model: 'template', cached: false };
+}
+
 const idDe = (raw: string | undefined) => {
   const r = Id.safeParse(raw);
   if (!r.success) throw new ApiError('not_found', 'Hallazgo no encontrado');
@@ -82,7 +104,7 @@ findings.patch('/orgs/:org/findings/:id', requireAdmin, async (c) => {
 // con details.fallback_prompt (presupuesto o IA apagada) o 200 con model:'template' y las banderas (filtro de salida).
 findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
   const id = idDe(c.req.param('id'));
-  let flavor: 'generic' | 'claude_code' | 'cursor' = 'generic';
+  let flavor: Sabor = 'generic';
   const texto = await c.req.text();
   if (texto.trim()) {
     let raw: unknown;
@@ -91,9 +113,6 @@ findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
     if (!b.success) throw new ApiError('invalid_body', 'Revisa los campos marcados', { field_errors: { flavor: ['Sabor no válido'] } });
     flavor = b.data.flavor;
   }
-  // Todo lo que sale va con su sabor y con los controles bidi a la vista (lo nuevo ya los trae así de armarPromptCorreccion;
-  // un fix_prompt guardado antes, no): «Copiar para mi IA» lo copia tal cual.
-  const entrega = (t: string) => bidiAVista(conSabor(t, flavor));
   const admin = db(c.env);
   const orgId = c.get('orgId');
   const { data: f, error } = await admin.from('findings')
@@ -102,15 +121,8 @@ findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
   if (error) throw new ApiError('internal', 'No pudimos leer el hallazgo');
   if (!f) throw new ApiError('not_found', 'Hallazgo no encontrado');
   const evidencia = (f.evidence ?? {}) as Record<string, unknown>;
-  const base = { rule_id: f.rule_id, severity: f.severity, resource: f.resource, evidence: evidencia, title: f.title };
-  const plantilla = () => armarPromptCorreccion(base, plantillaCorreccion(base));
   if (typeof f.fix_prompt === 'string' && f.fix_prompt) {
-    // Un prompt guardado antes de las marcas bidi puede pasar del máximo al expandirse (≤ 140 de más): entonces va la
-    // plantilla, con su cercado entero, en vez de cortarlo por el final.
-    const guardado = entrega(f.fix_prompt);
-    return c.json(FixPromptResponse.parse(guardado.length <= MAX_PROMPT
-      ? { prompt: guardado, model: f.fix_model ?? 'template', cached: true, injection_flags: [] }
-      : { prompt: entrega(plantilla()), model: 'template', cached: false, injection_flags: [] }));
+    return c.json(FixPromptResponse.parse({ ...promptSinIA(f, flavor), injection_flags: [] }));
   }
   const rol = c.get('role');
   if (c.get('isAnon') || (rol !== 'owner' && rol !== 'admin')) {
@@ -119,19 +131,19 @@ findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
   const r = await pedirFixPrompt(c.env, { org_id: orgId, hallazgo: { rule_id: f.rule_id, severity: f.severity,
     confirmed: f.confirmed, title: f.title, resource: f.resource, module: f.module, evidence: evidencia } });
   if (!r.ok) {
-    if (r.code === 'budget') throw new ApiError('budget_exceeded', 'Llegaste al tope de IA de hoy. Te dejamos la corrección base.', { fallback_prompt: entrega(plantilla()) });
-    if (r.code === 'disabled') throw new ApiError('ai_disabled', 'La IA está en pausa. Te dejamos la corrección base.', { fallback_prompt: entrega(plantilla()) });
+    if (r.code === 'budget') throw new ApiError('budget_exceeded', 'Llegaste al tope de IA de hoy. Te dejamos la corrección base.', { fallback_prompt: plantillaDe(f, flavor) });
+    if (r.code === 'disabled') throw new ApiError('ai_disabled', 'La IA está en pausa. Te dejamos la corrección base.', { fallback_prompt: plantillaDe(f, flavor) });
     log('info', 'fix_prompt.plantilla', { rid: c.get('rid'), code: r.code, flags: r.injection_flags.length });
-    return c.json(FixPromptResponse.parse({ prompt: entrega(plantilla()), model: 'template', cached: false,
+    return c.json(FixPromptResponse.parse({ prompt: plantillaDe(f, flavor), model: 'template', cached: false,
       injection_flags: r.injection_flags }));
   }
-  const prompt = armarPromptCorreccion(base, r.data);
+  const prompt = armarPromptCorreccion(baseDe(f), r.data);
   const { error: eu } = await admin.from('findings').update({ fix_prompt: prompt, fix_model: r.model }).eq('id', id).eq('org_id', orgId);
   if (eu) {
     // 23514 = el cable trampa vio un secreto en la salida: no se guarda ni se devuelve; va la plantilla.
     log('warn', 'fix_prompt.no_guardado', { rid: c.get('rid'), code: eu.code });
-    return c.json(FixPromptResponse.parse({ prompt: entrega(plantilla()), model: 'template', cached: false,
+    return c.json(FixPromptResponse.parse({ prompt: plantillaDe(f, flavor), model: 'template', cached: false,
       injection_flags: [...r.injection_flags, 'secreto'] }));
   }
-  return c.json(FixPromptResponse.parse({ prompt: entrega(prompt), model: r.model, cached: false, injection_flags: r.injection_flags }));
+  return c.json(FixPromptResponse.parse({ prompt: entregar(prompt, flavor), model: r.model, cached: false, injection_flags: r.injection_flags }));
 });

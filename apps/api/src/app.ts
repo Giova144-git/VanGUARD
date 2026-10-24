@@ -5,17 +5,19 @@ import { fail } from './lib/errors.ts';
 import { anonReadOnly } from './mw/anon.ts';
 import { auth } from './mw/auth.ts';
 import { errorHandler } from './mw/error.ts';
+import { mcpAuth } from './mw/mcp-auth.ts';
 import { orgMember } from './mw/org.ts';
 import { originGuard } from './mw/origin.ts';
 import { rateLimit } from './mw/rate.ts';
 import { requestId } from './mw/request-id.ts';
+import { handleMcp } from './mcp/vanguard.ts';
 import { securityHeaders } from './mw/security-headers.ts';
 import { demasiadoGrande, ingest, MAX_CUERPO } from './rutas/ingest.ts';
 import { rutas } from './rutas/index.ts';
 import { webhooksGithub } from './rutas/webhooks-github.ts';
 import { webhooksKapso } from './rutas/webhooks-kapso.ts';
 
-// Orden de middlewares de S15 15.3. /mcp entra con su hito.
+// Orden de middlewares de S15 15.3.
 export const app = new Hono<AppEnv>();
 
 const limiteCuerpo = bodyLimit({
@@ -39,3 +41,7 @@ app.route('/webhooks', webhooksGithub);                  // E47: revisión de c�
 // 64 KB, también sin Content-Length (bodyLimit cuenta el cuerpo al leerlo).
 app.use('/ingest/*', bodyLimit({ maxSize: MAX_CUERPO, onError: demasiadoGrande }));
 app.route('/ingest', ingest);
+// MCP propio (S13 §13.7): sin sesión ni originGuard (solo Bearer vgk_, sin cookie ni CORS); mcpAuth pone el tenant del
+// token y aplica RL_API con clave mcp:<token_id>. Una ruta exacta: /mcp/* sigue en el 404 de Hono.
+app.use('/mcp', limiteCuerpo);
+app.all('/mcp', mcpAuth, handleMcp);

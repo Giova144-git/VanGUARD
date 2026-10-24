@@ -1,7 +1,7 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
-  AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
+  AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, McpTokenCreated, type McpTokenCreate, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -159,6 +159,25 @@ export const useProbarCanal = (org: string) => useMutation({
   mutationFn: (channel: 'whatsapp' | 'voice') =>
     api(`/api/orgs/${org}/notifications/test`, { method: 'POST', body: { channel }, esquema: NotificationTestResult }),
 });
+
+// E29: el token vgk_ sale una sola vez. Sin useMutation, como useConectar: el caché de mutaciones lo guardaría en `data`;
+// vive solo en el estado del panel, que lo borra al pulsar «Ya lo guardé».
+export function useCrearTokenMcp(org: string) {
+  const invalidar = useInvalidar(org);
+  return async (body: McpTokenCreate) => {
+    const r = await api(`/api/orgs/${org}/mcp-tokens`, { method: 'POST', body, esquema: McpTokenCreated });
+    await invalidar('mcp');
+    return r;
+  };
+}
+
+export function useRevocarTokenMcp(org: string) {
+  const invalidar = useInvalidar(org);
+  return useMutation({
+    mutationFn: (id: string) => api<void>(`/api/orgs/${org}/mcp-tokens/${id}`, { method: 'DELETE' }),
+    onSettled: () => invalidar('mcp'),
+  });
+}
 
 // Descarga autenticada (§14.17): un <a href> directo daría 401 porque la API usa Bearer, no cookie.
 export async function descargarExport(org: string, formato: 'md' | 'json') {

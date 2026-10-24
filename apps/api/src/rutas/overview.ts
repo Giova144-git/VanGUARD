@@ -16,9 +16,11 @@ export const overview = new Hono<AppEnv>();
 const TOPE_PUNTAJE = 2000;   // el mismo del paso puntaje (scans/index.ts)
 const MODULO_DE_REGLA: Record<string, AhoraItem['module']> = { CF: 'cloudflare', SB: 'supabase', CB: 'codebase', PF: 'performance' };
 
-overview.get('/orgs/:org/overview', async (c) => {
-  const admin = db(c.env);
-  const orgId = c.get('orgId');
+overview.get('/orgs/:org/overview', async (c) => c.json(await armarOverview(c.env, c.get('orgId'), c.get('rid'))));
+
+/** El Overview de E5; también lo usa get_overview del MCP (S13 §13.7: «calculado con la misma función que E5»). */
+export async function armarOverview(env: CloudflareBindings, orgId: string, rid: string): Promise<Overview> {
+  const admin = db(env);
   const abiertos = () => admin.from('findings').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('status', 'open');
   const [[fs, top, inc, nInc, last, cov, ai], porSeveridad] = await Promise.all([
     Promise.all([
@@ -31,8 +33,8 @@ overview.get('/orgs/:org/overview', async (c) => {
         .order('severity_rank', { ascending: false }).limit(10),
       admin.from('incidents').select('id', { count: 'exact', head: true }).eq('org_id', orgId).in('status', ['open', 'ack']),
       admin.from('scan_runs').select('id, status, finished_at').eq('org_id', orgId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      calcularCobertura(c.env, orgId),
-      c.env.IA_CORTE === '1' ? Promise.resolve({ data: { enabled: false, level: 'off' }, error: null })
+      calcularCobertura(env, orgId),
+      env.IA_CORTE === '1' ? Promise.resolve({ data: { enabled: false, level: 'off' }, error: null })
         : admin.rpc('vg_ai_status', { p_org: orgId }),
     ]),
     // counts exactos por severidad (5 head, sin filas): no dependen del tope de arriba.
@@ -40,7 +42,7 @@ overview.get('/orgs/:org/overview', async (c) => {
   ]);
   const err = fs.error ?? top.error ?? inc.error ?? nInc.error ?? porSeveridad.find((r) => r.error)?.error;
   if (err) {
-    log('error', 'overview.error', { rid: c.get('rid'), code: err.code ?? null });
+    log('error', 'overview.error', { rid, code: err.code ?? null });
     throw new ApiError('internal', 'No pudimos armar el resumen');
   }
   const paraPuntaje = (fs.data ?? []) as { module: AhoraItem['module']; severity: Severity; confirmed: boolean }[];
@@ -57,10 +59,10 @@ overview.get('/orgs/:org/overview', async (c) => {
   ].slice(0, 10);
   const l = last.data as { id: string; status: string; finished_at: string | null } | null;
   const aiData = (ai.data ?? null) as { enabled?: boolean; level?: string } | null;
-  return c.json(Overview.parse({
+  return Overview.parse({
     score: p?.score ?? null, band: p?.band ?? null, coverage: cov, counts, open_incidents: nInc.count ?? incidentes.length,
     last_scan: l ? { id: l.id, status: l.status, finished_at: l.finished_at ? iso(l.finished_at) : null } : null,
     ...(aiData ? { ai: { enabled: aiData.enabled === true, level: aiData.level ?? 'off' } } : {}),
     ahora,
-  }));
-});
+  });
+}

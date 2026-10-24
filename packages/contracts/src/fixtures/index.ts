@@ -9,6 +9,7 @@ import { actionProposal, incidentDetail, incidents, traffic } from './incidentes
 import { moduleState } from './modulos.ts';
 import { perfRuns } from './rendimiento.ts';
 import { overview, overviewVacio } from './resumen.ts';
+import { alertPrefs, codeReviewSaved, codeReviewState, hallazgoRevision } from './revision.ts';
 import { me, meViewer } from './sesion.ts';
 import { wikiDoc, wikiEstimate, wikiRunDone, wikiRunRunning, wikiRuns } from './wiki.ts';
 
@@ -16,4 +17,5 @@ export const fixtures = {
   me, meViewer, overview, overviewVacio, moduleState, connections, permChecks, scanRunning, scanDone,
   findings, fixPrompt, incidents, incidentDetail, traffic, actionProposal, contacts, aiUsage, perfRuns,
   exportMd, mcpTokens, wikiEstimate, wikiRunRunning, wikiRunDone, wikiRuns, wikiDoc,
+  codeReviewState, codeReviewSaved, alertPrefs, hallazgoRevision,
 };

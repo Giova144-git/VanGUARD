@@ -202,3 +202,72 @@ export const Overview = z.object({ score: z.number().int().min(0).max(100).nulla
   last_scan: z.object({ id: Id, status: ScanStatus, finished_at: Ts.nullable() }).nullable(),
   ai: z.object({ enabled: z.boolean(), level: AiUsage.shape.level }).optional(), ahora: z.array(AhoraItem).max(10) });
 export type Overview = z.infer<typeof Overview>;
+
+// ── Revisión de código en cada push (E45–E50; asignaciones/revision-codigo.md) ─────────────────────────────────────
+// Umbral por canal: severidad mínima de un hallazgo NUEVO para avisar por ese canal; 'off' = nunca por ese canal.
+export const UmbralAviso = z.enum(['critical', 'high', 'medium', 'low', 'off']);
+export type UmbralAviso = z.infer<typeof UmbralAviso>;
+export const AlertPrefsIn = z.object({ review_whatsapp_min: UmbralAviso, review_voice_min: UmbralAviso });
+export type AlertPrefsIn = z.infer<typeof AlertPrefsIn>;
+// voice_available: false mientras no haya llamadas; entonces lo que pase el umbral de llamada también sale por WhatsApp.
+// whatsapp_ready_contacts: contactos con WhatsApp activado y verificados (los únicos que reciben algo).
+export const AlertPrefs = AlertPrefsIn.extend({ voice_available: z.boolean(),
+  whatsapp_ready_contacts: z.number().int().min(0), updated_at: Ts.nullable() });
+export type AlertPrefs = z.infer<typeof AlertPrefs>;
+
+const Sha40 = z.string().regex(/^[0-9a-f]{40}$/);
+export const CodeReviewEvent = z.enum(['push', 'pull_request', 'manual']); // pull_request y manual: P1
+export type CodeReviewEvent = z.infer<typeof CodeReviewEvent>;
+// off: interruptor apagado · waiting_ping: activa y GitHub aún no llamó · connected · error: ver last_error.
+export const CodeReviewHookState = z.enum(['off', 'waiting_ping', 'connected', 'error']);
+export type CodeReviewHookState = z.infer<typeof CodeReviewHookState>;
+// firma (P1): llegó con otro secreto · otro_repo: el webhook es de otro repositorio · sin_push: el ping no trae
+// «Pushes» · token: el PAT de la conexión dio 401 o 403 en la última revisión.
+export const CodeReviewHookError = z.enum(['firma', 'otro_repo', 'sin_push', 'token']);
+export type CodeReviewHookError = z.infer<typeof CodeReviewHookError>;
+export const CodeReviewConfig = z.object({ id: Id, connection_id: Id, repo_full_name: z.string(), branch: z.string(),
+  enabled: z.boolean(), state: CodeReviewHookState,
+  // null si el rol no es owner/admin o fuera de producción (en local APP_ORIGIN es la SPA en http://localhost:5173).
+  webhook_url: z.url().refine((u) => u.startsWith('https://'), 'solo https').nullable(),
+  secret_last4: z.string().max(4).nullable(),
+  hook_events: z.array(z.string().max(40)).max(30), // los que GitHub declaró en el último ping
+  last_ping_at: Ts.nullable(), last_event_at: Ts.nullable(), last_error: CodeReviewHookError.nullable() });
+export type CodeReviewConfig = z.infer<typeof CodeReviewConfig>;
+// finding_id null en un PR (P1: no se escribe en findings) o si el hallazgo ya se borró.
+export const CodeReviewFinding = z.object({ finding_id: Id.nullable(), rule_id: RuleId, severity: Severity,
+  title: z.string().max(200), resource: z.string().max(300) });
+export type CodeReviewFinding = z.infer<typeof CodeReviewFinding>;
+export const CodeReviewAlert = z.object({
+  state: z.enum(['none', 'pending', 'sent', 'not_sent']),
+  // none: bajo_umbral o null · not_sent: sin_contactos | unverified | window_closed | cap | fuera_de_ventana_demo |
+  // dry_run | sin_config | envio | dlq. La UI los traduce con un mapa cerrado y un texto por defecto.
+  reason: z.string().max(40).nullable(),
+  delivery: NotificationStatus.nullable(),   // el mejor estado de sus WhatsApp (read > delivered > sent > queued …)
+  // notifications.error cuando delivery = 'failed' (p. ej. 131047 = ventana de 24 h cerrada, llega después del envío).
+  delivery_error: z.string().regex(/^[A-Za-z0-9_.-]{1,40}$/).nullable(),
+  voice_pending: z.boolean(),                // pasó el umbral de llamada; sin llamadas, el aviso salió por WhatsApp
+  notified_at: Ts.nullable(),
+  seconds: z.number().min(0).nullable() });  // notified_at − created_at de la revisión
+export type CodeReviewAlert = z.infer<typeof CodeReviewAlert>;
+export const CodeReview = z.object({ id: Id, event: CodeReviewEvent, branch: z.string(),
+  pr_number: z.number().int().positive().nullable(), base_sha: Sha40, head_sha: Sha40,
+  // failed con error_code 'interrumpida': E45 lo pone a una revisión queued/running de más de 15 min (sin escribir).
+  status: z.enum(['queued', 'running', 'done', 'failed']), error_code: z.string().nullable(), partial: z.boolean(),
+  files_changed: z.number().int().min(0), lines_added: z.number().int().min(0),
+  counts: z.record(Severity, z.number().int()), // de los hallazgos NUEVOS; zod 4 exige las 5 claves
+  max_severity: Severity.nullable(), findings: z.array(CodeReviewFinding).max(50), alert: CodeReviewAlert,
+  created_at: Ts, finished_at: Ts.nullable() });
+export type CodeReview = z.infer<typeof CodeReview>;
+export const CodeReviewState = z.object({ available: z.boolean(),
+  reason: z.enum(['sin_conexion', 'conexion_inactiva']).nullable(),
+  config: CodeReviewConfig.nullable(), recent: z.array(CodeReview).max(10) });
+export type CodeReviewState = z.infer<typeof CodeReviewState>;
+// rotate_secret: P1 (en P0, true → 400).
+export const CodeReviewPut = z.object({ connection_id: Id, enabled: z.boolean(), rotate_secret: z.boolean().optional() });
+export type CodeReviewPut = z.infer<typeof CodeReviewPut>;
+// webhook_secret solo al crear la configuración (y al rotarlo, P1); nunca en E45. 'vgw_' + 32 bytes en base64url.
+export const CodeReviewSaved = z.object({ config: CodeReviewConfig,
+  webhook_secret: z.string().regex(/^vgw_[A-Za-z0-9_-]{43}$/).nullable() });
+export type CodeReviewSaved = z.infer<typeof CodeReviewSaved>;
+export const CodeReviewRunBody = z.object({ connection_id: Id.optional() }); // E50, P1
+export type CodeReviewRunBody = z.infer<typeof CodeReviewRunBody>;

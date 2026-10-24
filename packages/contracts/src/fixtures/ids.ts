@@ -82,3 +82,11 @@ export const T_PROPUESTA = '2026-10-24T19:02:05.000Z';
 export const T_ESTADO = '2026-10-24T19:02:00.000Z'; // hora de los EstadoModulo
 export const T_EXPORT = '2026-10-24T19:05:00.000Z';
 export const EXPIRA_TOKENS = '2026-11-23T18:00:00.000Z'; // PAT y tokens con caducidad de 30 días
+
+// ── Revisión de código ───────────────────────────────────────────────────────
+export const CR_CONFIG = 'c4000000-0000-4000-8000-000000000001';
+export const CR_REV_SECRETO = 'c4000000-0000-4000-8000-000000000011';
+export const CR_REV_LIMPIA = 'c4000000-0000-4000-8000-000000000012';
+export const F_CB_STRIPE_PUSH = 'f0000000-0000-4000-8000-00000000000e'; // lo crea la revisión; no está en `findings`
+export const T_CR_PING = '2026-10-24T18:20:03.000Z';
+export const T_CR_PUSH = '2026-10-24T19:20:11.000Z';

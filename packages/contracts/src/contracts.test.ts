@@ -10,6 +10,7 @@ const CLAVES_ESPERADAS = [
   'me', 'meViewer', 'overview', 'overviewVacio', 'moduleState', 'connections', 'permChecks', 'scanRunning', 'scanDone',
   'findings', 'fixPrompt', 'incidents', 'incidentDetail', 'traffic', 'actionProposal', 'contacts', 'aiUsage', 'perfRuns',
   'exportMd', 'mcpTokens', 'wikiEstimate', 'wikiRunRunning', 'wikiRunDone', 'wikiRuns', 'wikiDoc',
+  'codeReviewState', 'codeReviewSaved', 'alertPrefs', 'hallazgoRevision',
 ];
 
 const casos: [string, z.ZodType, unknown][] = [
@@ -41,7 +42,27 @@ const casos: [string, z.ZodType, unknown][] = [
   ['wikiRunDone', c.WikiRun, fx.wikiRunDone],
   ['wikiRuns', z.array(c.WikiRun), fx.wikiRuns],
   ['wikiDoc', c.WikiDoc, fx.wikiDoc],
+  ['codeReviewState', c.CodeReviewState, fx.codeReviewState],
+  ['codeReviewSaved', c.CodeReviewSaved, fx.codeReviewSaved],
+  ['alertPrefs', c.AlertPrefs, fx.alertPrefs],
+  ['hallazgoRevision', c.Finding, fx.hallazgoRevision],
 ];
+
+describe('revisión de código', () => {
+  const base = fx.codeReviewSaved;
+  it('CodeReviewSaved acepta vgw_ + 43 de base64url', () => {
+    expect(c.CodeReviewSaved.safeParse({ ...base, webhook_secret: 'vgw_' + 'aB3-_'.repeat(8) + 'xyz' }).success).toBe(true);
+  });
+  it('CodeReviewSaved rechaza un secreto sin vgw_, con otro prefijo o de otro largo', () => {
+    for (const s of ['aB3-_'.repeat(9) + 'xy', 'vgi_' + 'a'.repeat(43), 'vgw_' + 'a'.repeat(32)]) {
+      expect(c.CodeReviewSaved.safeParse({ ...base, webhook_secret: s }).success).toBe(false);
+    }
+  });
+  it('la URL del webhook solo admite https', () => {
+    const config = { ...base.config, webhook_url: 'http://officialvanguard.com/webhooks/github/x' };
+    expect(c.CodeReviewConfig.safeParse(config).success).toBe(false);
+  });
+});
 
 describe('fixtures', () => {
   it('tienen exactamente las claves que espera el FRONT', () => {

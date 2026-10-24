@@ -69,6 +69,12 @@ export function claveWebhook(env: CloudflareBindings, admin: SupabaseClient, cfg
   return key;
 }
 
+/** Tras rotar el secreto (E46): fuera de la caché de ESTE isolate toda clave de esa config. La caché ya va por iv y el
+ *  sellado nuevo trae otro, así que el secreto viejo deja de valer igual; esto solo suelta la clave vieja antes de los 60 s. */
+export function olvidarClaveWebhook(configId: string): void {
+  for (const id of webhookCache.keys()) if (id.startsWith(`${configId}:`)) webhookCache.delete(id);
+}
+
 /** CB_KEY_REUSE (P1, §09.9): huella → connection_id de las credenciales de ESTA org, para comparar en memoria con las huellas
  *  del repo (fingerprint(keys, orgId, valor), la MISMA función del alta). Así repo.ts no toca connection_secrets y las
  *  huellas no viajan en una URL de PostgREST. Una org tiene pocas conexiones. */

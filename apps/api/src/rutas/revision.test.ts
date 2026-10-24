@@ -6,12 +6,13 @@ import { envDoble } from '../test/dobles.ts';
 
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
-const sello = vi.hoisted(() => ({ llamadas: [] as { org: string; id: string; secreto: string }[] }));
+const sello = vi.hoisted(() => ({ llamadas: [] as { org: string; id: string; secreto: string }[], olvidadas: [] as string[] }));
 vi.mock('../lib/credentials.ts', () => ({
   sellarSecretoWebhook: async (_env: unknown, _admin: unknown, org: string, id: string, secreto: string) => {
     sello.llamadas.push({ org, id, secreto });
     return { sealed: { v: 1, kid: 'v1', iv: 'aXY=', ct: 'Y3Q=', ivk: 'aXZr', wdek: 'd2Rlaw==' }, kid: 'v1', last4: secreto.slice(-4) };
   },
+  olvidarClaveWebhook: (id: string) => { sello.olvidadas.push(id); },
 }));
 
 const { app } = await import('../app.ts');
@@ -36,7 +37,7 @@ const filaConfig = (o: Record<string, unknown> = {}) => ({ id: CFG, connection_i
   last_event_at: null, last_error: null, last_error_at: null, ...o });
 
 beforeEach(() => {
-  rol = 'owner'; anon = false; sello.llamadas = [];
+  rol = 'owner'; anon = false; sello.llamadas = []; sello.olvidadas = [];
   conexion = { id: CONN, status: 'active', meta: { repo_full_name: 'acme/tienda', default_branch: 'main' } };
   config = null; revisiones = []; avisos = []; tabla = () => undefined;
   doble = dbDoble({
@@ -188,11 +189,70 @@ describe('E46 · PUT code-review', () => {
     expect(ups[1]!.payload).not.toHaveProperty('branch');
   });
 
-  it('rotate_secret → 400 «llega pronto» sin tocar nada', async () => {
+  it('rotate_secret: vgw_ nuevo en la MISMA config (URL igual), borra ping, eventos y error, olvida la clave; 200 una vez', async () => {
+    config = filaConfig({ last_error: 'sin_push', last_error_at: '2026-10-24T18:30:00+00:00' });
+    const r = await pedir('code-review', { method: 'PUT', body: { connection_id: CONN, enabled: true, rotate_secret: true } }, PROD);
+    expect(r.status).toBe(200);
+    const b = CodeReviewSaved.parse(await r.json());
+    expect(b.webhook_secret).toMatch(/^vgw_[A-Za-z0-9_-]{43}$/);
+    expect(sello.llamadas).toEqual([{ org: ORG, id: CFG, secreto: b.webhook_secret }]);
+    const up = doble.ops.find((o) => o.table === 'code_review_configs' && o.action === 'update')!;
+    expect(eqDe(up, 'id')).toBe(CFG);
+    expect(eqDe(up, 'org_id')).toBe(ORG);
+    expect(up.payload).toMatchObject({ secret_kid: 'v1', secret_last4: b.webhook_secret!.slice(-4), last_ping_at: null,
+      hook_events: [], last_error: null, last_error_at: null });
+    expect(JSON.stringify(up.payload)).not.toContain(b.webhook_secret!);
+    expect(sello.olvidadas).toEqual([CFG]);
+    expect(b.config).toMatchObject({ id: CFG, state: 'waiting_ping', last_error: null, hook_events: [],
+      webhook_url: `https://officialvanguard.com/webhooks/github/${CFG}` });
+    expect(doble.ops.some((o) => o.table === 'code_review_configs' && o.action === 'insert')).toBe(false);
+  });
+
+  it('rotate_secret: viewer y anónimo 403 sin sellar; RL_COSTLY agotado → 429 sin sellar; sin config, el alta (201)', async () => {
     config = filaConfig();
+    rol = 'viewer';
+    expect((await pedir('code-review', { method: 'PUT', body: { connection_id: CONN, enabled: true, rotate_secret: true } })).status).toBe(403);
+    anon = true;
+    expect((await pedir('code-review', { method: 'PUT', body: { connection_id: CONN, enabled: true, rotate_secret: true } })).status).toBe(403);
+    rol = 'owner'; anon = false;
+    const agotado = { RL_COSTLY: { limit: async () => ({ success: false }) } } as unknown as Partial<CloudflareBindings>;
+    expect((await pedir('code-review', { method: 'PUT', body: { connection_id: CONN, enabled: true, rotate_secret: true } }, agotado)).status)
+      .toBe(429);
+    expect(sello.llamadas).toHaveLength(0);
+    expect(sello.olvidadas).toHaveLength(0);
+    config = null;
+    const alta = await pedir('code-review', { method: 'PUT', body: { connection_id: CONN, enabled: true, rotate_secret: true } });
+    expect(alta.status).toBe(201);
+    expect(CodeReviewSaved.parse(await alta.json()).webhook_secret).toMatch(/^vgw_/);
+  });
+
+  it('rotate_secret tras pushes: last_event_at también a null (la tarjeta vuelve a waiting_ping); CAS por updated_at', async () => {
+    config = filaConfig({ last_event_at: '2026-10-24T18:25:00+00:00', updated_at: '2026-10-24T18:00:00+00:00' });
+    const b = CodeReviewSaved.parse(await (await pedir('code-review', { method: 'PUT',
+      body: { connection_id: CONN, enabled: true, rotate_secret: true } })).json());
+    expect(b.config).toMatchObject({ state: 'waiting_ping', last_event_at: null, last_ping_at: null });
+    const up = doble.ops.find((o) => o.table === 'code_review_configs' && o.action === 'update')!;
+    expect(up.payload).toMatchObject({ last_event_at: null });
+    expect(eqDe(up, 'updated_at')).toBe('2026-10-24T18:00:00+00:00');
+  });
+
+  it('dos rotaciones a la vez: la que pierde el CAS (0 filas) recibe 409 y no un secreto que nunca verificaría', async () => {
+    config = filaConfig({ updated_at: '2026-10-24T18:00:00+00:00' });
+    tabla = (op) => (op.table === 'code_review_configs' && op.action === 'update' ? { data: null } : undefined);
     const r = await pedir('code-review', { method: 'PUT', body: { connection_id: CONN, enabled: true, rotate_secret: true } });
-    expect(r.status).toBe(400);
-    expect(doble.ops.some((o) => o.table === 'code_review_configs')).toBe(false);
+    expect(r.status).toBe(409);
+    expect(JSON.stringify(await r.json())).not.toContain('vgw_');
+    expect(sello.olvidadas).toHaveLength(0);
+  });
+
+  it('sin rotate_secret, cambiar enabled no toca el secreto ni el ping', async () => {
+    config = filaConfig();
+    const b = CodeReviewSaved.parse(await (await pedir('code-review', { method: 'PUT', body: { connection_id: CONN, enabled: false } })).json());
+    expect(b.webhook_secret).toBeNull();
+    const up = doble.ops.find((o) => o.table === 'code_review_configs' && o.action === 'update')!;
+    expect(up.payload).not.toHaveProperty('secret_sealed');
+    expect(up.payload).not.toHaveProperty('last_ping_at');
+    expect(sello.olvidadas).toHaveLength(0);
   });
 });
 

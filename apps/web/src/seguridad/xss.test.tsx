@@ -406,8 +406,8 @@ function acciones(c: string): AccionDato[] {
 
 const gruposDe = (c: string) => envenenar(z.array(GrupoDato), [...fx.moduleState.cloudflare.ahora, ...fx.moduleState.supabase.ahora], c, { ruta: 'grupos' });
 // Lo que la Bandeja enseña de cada grupo y fila (los verbos de copiar y navegar siempre se pintan).
-const verBandeja = (c: string) => gruposDe(c).flatMap((g): Ver[] => [g.etiqueta, ...(g.chapas ?? []), ...g.filas.flatMap((f): Ver[] => [
-  f.etiqueta, ltr(sinBidi(f.objeto!)), f.sub!, ...(f.chips ?? []), ...f.acciones.filter((a) => a.clase === 'copiar' || a.clase === 'navegar').map((a) => a.verbo)])]);
+const verBandeja = (c: string) => gruposDe(c).flatMap((g): Ver[] => [sinBidi(g.etiqueta), ...(g.chapas ?? []), ...g.filas.flatMap((f): Ver[] => [
+  sinBidi(f.etiqueta), ltr(sinBidi(f.objeto!)), sinBidi(f.sub!), ...(f.chips ?? []), ...f.acciones.filter((a) => a.clase === 'copiar' || a.clase === 'navegar').map((a) => a.verbo)])]);
 const rango = (k: number) => Array.from({ length: k }, (_, i) => i);
 // Lo que TablaTopIps enseña de cada IP: la IP y el UA recortado a 60 en <bdi dir="ltr">, y el title con el UA entero
 // (con los controles bidi a la vista).
@@ -499,7 +499,7 @@ const CASOS: Caso[] = [
         {acciones(c).map((a, i) => <AccionFila key={i} accion={a} puedeEscribir />)}
       </ul>, { ruta: `/o/${ORG}/cloudflare` });
     },
-    ver: (c) => [marca(c, 'verbo'), marca(c, 'grupos[0].filas[0].etiqueta'), ltr(sinBidi(marca(c, 'grupos[0].filas[0].objeto')))],
+    ver: (c) => [marca(c, 'verbo'), sinBidi(marca(c, 'grupos[0].filas[0].etiqueta')), ltr(sinBidi(marca(c, 'grupos[0].filas[0].objeto')))],
   },
   {
     nombre: 'DetalleHallazgo con PromptCorreccion (texto del prompt en <pre>)',
@@ -508,7 +508,7 @@ const CASOS: Caso[] = [
       const fix = envenenar(FixPromptResponse, { ...fx.fixPrompt, cached: false, injection_flags: ['a', 'b'] }, c);
       return pintar(<DetalleHallazgo org={ORG} id={f.id} puedeEscribir />, { datos: [[['org', ORG, 'finding', f.id], f], [['org', ORG, 'fix', f.id], fix]] });
     },
-    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'rule_id'), marca(c, 'status_reason'), marca(c, 'prompt'), marca(c, 'model'),
+    ver: (c) => [sinBidi(marca(c, 'title')), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'rule_id'), marca(c, 'status_reason'), marca(c, 'prompt'), marca(c, 'model'),
       ltr(enJson(marca(c, 'evidence.valor'))), `CVE-2024-1${IMG}`],
   },
   {
@@ -517,7 +517,7 @@ const CASOS: Caso[] = [
       const f = { ...hallazgo(c), has_fix_prompt: false, status: 'open' as const };
       return pintar(<DetalleHallazgo org={ORG} id={f.id} puedeEscribir={false} />, { datos: [[['org', ORG, 'finding', f.id], f]] });
     },
-    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource')))],
+    ver: (c) => [sinBidi(marca(c, 'title')), ltr(sinBidi(marca(c, 'resource')))],
   },
   {
     nombre: 'PanelDetalle en Sheet (estrecho) y en aside (ancho) con el hallazgo de ?finding=',
@@ -526,7 +526,7 @@ const CASOS: Caso[] = [
       const o = { ruta: `/o/${ORG}/supabase?finding=${f.id}`, datos: [[['org', ORG, 'finding', f.id], f]] as [QueryKey, unknown][] };
       return conVentana(false, () => pintar(<DetalleEnPanel />, o)) + conVentana(true, () => pintar(<DetalleEnPanel />, o));
     },
-    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'status_reason'), ltr(enJson(marca(c, 'evidence.valor')))],
+    ver: (c) => [sinBidi(marca(c, 'title')), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'status_reason'), ltr(enJson(marca(c, 'evidence.valor')))],
   },
   {
     nombre: 'TarjetaConexion (meta, alcances, last4 y last_error) y TarjetaIngesta (label)',
@@ -579,7 +579,7 @@ const CASOS: Caso[] = [
         [['org', ORG, 'incident', i.id], i], [['org', ORG, 'traffic'], envenenar(Traffic, fx.traffic, c, { ruta: 'trafico' })],
         [['org', ORG, 'connections'], envenenar(z.array(ConnectionPublic), CONEXIONES, c)]] });
     },
-    ver: (c) => [marca(c, 'title'), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'code'), ...fx.incidentDetail.rule_ids.map((_, k) => marca(c, `rule_ids[${k}]`)),
+    ver: (c) => [sinBidi(marca(c, 'title')), ltr(sinBidi(marca(c, 'resource'))), marca(c, 'code'), ...fx.incidentDetail.rule_ids.map((_, k) => marca(c, `rule_ids[${k}]`)),
       ...fx.incidentDetail.notifications.map((_, k) => marca(c, `notifications[${k}].recipient_masked`)), ltr(sinBidi(marca(c, 'actions[0].target'))),
       marca(c, 'timeline[7].label'), ltr(enJson(marca(c, 'details.ua_top'))), ltr(enJson(marca(c, 'details.valor'))), ...verTopIps(c, 'trafico.')],
   })),
@@ -587,7 +587,7 @@ const CASOS: Caso[] = [
     nombre: 'PaginaIncidentes (lista: title, code y origen)',
     pintar: (c) => pintar(<PaginaIncidentes />, { ruta: `/o/${ORG}/incidents`, patron: '/o/:orgId/incidents',
       datos: [[['org', ORG, 'incidents', 'open'], envenenar(z.array(Incident), fx.incidents, c, { ids: true, ruta: 'incidentes' })]] }),
-    ver: (c) => fx.incidents.flatMap((_, k) => [marca(c, `incidentes[${k}].title`), marca(c, `incidentes[${k}].code`), marca(c, `incidentes[${k}].resource`)]),
+    ver: (c) => fx.incidents.flatMap((_, k) => [sinBidi(marca(c, `incidentes[${k}].title`)), marca(c, `incidentes[${k}].code`), marca(c, `incidentes[${k}].resource`)]),
   },
   {
     nombre: 'PaginaAuditoria: resumen de IA-2 (resumen, por_que, explicacion, model) y hallazgos abiertos',
@@ -619,7 +619,7 @@ const CASOS: Caso[] = [
     pintar: (c) => pintar(<PaginaResumen />, { ruta: `/o/${ORG}/overview`, patron: '/o/:orgId/overview', datos: [
       [['org', ORG, 'overview'], envenenar(Overview, fx.overview, c, { ids: true, ruta: 'overview' })],
       [['org', ORG, 'connections'], envenenar(z.array(ConnectionPublic), CONEXIONES, c)]] }),
-    ver: (c) => fx.overview.ahora.flatMap((_, k) => [marca(c, `overview.ahora[${k}].title`), marca(c, `overview.ahora[${k}].resource`)]),
+    ver: (c) => fx.overview.ahora.flatMap((_, k) => [sinBidi(marca(c, `overview.ahora[${k}].title`)), marca(c, `overview.ahora[${k}].resource`)]),
   },
   {
     nombre: 'PantallaModulo vía PaginaCloudflare (?filtro= de la URL, cifras, «Ahora», checks, zona y plan)',
@@ -656,7 +656,7 @@ const CASOS: Caso[] = [
         datos: [[['org', ORG, 'overview'], o]] });
     },
     ver: (c) => [marca(c, 'org.name'), marca(c, 'me.orgs[0].name'), marca(c, 'me.orgs[1].name'), marca(c, 'me.user.email'),
-      marca(c, 'overview.ahora[0].title')],
+      sinBidi(marca(c, 'overview.ahora[0].title'))],
     // Absoluto, en la org de la URL y con el id codificado (antes era `incidents/${id}` relativo y sin codificar).
     enlaces: (c) => [VER_AHORA.get(c) ?? 'sin incidente crítico en overview.ahora'],
   },

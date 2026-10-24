@@ -80,7 +80,7 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
           <Etiqueta texto={f.confirmed ? 'Confirmado por regla' : 'Posible'} rol={f.confirmed ? 'neutra' : 'aviso'} />
           <Etiqueta texto={estado.texto} rol={estado.rol} />
         </div>
-        <h2 className="text-[17px] font-semibold">{f.title}</h2>
+        <h2 className="text-[17px] font-semibold wrap-anywhere">{sinBidi(f.title)}</h2>
         <p className="font-mono text-[13px] text-muted-foreground">{f.rule_id}</p>
         <p className="text-[12.5px] text-texto-3">Visto por primera vez {cuando(f.first_seen_at)} · última vez {cuando(f.last_seen_at)}</p>
         {f.status_reason ? <p className="text-sm text-muted-foreground">Motivo: {f.status_reason}</p> : null}

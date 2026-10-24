@@ -56,12 +56,12 @@ export function FilaProblema({ fila, puedeEscribir }: { fila: FilaDato; puedeEsc
       <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn('text-[15px] font-medium', rol === 'neutra' ? '' : TEXTO_ROL[rol])}>{fila.etiqueta}</span>
+          <span className={cn('text-[15px] font-medium wrap-anywhere', rol === 'neutra' ? '' : TEXTO_ROL[rol])}>{sinBidi(fila.etiqueta)}</span>
           {fila.severidad_cve ? <ChapaSeveridad severity={fila.severidad_cve} /> : null}
           {fila.chips?.map((c) => <Etiqueta key={c} texto={c} />)}
         </div>
         {fila.objeto ? <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(fila.objeto)}</bdi></span> : null}
-        {fila.sub ? <span className="text-[12.5px] text-texto-3">{fila.sub}</span> : null}
+        {fila.sub ? <span className="text-[12.5px] text-texto-3 wrap-anywhere">{sinBidi(fila.sub)}</span> : null}
         {fila.fraccion != null ? (
           <span className="h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted" role="img" aria-label={`${Math.round(fila.fraccion * 100)} %`}>
             <span className={cn('block h-full', rol === 'mal' ? 'bg-mal/80' : rol === 'aviso' ? 'bg-aviso/70' : 'bg-borde-fuerte')} style={{ width: `${fila.fraccion * 100}%` }} />
@@ -91,7 +91,7 @@ export function Bandeja({ grupos, puedeEscribir, filtro, hora }: { grupos: Grupo
           <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={g.etiqueta}>
             <header className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
               <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
-              <h4 className="flex-1 text-sm font-semibold">{g.etiqueta}</h4>
+              <h4 className="flex-1 text-sm font-semibold wrap-anywhere">{sinBidi(g.etiqueta)}</h4>
               {g.chapas?.map((c) => <Etiqueta key={c} texto={c} />)}
               <span className={cn('text-sm font-semibold tabular-nums', rol === 'neutra' ? 'text-muted-foreground' : TEXTO_ROL[rol])}>{g.n}</span>
             </header>

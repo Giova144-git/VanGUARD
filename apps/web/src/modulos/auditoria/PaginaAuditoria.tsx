@@ -22,6 +22,7 @@ import { esId } from '@/lib/ids';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
+import { sinBidi } from '@/lib/bidi';
 import { PINTA_PASO, estadoPaso, estadoScan, textoPaso } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
@@ -202,7 +203,7 @@ function Corrida({ id }: { id: string }) {
               <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
                 <ChapaSeveridad severity={f.severity} />
                 <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-[15px] font-medium">{f.title}</span>
+                  <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground">{f.resource}</span>
                 </div>
                 <Link to={`?finding=${encodeURIComponent(f.id)}`} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info hover:bg-info/15">Ver y corregir<ChevronRight className="size-4" /></Link>

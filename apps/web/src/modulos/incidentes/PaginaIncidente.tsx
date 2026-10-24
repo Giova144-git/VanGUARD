@@ -166,7 +166,7 @@ function Detalle({ incidentId }: { incidentId: string }) {
               <span className="font-mono text-[13px] text-muted-foreground">{i.code}</span>
               <Etiqueta texto={est.texto} rol={est.rol} />
             </div>
-            <h2 className="text-[22px] font-semibold">{i.title}</h2>
+            <h2 className="text-[22px] font-semibold wrap-anywhere">{sinBidi(i.title)}</h2>
             {/* dir="ltr": un <bdi> sin dir vale dir=auto y una primera letra árabe o hebrea reordenaría la ruta o la IP. */}
             {ip ? <p className="font-mono text-[15px]"><bdi dir="ltr">{sinBidi(ip)}</bdi></p>
               : <p className="font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(i.resource)}</bdi></p>}

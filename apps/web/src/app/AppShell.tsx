@@ -18,6 +18,7 @@ import { NAV, entradaNav, type EntradaNav, type IdNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+import { sinBidi } from '@/lib/bidi';
 import { useOrg } from './guardas';
 import { Marca } from './Marca';
 
@@ -141,7 +142,7 @@ function FilaEstado({ overview, fallos, sinConexiones }: { overview: UseQueryRes
   if (critico) contenido = (
     <div className="flex flex-wrap items-center gap-3 border-b border-mal-borde bg-mal-relleno px-4 py-2.5 text-mal md:px-6">
       <Siren className="size-5 shrink-0" />
-      <span className="flex-1 text-sm font-semibold">Incidente crítico en curso: {critico.title}</span>
+      <span className="flex-1 text-sm font-semibold">Incidente crítico en curso: {sinBidi(critico.title)}</span>
       {/* Absoluta y codificada, como FilaAhora: un id con «../», «?» o «#» no cambia de org, de ruta ni de query. */}
       <Link to={`/o/${org.id}/incidents/${encodeURIComponent(critico.id)}`} className="text-sm font-semibold underline underline-offset-4">Ver ahora</Link>
     </div>

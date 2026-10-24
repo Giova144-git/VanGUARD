@@ -14,6 +14,7 @@ import { cuando, miles } from '@/lib/formato';
 import { entradaNav } from '@/lib/nav';
 import { SEVERIDAD, deMapa, type Rol } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
+import { sinBidi } from '@/lib/bidi';
 import { BotonSimularAtaque } from './Simulacion';
 
 export const ESTADO_INC: Record<IncidentStatus, { texto: string; rol: Rol }> = {
@@ -26,7 +27,7 @@ export const estadoInc = (s: unknown) => deMapa(ESTADO_INC, s, { texto: '—', r
 // Texto del aviso aria-live: una severidad fuera de contrato va sin etiqueta.
 export const avisoNuevo = (n: Pick<Incident, 'severity' | 'title'>) => {
   const sev = deMapa<Severity, { etiqueta: string } | null>(SEVERIDAD, n.severity, null)?.etiqueta.toLowerCase();
-  return `Nuevo incidente${sev ? ` ${sev}` : ''}: ${n.title}`;
+  return `Nuevo incidente${sev ? ` ${sev}` : ''}: ${sinBidi(n.title)}`;
 };
 const abierto = (i: Incident) => i.status === 'open' || i.status === 'ack';
 const origen = (r: string) => r.replace(/^ip:/, '');
@@ -87,7 +88,7 @@ export default function PaginaIncidentes() {
                   <Link to={`/o/${org.id}/incidents/${encodeURIComponent(i.id)}`} className={cn('grid grid-cols-1 items-center gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring', PISTAS)}>
                     <ChapaSeveridad severity={i.severity} />
                     <span className="font-mono text-[13px]">{i.code}</span>
-                    <span className="text-[15px] font-medium">{i.title}</span>
+                    <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(i.title)}</span>
                     <span className="truncate font-mono text-[13px] text-muted-foreground">{origen(i.resource)}</span>
                     <span className="text-sm tabular-nums">{miles(i.event_count)} <span className="text-texto-3 @min-[66rem]:sr-only">eventos</span></span>
                     <span className="text-sm text-muted-foreground tabular-nums">{cuando(i.started_at)}</span>

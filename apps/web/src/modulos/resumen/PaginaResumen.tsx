@@ -23,6 +23,7 @@ import { cuando } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
+import { sinBidi } from '@/lib/bidi';
 
 // Un módulo de overview.ahora fuera de contrato (o «__proto__») sale «—» neutro: deMapa, no NOMBRE[k].
 const NOMBRE: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
@@ -35,7 +36,7 @@ function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
       <Etiqueta texto={deMapa(NOMBRE, item.module, '—')} />
       <ChapaSeveridad severity={item.severity} />
       <div className="flex min-w-0 flex-1 flex-col" title={item.rule_id}>
-        <span className="text-[15px] font-medium">{item.title}</span>
+        <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(item.title)}</span>
         <span className="truncate font-mono text-[13px] text-muted-foreground">{item.resource}</span>
       </div>
       <Link to={href} className="inline-flex h-11 items-center gap-1 rounded-lg border border-info bg-info-relleno px-4 text-sm font-medium text-info hover:bg-info/15">

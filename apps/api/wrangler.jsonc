@@ -27,7 +27,10 @@
   // VG_VERSION no va aquí: la pone el deploy command con --var a partir del commit.
   "vars": {
     "VG_ENV": "production",
-    "APP_ORIGIN": "https://officialvanguard.com"
+    "APP_ORIGIN": "https://officialvanguard.com",
+    // Demo por el sandbox de Kapso: E27 y el despachador no exigen la ventana de 24 h (el código de unión no llega
+    // como message.received). Se quita al pasar al número real (kapso-config.mjs --real).
+    "KAPSO_SANDBOX": "1"
   },
 
   // ── BACK: crons, cola y rate limits (S15 15.7, 15.8 y 15.3). Plan Workers Free: sin "limits" (no se pueden
@@ -47,6 +50,8 @@
   "ratelimits": [
     { "name": "RL_API", "namespace_id": "1001", "simple": { "limit": 300, "period": 60 } },
     { "name": "RL_COSTLY", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } },
-    { "name": "RL_INGEST", "namespace_id": "1003", "simple": { "limit": 300, "period": 10 } }
+    { "name": "RL_INGEST", "namespace_id": "1003", "simple": { "limit": 300, "period": 10 } },
+    // Respuestas de E31 a un mismo teléfono (VERIFICAR con código malo): cada respuesta gasta cupo de WhatsApp.
+    { "name": "RL_WA", "namespace_id": "1004", "simple": { "limit": 3, "period": 60 } }
   ]
 }

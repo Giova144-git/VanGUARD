@@ -1,7 +1,7 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Contact, ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, type ConnectionCreate, type FindingPatch, type ScanCreate,
+  Contact, ConnectionCreated, ConnectionTest, Finding, FixPromptResponse, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -127,4 +127,16 @@ export async function descargarExport(org: string, formato: 'md' | 'json') {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return nombre;
+}
+
+// DeepWiki: estimar (E40, solo lee GitHub) y generar (E41, gasta IA con el tope que el usuario aceptó).
+export const useEstimarWiki = (org: string) => useMutation({
+  mutationFn: (body: WikiRepoRef) => api(`/api/orgs/${org}/wiki/estimate`, { method: 'POST', body, esquema: WikiEstimate }),
+});
+export function useGenerarWiki(org: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: WikiRunCreate) => api(`/api/orgs/${org}/wiki/runs`, { method: 'POST', body, esquema: WikiRunAccepted }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['org', org, 'wiki', 'runs'] }),
+  });
 }

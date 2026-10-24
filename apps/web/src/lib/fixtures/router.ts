@@ -371,6 +371,26 @@ function probarCanal(org: string, body: unknown) {
   return { ok: true, provider_id: `fx_${crypto.randomUUID().slice(0, 8)}` };
 }
 
+// ── DeepWiki (E40–E44) ───────────────────────────────────────────────────────────────────────────────────────
+// E42 devuelve wikiRunRunning en las primeras consultas de cada corrida y luego wikiRunDone, para ver el progreso.
+const consultasWiki = new Map<string, number>();
+function verWikiRun(id: string) {
+  if (id !== fx.wikiRunDone.id) {
+    const r = fx.wikiRuns.find((x) => x.id === id);
+    return r ?? falla(404, 'not_found', 'Esa wiki no existe');
+  }
+  const n = (consultasWiki.get(id) ?? 0) + 1;
+  consultasWiki.set(id, n);
+  return n <= 3 ? { ...fx.wikiRunRunning, id } : fx.wikiRunDone;
+}
+function generarWiki(body: unknown) {
+  exigirAdmin();
+  const b = (body ?? {}) as { max_usd?: number };
+  if (b.max_usd != null && (b.max_usd <= 0 || b.max_usd > 5)) falla(422, 'invalid_body', 'El tope va de 0 a 5 USD');
+  consultasWiki.set(fx.wikiRunDone.id, 0);                       // cada generación vuelve a mostrar el progreso
+  return { wiki_run_id: fx.wikiRunDone.id, cached: false };
+}
+
 const ORG = '\\/api\\/orgs\\/([^/]+)';
 const r = (s: string) => new RegExp(`^${s}$`);
 const rutas: [string, RegExp, H][] = [
@@ -397,6 +417,11 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/traffic`),                 () => fx.traffic],
   ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[2]!)],
+  ['POST', r(`${ORG}\\/wiki\\/estimate`),         () => { exigirAdmin(); return fx.wikiEstimate; }],
+  ['POST', r(`${ORG}\\/wiki\\/runs`),             (_m, b) => generarWiki(b)],
+  ['GET',  r(`${ORG}\\/wiki\\/runs`),             () => fx.wikiRuns],
+  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), () => fx.wikiDoc],
+  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                (m) => { exigirAdmin(); return structuredClone(contactosDe(m[1]!)); }],
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],

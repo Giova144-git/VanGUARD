@@ -56,6 +56,11 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Las dependencias se cruzan con la base pública de vulnerabilidades (OSV) por su versión exacta.',
     'Los secretos que encontramos se muestran tapados: nunca los copiamos completos.',
   ] },
+  wiki: { titulo: '¿Cómo funciona la wiki?', pasos: [
+    'Leemos tu repo en GitHub y una IA lo explica en lenguaje llano: qué es, cómo funciona, sus piezas, un mapa y los riesgos.',
+    'Antes de gastar nada te decimos cuánto costará. Si ese mismo commit ya tiene wiki, verla es gratis.',
+    'Lo que escribe la IA se muestra como texto: nunca ejecutamos nada de lo que traiga el documento.',
+  ] },
   performance: { titulo: '¿Cómo leer este módulo?', pasos: [
     'Medimos tu web con Lighthouse (el mismo de PageSpeed Insights) y la comparamos con la medición anterior.',
     'Si una métrica empeora frente a la anterior, la marcamos en ámbar para que sepas qué cambio la causó.',

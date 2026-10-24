@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic,
+  Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -130,4 +130,21 @@ export const useContactos = (org: string, habilitado: boolean) => useQuery({
 export const usePerfRuns = (org: string) => useQuery({
   queryKey: ['org', org, 'perf'], staleTime: 60_000, refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/perf/runs?limit=30`, { esquema: z.array(PerfRunExt) }),
+});
+
+// DeepWiki (E42–E44). wiki_runs no tiene Realtime: 3 s mientras queued|running y solo con la pestaña visible.
+export const useWikiRuns = (org: string, repo: string | null) => useQuery({
+  ...base, queryKey: ['org', org, 'wiki', 'runs', repo], refetchInterval: 30_000,
+  queryFn: () => api(`/api/orgs/${org}/wiki/runs${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`, { esquema: z.array(WikiRun) }),
+});
+
+export const useWikiRun = (org: string, id: string | null) => useQuery({
+  queryKey: ['org', org, 'wiki', 'run', id], enabled: !!id, refetchIntervalInBackground: false,
+  queryFn: () => api(`/api/orgs/${org}/wiki/runs/${id}`, { esquema: WikiRun }),
+  refetchInterval: (q) => ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? 3_000 : false,
+});
+
+export const useWikiDoc = (org: string, id: string | null, listo: boolean) => useQuery({
+  queryKey: ['org', org, 'wiki', 'doc', id], enabled: !!id && listo, staleTime: Infinity,
+  queryFn: () => api(`/api/orgs/${org}/wiki/runs/${id}/doc`, { esquema: WikiDoc }),
 });

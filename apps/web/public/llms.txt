@@ -1,13 +1,12 @@
 # VanGUARD
 
-> Panel de seguridad para startups sobre Supabase, Cloudflare y GitHub. Audita el ecosistema con un botón, detecta ataques en vivo y avisa por WhatsApp, desde donde se aprueba «Bloquear IP» con un código de un solo uso. Un motor de reglas decide las alertas; Claude solo explica y redacta prompts de corrección. Las integraciones son de solo lectura salvo «Bloquear IP», que exige confirmación. Corre entero en el plan gratuito de Cloudflare.
+> Panel de seguridad para startups sobre Supabase, Cloudflare y GitHub. Audita el ecosistema con un botón y revisa cada push, merge y pull request a main: si aparece una clave o un .env, avisa por WhatsApp según la severidad que elija el usuario. Con el tráfico firmado de la app detecta ataques en vivo y propone «Bloquear IP», que se confirma con un código de un solo uso. Un motor de reglas decide las alertas; Claude solo explica y redacta prompts de corrección. Las integraciones son de solo lectura salvo «Bloquear IP», que usa un token aparte. Corre entero en el plan gratuito de Cloudflare.
 
 - Producto: https://officialvanguard.com (botón «Ver demo»: rol viewer, sin gasto de IA)
 - Salud: https://officialvanguard.com/api/health
-- `demo.officialvanguard.com` es nuestra app víctima, sembrada con fallas simuladas y secretos falsos.
 
 ## Documentación
-- [README](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/README.md): qué hace y cómo evaluarlo en 5 minutos
+- [README](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/README.md): qué hace hoy, cómo probarlo y cómo correrlo en local
 - [ARQUITECTURA](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/ARQUITECTURA.md): Worker único en el plan gratuito, auditoría por pasos en una cola, Supabase con Realtime
 - [SECURITY](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/SECURITY.md): cifrado de sobre, guardas de claves, topes de IA
 - [THREAT_MODEL](https://github.com/platanus-hack/platanus-hack-26-ve-team-22/blob/main/THREAT_MODEL.md): amenazas y mitigaciones

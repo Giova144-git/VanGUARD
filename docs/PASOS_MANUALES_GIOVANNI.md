@@ -96,15 +96,17 @@ Escríbeme «listo, paso 3». Verifico desde aquí que las líneas estén llenas
 
 Cuando esté, verifico que `/api/me` responda 401 sin token y el BACK da por aceptado el hito 1.
 
-### Paso 4 · Token de la prueba de humo (temporal) · 2 min · ✅ prueba hecha (sáb 11:01Z) · falta borrar el secreto
-**Resultado:** cada paso de cola con 40 consultas a OSV gastó 21–25 ms de CPU (wall ~1,2 s), todos «ok». Es más que los 10 ms nominales del plan Free: el BACK baja la carga por paso. **Ahora: borra el Secret `VG_HUMO_TOKEN` del panel del Worker.**
+### Paso 4 · Token de la prueba de humo (temporal) · 2 min · ✅ hecho (prueba a las 11:01Z; secreto borrado del panel)
+**Resultado:** cada paso de cola con 40 consultas a OSV gastó 21–25 ms de CPU (wall ~1,2 s), todos «ok». Es más que los 10 ms nominales del plan Free: el BACK baja la carga por paso. El secreto ya se borró y el BACK quitó la ruta del código.
 
 Sirve para medir cuánta CPU gasta cada paso del Worker: es la evidencia de que «corre en el plan gratuito».
 1. El valor ya lo creó `node scripts/generar-secretos.mjs` en el paso 3 (línea `VG_HUMO_TOKEN` del `.env`).
 2. En el paso 3b se copia al Worker como Secret con el mismo nombre.
 3. Escríbeme «listo, paso 4». Yo corro la prueba, anotamos las cifras y después **borras ese secreto** del panel.
 
-### Paso 5 · Claves de Claude (Anthropic) · 10 min
+### Paso 5 · Claves de Claude (Anthropic) · ✅ hecho, con una sola key
+**Decidido por Giovanni:** se usa **una sola key** de Claude, la misma en el `.env` y en el Worker. Lo de abajo (dos workspaces) queda solo como referencia. El tope de gasto de esa key es la barrera final; los topes diarios por org de la app son la primera.
+
 platform.claude.com → Settings → **Workspaces**:
 1. Crea dos workspaces: **`team22-dev`** (tope de gasto **100 USD**) y **`team22-prod`** (tope **150 USD**). El tope es la barrera final si algo se descontrola.
 2. En cada uno, API keys → crea una key.
@@ -113,7 +115,7 @@ platform.claude.com → Settings → **Workspaces**:
    - **`team22-dev`** → `ANTHROPIC_API_KEY` en `apps/api/.dev.vars` **y** en el `.env` de la raíz (este último lo usa la CLI de DeepWiki para la prueba real).
 4. **No** crees `IA_CORTE` todavía: es el interruptor de emergencia y solo se toca si hay que apagar la IA.
 
-### Paso 6 · Aprobar una decisión de seguridad del BACK · 1 min
+### Paso 6 · Aprobar una decisión de seguridad del BACK · 1 min · ✅ aprobada la (b)
 Supabase marca un aviso porque la función `join_demo_org()` (el plan B del botón «Ver demo») la puede ejecutar cualquier usuario autenticado. El BACK propone **quitar ese permiso con una migración nueva en cuanto el botón «Ver demo» funcione en producción**. Respóndeme «apruebo la (b)», o dime si prefieres dejarlo marcado como aceptado.
 
 ---
@@ -121,13 +123,38 @@ Supabase marca un aviso porque la función `join_demo_org()` (el plan B del bot�
 ## Esta mañana (antes de las 12:00)
 
 ### Paso 7 · WhatsApp con Kapso (P0: el centro de la demo) · 20 min
-1. En Kapso, entra al proyecto y activa el **Sandbox de WhatsApp**.
-2. Desde **tu teléfono** (y los del equipo que vayan a recibir alertas), únete al sandbox con el código que muestra Kapso.
-3. Copia y guarda como **Secrets del Worker** (y en `apps/api/.dev.vars`):
-   - `KAPSO_API_KEY`: Project → API keys.
-   - `KAPSO_PHONE_NUMBER_ID`: el id del número del sandbox.
-4. Webhooks → crea uno con la URL **`https://officialvanguard.com/webhooks/kapso`** y copia su secreto como **`KAPSO_WEBHOOK_SECRET`**.
-5. Escríbeme «listo, paso 7». Yo coordino con el BACK la primera prueba de envío.
+Va en dos tiempos: **7A a 7D ahora**, y **7E (el webhook) cuando el BACK publique la ruta `/webhooks/kapso`**, que hoy responde 404. Si el webhook se crea antes, Kapso falla al entregar y lo pausa solo.
+
+**7A · Unir tu teléfono al sandbox** (los menús de Kapso pueden variar un poco)
+1. En Kapso, entra a tu proyecto → **WhatsApp** → **Sandbox** → **Add Test Number**.
+2. Escribe **tu número de WhatsApp** con código de país (+58…) → **Create**.
+3. Kapso muestra un **código de 6 caracteres** (distingue mayúsculas y **caduca en 15 min**), el número del sandbox y el botón **Open WhatsApp**.
+4. Pulsa **Open WhatsApp**, envía el código desde **ese mismo teléfono** y espera la respuesta de confirmación.
+5. El sandbox solo envía a números unidos. Es el teléfono que recibirá las alertas en la demo. **Repite la unión 30 min antes del pitch** para que la ventana siga abierta.
+
+**7B · API key del proyecto**
+1. Kapso → tu proyecto → **API keys** (en la configuración del proyecto) → crea una key.
+2. Pégala en el `.env` de la raíz, en la línea **`KAPSO_API_KEY`**. Nunca en un chat.
+
+**7C · Id del número y secreto del webhook, con un comando**
+```bash
+node scripts/kapso-config.mjs
+```
+Busca en tu proyecto de Kapso el número sandbox y escribe **`KAPSO_PHONE_NUMBER_ID`**. Además genera **`KAPSO_WEBHOOK_SECRET`**: ese secreto lo elegimos nosotros y Kapso firma con él cada aviso. Solo llena líneas vacías y no muestra ni la key ni el secreto.
+
+**7D · Al Worker y a la app**
+1. Cloudflare → Workers & Pages → `vanguard` → Settings → Variables and Secrets → Add → **Secret**, con estos 3 nombres y los valores del `.env`: **`KAPSO_API_KEY`**, **`KAPSO_PHONE_NUMBER_ID`** y **`KAPSO_WEBHOOK_SECRET`**.
+2. `node scripts/repartir-env.mjs` para copiarlos a `apps/api/.dev.vars`.
+3. **No** llenes `KAPSO_WABA_ID`: es para número propio, no para el sandbox.
+4. Escríbeme «listo, paso 7». Yo verifico los nombres en el Worker y coordino con el BACK la primera prueba de envío.
+
+**7E · Webhook (cuando te avise que la ruta existe)**
+```bash
+node scripts/kapso-config.mjs --webhook
+```
+Crea el webhook hacia `https://officialvanguard.com/webhooks/kapso` con los eventos recibido, entregado, leído y fallido, firmado con `KAPSO_WEBHOOK_SECRET` y sin buffering. Si ya existe uno, no lo duplica.
+
+**Saldo:** el plan Free de Kapso trae **2 USD de crédito** y cada mensaje del sandbox lo gasta. Con saldo en 0, Kapso pausa los envíos. Antes de cada ensayo, mira el saldo en el panel.
 
 ### Paso 8 · Las dos pimientas del cifrado · 3 min (el BACK ya pasó el hito 2)
 1. Ya las creó `node scripts/generar-secretos.mjs` en el paso 3 (`VG_KEK_PEPPER` y `VG_FP_PEPPER` del `.env`).

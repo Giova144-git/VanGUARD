@@ -159,6 +159,14 @@ node scripts/kapso-config.mjs --webhook
 ```
 Crea el webhook hacia `https://officialvanguard.com/webhooks/kapso` con los eventos recibido, entregado, leído y fallido, firmado con `KAPSO_WEBHOOK_SECRET` y sin buffering. Si ya existe uno, no lo duplica.
 
+**7F · Tu teléfono como contacto de alerta en VanGUARD** (cuando la app web esté en `officialvanguard.com`)
+Las alertas de un incidente van a los **contactos de la org** donde pasó; en la demo, la org «Tienda Demo». Para que te llegue un WhatsApp hacen falta **tres llaves**: que estés como contacto, que ese contacto esté **verificado** y que tu teléfono esté **unido al sandbox** de Kapso (7A, ya hecho).
+1. **Regístrate** en `https://officialvanguard.com` con tu correo.
+2. **Hazte dueño de la org de demo:** dime con qué correo te registraste y yo corro el `insert` en `org_members` (§05.11). Ese SQL no se versiona porque lleva correos.
+3. En VanGUARD → **Ajustes → Contactos**: tu nombre, tu teléfono en formato **+58…**, **WhatsApp ✓**, prioridad **1** → **Guardar**. La chapa dirá «Sin verificar».
+4. **Verificación:** escríbeme «verifica mi contacto». Yo marco `verified_at` en la base, sin escribir tu teléfono en ningún archivo, y la chapa pasa a «Verificado». Es la defensa contra que alguien use VanGUARD para escribirle a terceros.
+5. **Prueba:** Ajustes → **Probar WhatsApp**, cuando el BACK haya desplegado Kapso y el webhook esté creado (7E). Cada prueba gasta crédito del sandbox.
+
 **Saldo:** el plan Free de Kapso trae **2 USD de crédito** y cada mensaje del sandbox lo gasta. Con saldo en 0, Kapso pausa los envíos. Antes de cada ensayo, mira el saldo en el panel.
 
 ### Paso 8 · Las dos pimientas del cifrado · 3 min (el BACK ya pasó el hito 2)

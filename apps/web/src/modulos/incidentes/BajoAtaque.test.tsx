@@ -281,6 +281,46 @@ describe('BajoAtaque · vista previa de la propuesta sin token o sin permiso', (
   });
 });
 
+// Todas las combinaciones de E55 con la forma de leerOfertaBajoAtaque: motivo × hostname × activo × permiso × rol. copiar
+// es lo que manda el BACK en cada caso: los pasos para retirarla si la retirada falló y, si no, los de activarlo a mano
+// con sin_conexion o sin_permiso (marcas reconocibles para ver dónde acaban).
+describe('BajoAtaque · matriz de E55', () => {
+  const MOTIVOS = [null, 'no_aplica', 'sin_host', 'en_curso', 'cerrado', 'una_ip', 'sin_conexion', 'host_protegido', 'fuera_de_zona', 'sin_permiso'] as const;
+  const PREVIA = new Set<string | null>(['sin_conexion', 'sin_permiso']);
+  const LINEA = new Set<string | null>(['una_ip', 'en_curso', 'host_protegido', 'fuera_de_zona', 'sin_host']);
+  const casos = MOTIVOS.flatMap((motivo) => [null, ACTIVO.target].flatMap((hostname) => (['ninguno', 'vivo', 'fallida'] as const)
+    .flatMap((activo) => ([null, 'ok', 'falta', 'sin_probar'] as const).flatMap((permiso) => [ADMIN, VIEWER].map((org) => ({ motivo, hostname, activo, permiso, org }))))));
+
+  it.each(MOTIVOS.map((m) => [String(m), m] as const))('motivo %s: cada combinación pinta lo que debe y nunca ofrece confirmar sin propuesta', (_n, motivo) => {
+    for (const c of casos.filter((x) => x.motivo === motivo)) {
+      const o = UnderAttackOffer.parse({ ...OFERTA, motivo, hostname: c.hostname, permiso: c.permiso, scopes: motivo === null ? ['host'] : [],
+        ofrece: !['no_aplica', 'sin_host', 'cerrado', 'una_ip'].includes(String(motivo)),
+        activo: c.activo === 'ninguno' ? null : { ...ACTIVO, retirada_fallida: c.activo === 'fallida' },
+        copiar: c.activo === 'fallida' ? 'PASOS_RETIRAR' : PREVIA.has(motivo) ? 'PASOS_ACTIVAR' : null });
+      const html = tarjeta(c.org, o);
+      const donde = `${String(motivo)} · host ${c.hostname ? 'sí' : 'no'} · activo ${c.activo} · permiso ${String(c.permiso)} · ${c.org.role}`;
+      const admin = c.org.puedeEscribir;
+      // Sin una propuesta abierta no hay nada que confirmar; los pasos para activarlo a mano nunca se pintan.
+      for (const no of ['<form', '<input', 'type="submit"', 'PASOS_ACTIVAR']) expect(html, donde).not.toContain(no);
+      if (c.activo === 'fallida') {
+        expect(html, donde).toContain('Reintentar');
+        expect(html, donde).toContain('PASOS_RETIRAR');
+      } else if (c.activo === 'vivo') {
+        expect(html, donde).toContain('Desactivar ahora');
+        expect(html, donde).not.toContain('vista previa');
+      } else if (!c.hostname || motivo === 'no_aplica' || motivo === 'cerrado') {
+        expect(html, donde).toBe('');
+      } else {
+        expect(html.includes('Activar modo bajo ataque'), donde).toBe(motivo === null);
+        expect(html.includes('vista previa'), donde).toBe(PREVIA.has(motivo));
+        expect(html.includes('Copiar pasos') || html.includes('href='), donde).toBe(PREVIA.has(motivo) && admin);
+        if (LINEA.has(motivo)) expect(html, donde).not.toMatch(/<button|<a /);
+        if (motivo === null && !admin) expect(html, donde).toMatch(/<button[^>]*disabled=""[^>]*>.*Activar modo bajo ataque/);
+      }
+    }
+  });
+});
+
 describe('vivoDe: qué cuenta como modo activo', () => {
   const local = { id: ACTIVO.action_id, host: ACTIVO.target, en: ACTIVO.created_at, expira: ACTIVO.expires_at, fallida: false };
   const ejecutada: ActionPublic = { id: 'ac000000-0000-4000-8000-000000000009', kind: 'under_attack_on', target: ACTIVO.target,

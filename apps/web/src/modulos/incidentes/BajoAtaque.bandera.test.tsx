@@ -139,6 +139,36 @@ describe('BajoAtaque · la bandera oculta cualquier fallo de la primera lectura 
   });
 });
 
+// La duración de la vista previa y de la nota del botón sale de ttl_s: uno fuera de contrato (300..3600 entero) no llega a
+// pintarse, ni como «1 min» ni como «NaN min»; tras una lectura buena se queda la duración de esa lectura.
+describe('BajoAtaque · ttl_s fuera de contrato en E55', () => {
+  const SIN_PERMISO = { ...fx.underAttackOfferSinPermiso, ttl_s: 3600 };
+  const RAROS: [string, unknown][] = [['0', 0], ['60', 60], ['7200', 7200], ['ausente', undefined], ['1800.5', 1800.5], ['«1800»', '1800'], ['null', null]];
+  const ofertas = [['permiso ok', fx.underAttackOffer], ['sin_permiso', fx.underAttackOfferSinPermiso],
+    ['sin_conexion', { ...fx.underAttackOfferSinPermiso, motivo: 'sin_conexion', zone_name: null, connection_id: null, permiso: null }]] as const;
+
+  it.each(RAROS)('ttl_s %s en la primera lectura: la tarjeta no pinta nada (ni botón ni vista previa)', async (_n, ttl_s) => {
+    for (const [, oferta] of ofertas) {
+      const qc = nuevaCache();
+      tarjeta(qc, INUNDACION);
+      await leer(qc, () => Promise.resolve({ ...oferta, ttl_s }));
+      expect(vista(qc).error).toBeInstanceOf(z.ZodError);
+      expect(tarjeta(qc, INUNDACION)).toBe('');
+    }
+  });
+
+  it.each(RAROS)('ttl_s %s después de una lectura buena: sigue la duración de esa lectura', async (_n, ttl_s) => {
+    const qc = nuevaCache();
+    tarjeta(qc, INUNDACION);
+    await leer(qc, () => Promise.resolve(SIN_PERMISO));
+    expect(tarjeta(qc, INUNDACION)).toContain('pasa un desafío de Cloudflare durante 1 h.');
+    await leer(qc, () => Promise.resolve({ ...SIN_PERMISO, ttl_s }));
+    const html = tarjeta(qc, INUNDACION);
+    expect(html).toContain('pasa un desafío de Cloudflare durante 1 h.');
+    expect(html).not.toMatch(/NaN|durante 1 min|durante 0 min|durante 2 h/);
+  });
+});
+
 describe('BajoAtaque · tras una lectura buena de E55', () => {
   it.each(FALLOS.filter(([n]) => !n.startsWith('404')))('un fallo después (%s) deja la última oferta, sin role="alert"', async (_n, respuesta) => {
     const qc = nuevaCache();

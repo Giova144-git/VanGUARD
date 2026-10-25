@@ -482,7 +482,7 @@ function deshacerFalso(org: string, actionId: string) {
 
 // ── Modo bajo ataque (E55 y E56; confirmar y deshacer, E21 y E22 de arriba; asignaciones/modo-bajo-ataque.md §9) ──
 // La demo trae dos IPs inundando demo.officialvanguard.com (fx.underAttackOffer). Como leerOfertaBajoAtaque del BACK: sin
-// CF_IP_FLOOD no aplica, sin host no hay nada, resuelto está cerrado; con la regla de acuerdo (ofrece sigue true), sin Modo
+// CF_IP_FLOOD no aplica, resuelto está cerrado, sin host no hay nada; con la regla de acuerdo (ofrece sigue true), sin Modo
 // blindaje es sin_conexion y con un token al que la sonda le vio el 403 de Config Rules, sin_permiso, los dos con `copiar`.
 // El modo vivo es del host, así que se busca en toda la org.
 const APPROVAL_BAJO_ATAQUE = fx.underAttackProposal.approval_id;
@@ -518,9 +518,10 @@ function ofertaBajoAtaque(org: string, id: string): UnderAttackOffer {
   const base: UnderAttackOffer = { ...fx.underAttackOffer, hostname: host, zone_name: zona, connection_id: c?.id ?? null, permiso,
     activo: host ? activoBajoAtaque(org, host) : null };
   const no = (motivo: UnderAttackMotivo, extra: Partial<UnderAttackOffer> = {}): UnderAttackOffer => ({ ...base, ofrece: false, motivo, scopes: [], ...extra });
+  // El orden de ofreceBajoAtaque de core: resuelto da cerrado aunque no haya host (y sin host, ips 0, como el BACK).
   if (!i.rule_ids.includes('CF_IP_FLOOD')) return no('no_aplica', { ips: 0 });
+  if (i.status === 'resolved') return no('cerrado', host ? {} : { ips: 0 });
   if (!host) return no('sin_host', { ips: 0 });
-  if (i.status === 'resolved') return no('cerrado');
   if (!c) return { ...base, motivo: 'sin_conexion', scopes: [], copiar: pasosManuales(host, null) };
   if (permiso === 'falta') return { ...base, motivo: 'sin_permiso', scopes: [], copiar: pasosManuales(host, zona) };
   return base;

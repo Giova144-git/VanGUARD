@@ -217,7 +217,8 @@ export default function AppShell() {
   const usoIA = useUsoIA(org.id, org.puedeEscribir);   // misma consulta que ChipGastoIA (se comparte por clave)
   return (
     <div className="flex min-h-svh bg-background">
-      <aside className={cn('sticky top-0 hidden h-svh shrink-0 border-r bg-sidebar transition-[width] md:block', compacto ? 'w-[4.5rem]' : 'w-60')}>
+      {/* Con 13 entradas el riel mide ~860 px (~1010 en modo presentación): a 1280×720 se desplaza él solo, no se corta. */}
+      <aside className={cn('sticky top-0 hidden h-svh shrink-0 overflow-x-hidden overflow-y-auto border-r bg-sidebar transition-[width] md:block', compacto ? 'w-[4.5rem]' : 'w-60')}>
         <Riel compacto={compacto} overview={overview} />
       </aside>
       <Sheet open={movilAbierto} onOpenChange={setMovilAbierto}>

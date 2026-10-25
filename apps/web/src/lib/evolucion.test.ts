@@ -66,6 +66,16 @@ describe('series', () => {
     expect(total(s.at(-1)!)).toBe(fx.incidents.length);
     expect(s.slice(0, -1).every((d) => total(d) === 0)).toBe(true);
   });
+  it('incidentes por día: el primer día del periodo móvil (a medias) sale solo si trajo alguno, y la gráfica cuenta lo mismo que E52', () => {
+    const ahora = Date.parse('2026-10-25T01:00:00.000Z');                 // 24-oct 21:00 en Caracas: el periodo de 7 días empieza el 17 a las 21:00
+    const del17 = [{ day: '2026-10-17', counts: { critical: 0, high: 1, medium: 0, low: 0, info: 0 } }, ...EVO.incidents];
+    const s = serieIncidentes(del17, 7, ahora);
+    expect(s).toHaveLength(8);
+    expect(s[0]).toMatchObject({ dia: '2026-10-17', high: 1 });
+    expect(s.reduce((a, d) => a + d.critical + d.high + d.medium + d.low, 0)).toBe(fx.incidents.length + 1);
+    expect(serieIncidentes(EVO.incidents, 7, ahora)).toHaveLength(7);
+    expect(serieIncidentes([{ day: '2026-07-26', counts: del17[0]!.counts }], 90, ahora)).toHaveLength(91);   // tope del contrato
+  });
 });
 
 describe('textos', () => {

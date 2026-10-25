@@ -116,7 +116,6 @@ export default function PaginaResumen() {
               <Link to={`/o/${org.id}/audit/${encodeURIComponent(o.last_scan.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver</Link></span>
           ) : null}
           <DesdeAnterior org={org.id} ultima={o?.last_scan ?? null} />
-
         </div>
       </section>
 

@@ -60,7 +60,8 @@ function Fila({ item, lista }: { item: DeltaItem; lista: ListaDelta }) {
           <span>· {nombreModulo(item.module)}</span>
         </span>
       </div>
-      {chip ? <Etiqueta texto={chip.texto} rol={chip.rol} className="h-auto min-h-6 whitespace-normal py-0.5" /> : null}
+      {/* max-w-full: «Ya no está en el código · rota la clave» mide ~360 px y la chapa no encoge; así parte en dos líneas a 375 px. */}
+      {chip ? <Etiqueta texto={chip.texto} rol={chip.rol} className="h-auto min-h-6 max-w-full whitespace-normal py-0.5" /> : null}
       <Link to={`?finding=${encodeURIComponent(item.finding_id)}`} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">Ver<ChevronRight className="size-4" /></Link>
     </li>
   );

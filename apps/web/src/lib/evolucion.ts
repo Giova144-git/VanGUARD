@@ -138,11 +138,14 @@ export const serieAbiertos = (points: readonly EvolutionPoint[], modulo: FiltroM
   });
 
 // P1 · «Incidentes por día»: un día por barra en hora de Caracas (UTC−4, sin horario de verano), del más viejo al de hoy;
-// los días sin incidentes van en 0. Baja e info juntas.
+// los días sin incidentes van en 0. Baja e info juntas. El periodo de E52 es móvil (now() − días): su primer día de
+// Caracas va a medias, y solo se pinta (días + 1 barras, 91 como mucho) si trajo incidentes, para que la gráfica cuente
+// los mismos que el total.
 const diaCaracas = (ms: number) => new Date(ms - 4 * 3_600_000).toISOString().slice(0, 10);
 export function serieIncidentes(incidents: readonly EvolutionIncidentDay[], dias: number, ahora = Date.now()) {
   const por = new Map(incidents.map((i) => [i.day, i.counts]));
-  const k = Math.max(1, Math.min(91, Math.round(dias)));
+  const d = Math.max(1, Math.min(90, Math.round(dias)));
+  const k = por.has(diaCaracas(ahora - d * 86_400_000)) ? d + 1 : d;
   return Array.from({ length: k }, (_, i) => {
     const dia = diaCaracas(ahora - (k - 1 - i) * 86_400_000);
     const c = por.get(dia);

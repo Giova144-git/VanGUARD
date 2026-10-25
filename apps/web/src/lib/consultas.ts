@@ -32,6 +32,10 @@ export function useOverview(org: string) {
   });
 }
 
+// Vista previa de Workers (Overview.preview, UX P0-3): sin cola, las auditorías no corren; sus botones van apagados.
+export const SIN_COLA = 'Las auditorías no corren en la vista previa';
+export const useVistaPrevia = (org: string) => useOverview(org).data?.preview === true;
+
 export function useEstadoModulo(org: string, m: Module) {
   const vivo = useVivo();
   return useQuery({

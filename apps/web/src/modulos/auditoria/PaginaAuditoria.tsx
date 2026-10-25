@@ -20,7 +20,7 @@ import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { invalidarPerf } from '@/modulos/rendimiento/medir';
-import { useDeltaAuditoria, useHallazgos, useOverview, useScan } from '@/lib/consultas';
+import { SIN_COLA, useDeltaAuditoria, useHallazgos, useOverview, useScan, useVistaPrevia } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
@@ -59,6 +59,7 @@ function Lanzar() {
   const org = useOrg();
   const overview = useOverview(org.id);
   const { auditar, ocupado, error } = useLanzarYNavegar();
+  const previa = overview.data?.preview === true;
   const ultima = overview.data?.last_scan;
   const aUltima = ultima ? `/o/${org.id}/audit/${encodeURIComponent(ultima.id)}` : '';
   return (
@@ -66,7 +67,7 @@ function Lanzar() {
       <BarraModulo titulo="Auditoría" descripcion="Revisa todo el ecosistema con un botón." />
       <section className="flex flex-col items-start gap-3 rounded-xl border bg-card p-5">
         <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={ocupado}
-          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
+          disabled={!org.puedeEscribir || previa} ayuda={!org.puedeEscribir ? SOLO_LECTURA : SIN_COLA}>Auditar todo</BotonAccion>
         <p className="text-[15px] text-muted-foreground">Revisamos Supabase, Cloudflare y tu repo, y Claude resume lo más urgente. Tarda unos minutos.</p>
         {error ? <p role="alert" className="text-sm text-mal">{error}{ultima ? <> · <Link className="underline" to={aUltima}>Mira la última</Link></> : null}</p> : null}
         {ultima ? <Link to={aUltima} className="text-sm font-medium text-foreground underline underline-offset-4">Ver la última auditoría ({cuando(ultima.finished_at)})</Link> : null}
@@ -187,6 +188,7 @@ function Corrida({ id }: { id: string }) {
   const hallazgos = useHallazgos(org.id, { status: 'open' });
   const repoDe = useRepoDeConexion(org.id);   // chip del repo con 2 o más (varias-codebases §6.4)
   const { auditar, ocupado, error } = useLanzarYNavegar();
+  const previa = useVistaPrevia(org.id);
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   // «Nuevo» en «Hallazgos abiertos»: nuevo frente a la auditoría anterior (E51; sin foto o con 404, sin etiqueta).
   const delta = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded' && !esMedicion(q.data.kind)).data;
@@ -239,7 +241,7 @@ function Corrida({ id }: { id: string }) {
           {conGuardado ? <p className="text-[15px] text-muted-foreground">Lo que alcanzó a guardar antes de cortarse sigue abajo.</p> : null}
           {/* Una medición se repite desde Rendimiento (URL y estrategia); «Reintentar auditoría» lanzaría un full_audit. */}
           {medicion ? <Button asChild variant="principal" size="grande" className="w-fit"><Link to={aRendimiento}><Gauge />Volver a Rendimiento</Link></Button>
-            : <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>}
+            : <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir || previa} ayuda={!org.puedeEscribir ? SOLO_LECTURA : SIN_COLA}>Reintentar auditoría</BotonAccion>}
           {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
         </div>
       ) : null}

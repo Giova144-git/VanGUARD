@@ -1,6 +1,9 @@
 import { Hono, type Context } from 'hono';
-import { redact, textoSeguro, unaLinea } from '@vanguard/core';
-import { canjearBotonAlerta, canjearBotonBloqueo, COSTE_BOTON_BLOQUEO, parsearBoton } from '../actions/approvals.ts';
+import { redact, TEXTO_ACCION_PRONTO, textoSeguro, unaLinea } from '@vanguard/core';
+import {
+  canjearBotonAlerta, canjearBotonBloqueo, canjearBotonRevision, COSTE_BOTON_BLOQUEO, COSTE_BOTON_REVISION,
+  esContactoVerificado, parsearBoton, type AccionBoton, type Boton,
+} from '../actions/approvals.ts';
 import type { AppEnv } from '../env.ts';
 import { db } from '../lib/db.ts';
 import { fail } from '../lib/errors.ts';
@@ -12,7 +15,8 @@ import { enmascararTelefono, enviarTexto, KapsoError } from '../notify/kapso.ts'
 // E31 · POST /webhooks/kapso · firma de Kapso · P0 (S15 15.4 y 15.10). Orden: cuerpo crudo → HMAC en tiempo constante
 // ANTES de parsear (firma mala o sin secreto → 401 sin efecto) → dedupe por X-Idempotency-Key en webhook_events →
 // 200 inmediato (Kapso exige 200 en ≤ 10 s) y el proceso sigue en waitUntil. Entrantes (asignaciones/back-whatsapp-real.md
-// B3): cualquiera registra wa_last_inbound_at; botón → canje; «VERIFICAR <código>» y «BAJA/STOP/SALIR» → contacts.
+// B3): cualquiera registra wa_last_inbound_at; botón → canje (registro ACCIONES por id del botón, con los del anexo
+// avisos-whatsapp-botones.md); «VERIFICAR <código>» y «BAJA/STOP/SALIR» → contacts.
 export const webhooksKapso = new Hono<AppEnv>();
 
 type Obj = Record<string, unknown>;
@@ -53,6 +57,8 @@ const COSTE = {
   verificar: 6,    // getKeys + candidatos + (update + orgs + envío·2 | orgs + RL_WA + envío·2 | RL_WA + envío·2)
   baja: 4,         // update + RL_WA + envío·2
   bloqueo: COSTE_BOTON_BLOQUEO + 3,   // canje y executeBlock/propuesta/cancelación + RL_WA + envío·2 de la respuesta
+  revision: COSTE_BOTON_REVISION + 3, // canje, revisión, contacto y escrituras de fix/rvs + RL_WA + envío·2
+  pronto: 4,       // contacto verificado en alguna org + RL_WA + envío·2 («Esta acción llega pronto»)
 } as const;
 function gastar(p: Presupuesto, n: number): boolean {
   if (p.quedan < n) {
@@ -146,27 +152,79 @@ export function nombreParaMensaje(nombre: string): string {
   return t || 'tu organización';
 }
 
-async function registrarBoton(env: CloudflareBindings, m: Obj, remitente: string, rid: string, p: Presupuesto) {
-  const b = parsearBoton(idBoton(m) ?? '');
-  const enmascarado = remitente.length >= 8 ? enmascararTelefono(remitente) : null;
-  log('info', 'kapso.boton', { rid, accion: b?.accion ?? 'desconocido', codigo: b?.codigo ?? null, remitente: enmascarado });
-  // Un canje sin efecto (repetido, vencido, de otra org, remitente que no es contacto) queda solo en el log.
-  // ok/no/blk (§12.9, S15 15.10): ok → executeBlock (el mismo de E21), no → cancela, blk → propone con entrega por
-  // WhatsApp. La respuesta de servicio que devuelve el canje va con RL_WA: un botón viejo repetido no gasta cupo sin tope.
-  if (b?.accion === 'ok' || b?.accion === 'no' || b?.accion === 'blk') {
-    if (!gastar(p, COSTE.bloqueo)) return;
+// ── Registro de acciones de botón por id (`accion:CODIGO:nonce`) ─────────────────────────────────────────────────
+// Cada acción reserva su peor caso de subpeticiones antes de empezar y hace su canje. Un canje sin efecto (repetido,
+// vencido, de otra org, remitente que no es contacto) queda en el log; las respuestas de servicio van con RL_WA: un botón
+// viejo repetido no gasta cupo sin tope.
+type Accion = {
+  coste: number;
+  ejecutar: (env: CloudflareBindings, b: Boton, remitente: string, rid: string, enmascarado: string | null) => Promise<void>;
+};
+
+// ack/snz (§15.10): canje del nonce y efecto sobre el incidente; no se contestan.
+const ALERTA: Accion = {
+  coste: COSTE.boton,
+  async ejecutar(env, b, remitente, rid, enmascarado) {
+    const resultado = await canjearBotonAlerta(env, b, remitente, rid);
+    log(resultado === 'aplicado' ? 'info' : 'warn', 'kapso.boton_canje',
+      { rid, accion: b.accion, codigo: b.codigo, resultado, remitente: enmascarado });
+  },
+};
+
+// ok/no/blk (§12.9, S15 15.10): ok → executeBlock (el mismo de E21), no → cancela, blk → propone con entrega por
+// WhatsApp. Hoy confirman solo el bloqueo (block_ip); el ok/no de iss, rpr y uat se engancha aquí por action_kind.
+const BLOQUEO: Accion = {
+  coste: COSTE.bloqueo,
+  async ejecutar(env, b, remitente, rid, enmascarado) {
     const c = await canjearBotonBloqueo(env, b, remitente, rid);
     log(['ejecutado', 'ya_estaba', 'cancelado', 'propuesto'].includes(c.resultado) ? 'info' : 'warn', 'kapso.bloqueo_canje',
       { rid, accion: b.accion, codigo: b.codigo, resultado: c.resultado, remitente: enmascarado });
     if (c.texto) await responderConTope(env, remitente, c.texto, `bloqueo_${b.accion}`, rid);
-    return;
-  }
-  // ack/snz: canje del nonce y efecto sobre el incidente (§15.10).
-  if (b?.accion !== 'ack' && b?.accion !== 'snz') return;
-  if (!gastar(p, COSTE.boton)) return;
-  const resultado = await canjearBotonAlerta(env, b, remitente, rid);
-  log(resultado === 'aplicado' ? 'info' : 'warn', 'kapso.boton_canje',
-    { rid, accion: b.accion, codigo: b.codigo, resultado, remitente: enmascarado });
+  },
+};
+
+// fix/rvs (anexo de botones): «Enviarme el arreglo» y «Silenciar repo 1 h» del aviso de revisión. La respuesta («Hecho: …»
+// o «No se pudo: …») solo va al remitente verificado de la org de la aprobación; sin canje, el aviso de botón vencido
+// solo si es contacto verificado de alguna org (quien hizo BAJA no recibe nada).
+const REVISION: Accion = {
+  coste: COSTE.revision,
+  async ejecutar(env, b, remitente, rid, enmascarado) {
+    const c = await canjearBotonRevision(env, b, remitente, rid);
+    log(['arreglo_enviado', 'silenciado'].includes(c.resultado) ? 'info' : 'warn', 'kapso.revision_canje',
+      { rid, accion: b.accion, codigo: b.codigo, resultado: c.resultado, remitente: enmascarado });
+    if (c.texto) await responderConTope(env, remitente, c.texto, `revision_${b.accion}`, rid);
+  },
+};
+
+// iss («Crear issue»), rpr («Reabrir el PR») y uat («Modo bajo ataque»): registradas pero todavía sin la acción detrás
+// (ningún mensaje las ofrece) → «Esta acción llega pronto», sin canje y solo a un contacto verificado de alguna org.
+// PUNTO DE ENGANCHE: las acciones ya existen (crearIssue y reabrirPr con via 'whatsapp' en revision/acciones-pr.ts, del
+// bloqueo; executeUnderAttack en actions/under-attack.ts, de bajo ataque) pero aún no se conectan: cada una cambiará aquí
+// PRONTO por su canje (botón → propuesta con ok/no y aprobación de 10 min, como blk; título del ok en
+// TITULOS_CONFIRMACION de core), con la misma guarda del remitente verificado.
+const PRONTO: Accion = {
+  coste: COSTE.pronto,
+  async ejecutar(env, b, remitente, rid, enmascarado) {
+    log('info', 'kapso.boton_pronto', { rid, accion: b.accion, remitente: enmascarado });
+    if (await esContactoVerificado(env, remitente, rid)) {
+      await responderConTope(env, remitente, TEXTO_ACCION_PRONTO, `pronto_${b.accion}`, rid);
+    }
+  },
+};
+
+const ACCIONES: Readonly<Record<AccionBoton, Accion>> = {
+  ack: ALERTA, snz: ALERTA, ok: BLOQUEO, no: BLOQUEO, blk: BLOQUEO, fix: REVISION, rvs: REVISION,
+  iss: PRONTO, rpr: PRONTO, uat: PRONTO,
+};
+
+async function registrarBoton(env: CloudflareBindings, m: Obj, remitente: string, rid: string, p: Presupuesto) {
+  const b = parsearBoton(idBoton(m) ?? '');
+  const enmascarado = remitente.length >= 8 ? enmascararTelefono(remitente) : null;
+  log('info', 'kapso.boton', { rid, accion: b?.accion ?? 'desconocido', codigo: b?.codigo ?? null, remitente: enmascarado });
+  if (!b) return;
+  const accion = ACCIONES[b.accion];
+  if (!gastar(p, accion.coste)) return;
+  await accion.ejecutar(env, b, remitente, rid, enmascarado);
 }
 
 // Cualquier entrante abre la ventana de 24 h de ese teléfono en TODAS las orgs (la ventana es por usuario y número de

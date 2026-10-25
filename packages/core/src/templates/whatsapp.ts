@@ -2,12 +2,14 @@
 // tabla de §12.6 y {header, body, footer} de incident_v1 / incident_up_v1 / reopened_v1. En P0 salen tal cual; en P1
 // IA-3 solo puede sustituir {resumen}. Nunca IP completa, claves ni correos: la IP va recortada (186.92.x.x), el UA se
 // reduce a la herramienta de una lista fija y todo texto libre pasa por redactString. Los botones llevan nonces que
-// genera el despachador (aquí solo se validan y se arman los ids que parsea el webhook).
+// genera el despachador (aquí solo se validan y se arman los ids que parsea el webhook). Botones de la revisión de
+// código y sus respuestas (asignaciones/avisos-whatsapp-botones.md): al final del archivo.
 import type { Module, Severity } from '@vanguard/contracts';
 import { ipCanonica, ipCorta, recursoCorto, uaParaMensaje } from '../engine/edge.ts';
 import { moduloDeRegla, reglaPrincipal, SERVICIO_MODULO, servicioDeReglas } from '../engine/incidente.ts';
 import { redactString } from '../redact.ts';
-import { SEVERIDAD_ES, unaLinea } from './titles.ts';
+import { generica, plantillaCorreccion } from './fix/index.ts';
+import { enCodigo, SEVERIDAD_ES, unaLinea } from './titles.ts';
 
 // ── {resumen} por regla (tabla de §12.6, literal: sin tildes a propósito) ────────────────────────────────────────
 export const RESUMEN_REGLA = {
@@ -128,11 +130,22 @@ export function mensajeIncidente(i: IncidenteParaAviso, plantilla: PlantillaInte
     footer: `Incidente #${codigoLimpio(i.code)} · VanGUARD` };
 }
 
-// ── Botones (ids que parsea parsearBoton del webhook: /^(ack|snz|ok|no|blk):([A-Z0-9]{6}):([A-Za-z0-9_-]{16,43})$/) ─
-export type AccionBoton = 'ack' | 'snz' | 'blk' | 'ok' | 'no';
+// ── Botones (ids que parsea parsearBoton del webhook: `accion:CODIGO:nonce`, CODIGO [A-Z0-9]{6}, nonce de 16–43 base64url)
+// Incidente: ack, snz, blk y su confirmación ok/no. Anexo de botones: fix (enviarme el arreglo), iss (pedir crear issue),
+// rvs (silenciar el repo 1 h), rpr (pedir reabrir el PR), uat (pedir modo bajo ataque); la confirmación de las que
+// escriben en sistemas del cliente reutiliza ok/no con su aprobación (TITULOS_CONFIRMACION).
+export const ACCIONES_BOTON = ['ack', 'snz', 'blk', 'ok', 'no', 'fix', 'iss', 'rvs', 'rpr', 'uat'] as const;
+export type AccionBoton = (typeof ACCIONES_BOTON)[number];
 export const TITULOS_BOTON: Readonly<Record<AccionBoton, string>> = {
   ack: 'Lo estoy viendo', snz: 'Silenciar 1 h', blk: 'Bloquear IP', ok: 'Sí, bloquear', no: 'Cancelar',
+  fix: 'Enviarme el arreglo', iss: 'Crear issue', rvs: 'Silenciar repo 1 h', rpr: 'Reabrir el PR', uat: 'Modo bajo ataque',
 };
+/** Título del `ok` según la acción que confirma (regla 2 del anexo: toda escritura en sistemas del cliente lleva el 2.º
+ *  paso). blk es el de hoy; iss, rpr y uat quedan listos para cuando se conecten crear issue, reabrir PR y bajo ataque. */
+export const TITULOS_CONFIRMACION = {
+  blk: 'Sí, bloquear', iss: 'Sí, crear', rpr: 'Sí, reabrir', uat: 'Sí, activar',
+} as const;
+export type AccionConConfirmacion = keyof typeof TITULOS_CONFIRMACION;
 export type BotonAlerta = { id: string; title: string };
 const CODIGO = /^[A-Z0-9]{6}$/;
 const NONCE = /^[A-Za-z0-9_-]{16,43}$/;
@@ -151,10 +164,13 @@ export function botonesAlerta(code: string, nonces: { ack: string; snz: string; 
   if (new Set(xs.map(([, n]) => n)).size !== xs.length) throw new RangeError('BOTON_NONCE_REPETIDO');
   return xs.map(([a, n]) => ({ id: idBoton(a, code, n), title: TITULOS_BOTON[a] }));
 }
-/** Interactivo de E20 por WhatsApp: «Sí, bloquear» y «Cancelar». */
-export function botonesAprobacion(code: string, nonces: { ok: string; no: string }): BotonAlerta[] {
+/** Interactivo de E20 por WhatsApp: «Sí, bloquear» y «Cancelar». `accion` elige el título del ok (por defecto blk, el
+ *  de hoy: el interactivo del bloqueo no cambia). */
+export function botonesAprobacion(code: string, nonces: { ok: string; no: string },
+  accion: AccionConConfirmacion = 'blk'): BotonAlerta[] {
   if (nonces.ok === nonces.no) throw new RangeError('BOTON_NONCE_REPETIDO');
-  return [{ id: idBoton('ok', code, nonces.ok), title: TITULOS_BOTON.ok }, { id: idBoton('no', code, nonces.no), title: TITULOS_BOTON.no }];
+  return [{ id: idBoton('ok', code, nonces.ok), title: TITULOS_CONFIRMACION[accion] },
+    { id: idBoton('no', code, nonces.no), title: TITULOS_BOTON.no }];
 }
 /** §12.6: el botón «Bloquear IP» solo va si el incidente es de Cloudflare con resource ip:<ip válida> y la org tiene una
  *  conexión Cloudflare kind:'action' activa (no se ofrece lo que no se puede hacer). */
@@ -183,3 +199,84 @@ export function textoCodigoBloqueo(codigo: string, ip: string, zona: string): st
 export const textoBloqueada = (ip: string): string => `Bloqueada ${ipCorta(ip)} por 1 h. Puedes deshacerlo en la app.`;
 /** Canje sin filas en el webhook (S15 15.10). */
 export const TEXTO_CODIGO_VENCIDO = 'Código vencido o ya usado. Abre officialvanguard.com';
+
+// ── Revisión de código: botones y respuestas (asignaciones/avisos-whatsapp-botones.md) ──────────────────────────────
+// Cada botón hace una acción real y toda acción contesta «Hecho: …» o «No se pudo: <motivo corto>». Nada de lo que
+// sale aquí lleva texto del autor, rutas, valores ni texto de IA: solo frases nuestras, el rule_id (si casa su regex),
+// la severidad, la hora y la url del panel (dominio propio).
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REGLA = /^(SB|CF|CB|PF)_[A-Z0-9_]{1,60}$/;
+const REGLA_REVISION = /^CB_[A-Z0-9_]{1,60}$/;
+// La url es nuestra (APP_ORIGIN), pero solo ASCII de URL: ni blancos ni controles (como mensajeRevision).
+const URL_PANEL = /^https?:\/\/[A-Za-z0-9._~:/?#[\]@!$&()*+,;=%-]{1,300}$/;
+const MAX_PASOS = 6;
+
+/** CODIGO de 6 caracteres de una revisión. code_reviews no tiene código: sale del id (los 6 primeros hex del uuid v4,
+ *  aleatorios, en mayúsculas). Estable y sin columna nueva; solo comprueba que el botón y su aprobación hablan de la misma
+ *  revisión (lo que protege es el nonce de un solo uso, como en los incidentes). Id que no es uuid → RangeError. */
+export function codigoRevision(id: string): string {
+  if (!UUID.test(String(id))) throw new RangeError('REVISION_ID');
+  return id.slice(0, 6).toUpperCase();
+}
+
+/** «Enviarme el arreglo» (solo si llega su nonce: la revisión trae hallazgos nuevos) y «Silenciar repo 1 h». Un nonce
+ *  por botón; repetidos → RangeError (cada uno es una fila de approvals con su sha256). */
+export function botonesRevision(code: string, nonces: { fix?: string | null; rvs: string }): BotonAlerta[] {
+  const xs: [AccionBoton, string][] = nonces.fix ? [['fix', nonces.fix], ['rvs', nonces.rvs]] : [['rvs', nonces.rvs]];
+  if (new Set(xs.map(([, n]) => n)).size !== xs.length) throw new RangeError('BOTON_NONCE_REPETIDO');
+  return xs.map(([a, n]) => ({ id: idBoton(a, code, n), title: TITULOS_BOTON[a] }));
+}
+
+/** Pasos cuando la regla no tiene plantilla propia: los de la genérica hablan de «la evidencia de abajo», que aquí no va. */
+export const PASOS_ARREGLO_GENERICO: readonly string[] = [
+  'Abre el hallazgo en el panel: ahí están el archivo y la línea.',
+  'Aplica el cambio mínimo y reversible en un entorno de pruebas.',
+  'Haz push con el arreglo: VanGUARD lo revisa y deja de avisar cuando quede resuelto.',
+];
+
+/** Pasos FIJOS de corrección para WhatsApp: los de la plantilla determinista de templates/fix (la del fallback de E15)
+ *  llamada con recurso, evidencia y título VACÍOS, así que no pueden llevar valores, rutas ni texto del autor. Solo las
+ *  CB_ (las que produce la revisión); otra regla, o una CB_ sin plantilla propia, → PASOS_ARREGLO_GENERICO. */
+export function pasosArreglo(ruleId: string): string[] {
+  const regla = String(ruleId ?? '');
+  if (!REGLA_REVISION.test(regla)) return [...PASOS_ARREGLO_GENERICO];
+  const h = { rule_id: regla, resource: '', evidence: {}, title: '' };
+  const pasos = plantillaCorreccion(h).pasos;
+  const gen = generica(h).pasos;
+  if (pasos.length === gen.length && pasos.every((p, i) => p === gen[i])) return [...PASOS_ARREGLO_GENERICO];
+  return pasos.slice(0, MAX_PASOS).map((p) => unaLinea(p, 400));
+}
+
+/** Respuesta de «Enviarme el arreglo» (fix): «Hecho: …» con la regla del hallazgo nuevo más grave (como código), su
+ *  severidad, los pasos numerados y el enlace al panel (APP_ORIGIN/o/<org>/codebase?revision=<id>). ≤ 4096 (texto
+ *  simple de Meta): ≤ 6 pasos de ≤ 400. */
+export function textoArreglo(ruleId: string, severity: Severity | string | null, url: string): string {
+  const r = String(ruleId ?? '');
+  const regla = REGLA.test(r) ? enCodigo(r) : 'el hallazgo';
+  const s = String(severity);
+  const sev = Object.hasOwn(SEVERIDAD_ES, s) ? ` (severidad ${SEVERIDAD_ES[s as Severity]})` : '';
+  const pasos = pasosArreglo(r).map((p, i) => `${i + 1}. ${p}`).join('\n');
+  const donde = 'El hallazgo, con su archivo y su línea, está en el panel';
+  const enlace = typeof url === 'string' && URL_PANEL.test(url) ? `${donde}: ${url}` : `${donde} de VanGUARD.`;
+  return `Hecho: así se corrige ${regla}${sev}, lo más grave de esta revisión.\n\n${pasos}\n\n${enlace}`;
+}
+
+/** Respuesta de «Silenciar repo 1 h» (rvs), con la hora de fin en Caracas. */
+export const textoRepoSilenciado = (hasta: string | number | Date): string =>
+  `Hecho: no te mandaré avisos de revisión de este repo hasta las ${horaCaracas(hasta)} (hora de Caracas). `
+  + 'Las revisiones siguen y las ves en la app.';
+
+/** iss, rpr y uat: registradas en el webhook, todavía sin la acción detrás (no se ofrecen en ningún mensaje). */
+export const TEXTO_ACCION_PRONTO = 'Esta acción llega pronto. Mientras tanto, la tienes en la app de VanGUARD.';
+/** Canje sin filas de un botón de la revisión (vencido, ya usado o de otro teléfono). */
+export const TEXTO_BOTON_VENCIDO = 'No se pudo: el botón venció o ya se usó. Abre officialvanguard.com';
+/** Motivos fijos de «No se pudo: <motivo corto>.» (nunca el texto de un proveedor ni del usuario). */
+export const MOTIVOS_NO_SE_PUDO = {
+  tipo_distinto: 'ese botón no corresponde a esta acción',
+  otra_revision: 'no encontré esa revisión',
+  sin_hallazgos: 'esta revisión no trae hallazgos nuevos que arreglar',
+  sin_config: 'ese repo ya no tiene la revisión de código activa',
+  error: 'no pude guardarlo, inténtalo desde la app',
+} as const;
+export type MotivoNoSePudo = keyof typeof MOTIVOS_NO_SE_PUDO;
+export const textoNoSePudo = (m: MotivoNoSePudo): string => `No se pudo: ${MOTIVOS_NO_SE_PUDO[m]}.`;

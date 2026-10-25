@@ -2,11 +2,13 @@
 // «Bloquear IP», la propuesta (E20 y el botón blk) y el canje de ok/no/blk que llamará E31. Cada botón es una fila de
 // approvals con SOLO sha256(nonce) (el nonce viaja en el id del botón y no se guarda), recipient = teléfono sin '+' y
 // 10 min de vida; el código de 6 dígitos de la app se guarda como HMAC con la FPK (otpHash, §06.7). El canje es atómico
-// con vg_redeem_approval (0005).
+// con vg_redeem_approval (0005). Botones del aviso de revisión (anexo avisos-whatsapp-botones.md, 0018): fix y rvs,
+// con las mismas guardas y la fila colgada de la revisión (approvals.code_review_id) en vez de un incidente.
 import { ProposeResponse, Severity } from '@vanguard/contracts';
 import {
-  botonesAprobacion, ipCorta, otpHashParam, reglaPrincipal, simularBloqueo, sixDigitCode, TEXTO_CODIGO_VENCIDO,
-  textoBloqueada, textoCodigoBloqueo, textoSeguro, type MotivoRechazoIp,
+  botonesAprobacion, codigoRevision, ipCorta, otpHashParam, reglaPrincipal, SEV_RANK, simularBloqueo, sixDigitCode,
+  TEXTO_BOTON_VENCIDO, TEXTO_CODIGO_VENCIDO, textoArreglo, textoBloqueada, textoCodigoBloqueo, textoNoSePudo,
+  textoRepoSilenciado, textoSeguro, type MotivoRechazoIp,
 } from '@vanguard/core';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
@@ -19,11 +21,12 @@ import {
 } from '../notify/kapso.ts';
 import { executeBlock, RANGOS_CLOUDFLARE, TTL_BLOQUEO_S, type AprobacionCanjeada } from './block-ip.ts';
 
-export type AccionBoton = 'ack' | 'snz' | 'ok' | 'no' | 'blk';
+export type AccionBoton = 'ack' | 'snz' | 'ok' | 'no' | 'blk' | 'fix' | 'iss' | 'rvs' | 'rpr' | 'uat';
 export type Boton = { accion: AccionBoton; codigo: string; nonce: string };
 
-// Misma regex que S15 15.10. Nonce de 16–43 car. base64url. blk lanza un propose (E20), nunca un bloqueo directo.
-const BOTON = /^(ack|snz|ok|no|blk):([A-Z0-9]{6}):([A-Za-z0-9_-]{16,43})$/;
+// La forma de S15 15.10 con las acciones del anexo de botones (las de ACCIONES_BOTON de core). Nonce de 16–43 car.
+// base64url. blk lanza un propose (E20), nunca un bloqueo directo; iss, rpr y uat (pedir) lanzarán su propuesta igual.
+const BOTON = /^(ack|snz|ok|no|blk|fix|iss|rvs|rpr|uat):([A-Z0-9]{6}):([A-Za-z0-9_-]{16,43})$/;
 
 export function parsearBoton(p: string): Boton | null {
   const m = BOTON.exec(p);
@@ -428,6 +431,150 @@ export async function canjearBotonBloqueo(env: CloudflareBindings, b: Boton, rem
     return r('sin_entrega');
   } catch (e) {
     log('error', 'kapso.boton_bloqueo_error', { rid, name: e instanceof Error ? e.name : typeof e });
+    return r('error');
+  }
+}
+
+// ── Aviso de revisión: «Enviarme el arreglo» (fix) y «Silenciar repo 1 h» (rvs) ────────────────────────────────────
+/** approvals.action_kind de cada botón de la revisión (check de 0018). */
+export const ACCION_APROBACION_REVISION = { fix: 'send_fix', rvs: 'mute_repo' } as const;
+/** «Silenciar repo 1 h» (regla 3 del anexo). */
+export const SILENCIO_REPO_MS = 60 * 60_000;
+
+export type FilaBotonRevision = {
+  org_id: string; code_review_id: string; action_kind: 'send_fix' | 'mute_repo'; channel: 'whatsapp'; recipient: string;
+  nonce_hash: string; expires_at: string; params: Record<string, unknown>;
+};
+
+/** Las filas de approvals de los botones de UN aviso de revisión: rvs siempre y fix si llega su nonce. Las mismas
+ *  guardas que las del incidente: solo sha256(nonce), recipient = E.164 sin '+' y 10 min de vida. */
+export async function filasBotonesRevision(o: { org_id: string; code_review_id: string; recipient: string;
+  nonces: { fix?: string | null; rvs: string }; ahora?: number }): Promise<FilaBotonRevision[]> {
+  const expires_at = new Date((o.ahora ?? Date.now()) + VIDA_BOTON_MS).toISOString();
+  const xs: ['fix' | 'rvs', string][] = o.nonces.fix ? [['fix', o.nonces.fix], ['rvs', o.nonces.rvs]]
+    : [['rvs', o.nonces.rvs]];
+  return Promise.all(xs.map(async ([b, n]) => ({ org_id: o.org_id, code_review_id: o.code_review_id,
+    action_kind: ACCION_APROBACION_REVISION[b], channel: 'whatsapp' as const, recipient: o.recipient,
+    nonce_hash: await hashNonce(n), expires_at, params: {} })));
+}
+
+/** El hallazgo nuevo más grave de new_findings (a igualdad, el primero: vg_review_findings ya los ordena). */
+export function peorHallazgo(x: unknown): { rule_id: string; severity: Severity } | null {
+  let peor: { rule_id: string; severity: Severity } | null = null;
+  for (const f of (Array.isArray(x) ? x : []).map(obj)) {
+    const rule_id = str(f.rule_id), sev = Severity.safeParse(f.severity);
+    if (!rule_id || !sev.success) continue;
+    if (!peor || SEV_RANK[sev.data] > SEV_RANK[peor.severity]) peor = { rule_id, severity: sev.data };
+  }
+  return peor;
+}
+
+const codigoDe = (id: string): string | null => { try { return codigoRevision(id); } catch { return null; } };
+
+const MAX_FILAS_TELEFONO = 20;   // contactos con el mismo teléfono: uno por org como mucho (como MAX_CANDIDATOS de E31)
+
+/** ¿El teléfono (E.164 sin '+') es contacto VERIFICADO de alguna org? Las respuestas sin aprobación canjeada (botón
+ *  vencido o ya usado, acción que llega pronto) no tienen org con la que mirar: solo se contesta si sigue suscrito en
+ *  alguna. Quien hizo BAJA (verified_at = null en todas sus filas) o no es contacto no recibe nada. Una consulta; si
+ *  falla, false (falla cerrada: no se contesta). Nunca lanza. */
+export async function esContactoVerificado(env: CloudflareBindings, remitente: string, rid: string): Promise<boolean> {
+  if (!REMITENTE.test(remitente)) return false;
+  try {
+    const { data, error } = await db(env).from('contacts').select('verified_at').eq('phone_e164', `+${remitente}`)
+      .limit(MAX_FILAS_TELEFONO);
+    if (error) {
+      log('warn', 'kapso.contacto_error', { rid, code: error.code ?? null });
+      return false;
+    }
+    return (Array.isArray(data) ? data : []).some((c) => !!str(obj(c).verified_at));
+  } catch (e) {
+    log('warn', 'kapso.contacto_error', { rid, name: e instanceof Error ? e.name : typeof e });
+    return false;
+  }
+}
+
+/** Por qué un botón fix/rvs tuvo o no efecto (va al log de E31). */
+export type ResultadoBotonRevision = 'arreglo_enviado' | 'silenciado' | 'sin_canje' | 'no_contacto' | 'tipo_distinto'
+  | 'otra_revision' | 'sin_hallazgos' | 'sin_config' | 'remitente_invalido' | 'error';
+/** `texto`: la respuesta que E31 manda al remitente (con RL_WA y su presupuesto), o null (no se contesta). */
+export type CanjeRevision = { resultado: ResultadoBotonRevision; texto: string | null };
+/** Peor caso de subpeticiones de canjearBotonRevision: canje 1 + revisión y contacto 2 + (fix: whatsapp_action 1 | rvs:
+ *  muted_until 1 + whatsapp_action 1); sin canje, 1 + el contacto en cualquier org 1. E31 lo reserva antes de llamar y
+ *  suma aparte RL_WA y el envío de `texto`. */
+export const COSTE_BOTON_REVISION = 5;
+
+/** E31 · fix/rvs (anexo de botones). Canje atómico del nonce (sha256, un solo uso, no vencido, recipient = remitente) y,
+ *  con la org de la fila canjeada: el remitente debe ser contacto VERIFICADO de esa org (si no, no se le contesta nada:
+ *  respeta su BAJA), la fila de WhatsApp con la acción del botón y una revisión de esa org con el código del botón.
+ *  fix → los pasos fijos de la regla del hallazgo nuevo más grave (sin IA, sin valores ni rutas) y el enlace al panel;
+ *  rvs → code_review_configs.muted_until = ahora + 1 h y la hora de fin. Las dos dejan whatsapp_action en la revisión
+ *  para la app. Un canje sin filas contesta TEXTO_BOTON_VENCIDO (E31 lo manda con RL_WA) solo si el remitente es
+ *  contacto verificado de alguna org (esContactoVerificado); si no, nada. Nunca lanza. */
+export async function canjearBotonRevision(env: CloudflareBindings, b: Boton, remitente: string, rid: string,
+  ahora = Date.now()): Promise<CanjeRevision> {
+  const r = (resultado: ResultadoBotonRevision, texto: string | null = null): CanjeRevision => ({ resultado, texto });
+  if (b.accion !== 'fix' && b.accion !== 'rvs') return r('tipo_distinto');
+  if (!REMITENTE.test(remitente)) return r('remitente_invalido');
+  try {
+    const admin = db(env);
+    const { data, error } = await admin.rpc('vg_redeem_approval',
+      { p_approval: null, p_nonce_hash: await hashNonce(b.nonce), p_recipient: remitente });
+    if (error) {
+      log('error', 'kapso.canje_error', { rid, code: error.code ?? null });
+      return r('error');
+    }
+    const fila = obj(Array.isArray(data) ? data[0] : data);
+    const org = str(fila.org_id), revision = str(fila.code_review_id);
+    // Sin fila no hay org: el aviso de botón vencido solo a quien sigue suscrito en alguna (respeta su BAJA).
+    if (!org) return r('sin_canje', await esContactoVerificado(env, remitente, rid) ? TEXTO_BOTON_VENCIDO : null);
+    const [v, c] = await Promise.all([
+      revision ? admin.from('code_reviews').select('id, config_id, new_findings').eq('id', revision).eq('org_id', org)
+        .maybeSingle() : null,
+      admin.from('contacts').select('id, verified_at').eq('org_id', org).eq('phone_e164', `+${remitente}`).maybeSingle(),
+    ]);
+    if (v?.error || c.error) {
+      log('error', 'kapso.boton_lectura_error', { rid, code: v?.error?.code ?? c.error?.code ?? null });
+      return r('error');
+    }
+    if (!str(obj(c.data).verified_at)) return r('no_contacto');
+    if (fila.channel !== 'whatsapp' || fila.action_kind !== ACCION_APROBACION_REVISION[b.accion] || !revision) {
+      return r('tipo_distinto', textoNoSePudo('tipo_distinto'));
+    }
+    const rev = obj(v?.data);
+    const id = str(rev.id);
+    if (!id || codigoDe(id) !== b.codigo) return r('otra_revision', textoNoSePudo('otra_revision'));
+
+    const t = new Date(ahora).toISOString();
+    // Lo que muestra la app; si no se puede escribir, la acción ya está hecha: solo queda en el log.
+    const marcar = async (accion: 'fix_sent' | 'muted') => {
+      const { error: e } = await admin.from('code_reviews').update({ whatsapp_action: accion, whatsapp_action_at: t })
+        .eq('id', id).eq('org_id', org);
+      if (e) log('warn', 'kapso.revision_marca_error', { rid, code: e.code ?? null });
+    };
+
+    if (b.accion === 'fix') {
+      const peor = peorHallazgo(rev.new_findings);
+      if (!peor) return r('sin_hallazgos', textoNoSePudo('sin_hallazgos'));
+      await marcar('fix_sent');
+      const origen = (env.APP_ORIGIN ?? '').replace(/\/+$/, '');
+      return r('arreglo_enviado', textoArreglo(peor.rule_id, peor.severity,
+        origen ? `${origen}/o/${org}/codebase?revision=${id}` : ''));
+    }
+
+    const config = str(rev.config_id);
+    if (!config) return r('sin_config', textoNoSePudo('sin_config'));
+    const hasta = new Date(ahora + SILENCIO_REPO_MS).toISOString();
+    const { data: u, error: eu } = await admin.from('code_review_configs').update({ muted_until: hasta })
+      .eq('id', config).eq('org_id', org).select('id');
+    if (eu) {
+      log('error', 'kapso.silencio_error', { rid, code: eu.code ?? null });
+      return r('error', textoNoSePudo('error'));
+    }
+    if (!Array.isArray(u) || u.length === 0) return r('sin_config', textoNoSePudo('sin_config'));
+    await marcar('muted');
+    return r('silenciado', textoRepoSilenciado(hasta));
+  } catch (e) {
+    log('error', 'kapso.boton_revision_error', { rid, name: e instanceof Error ? e.name : typeof e });
     return r('error');
   }
 }

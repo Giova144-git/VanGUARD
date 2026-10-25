@@ -50,6 +50,17 @@ describe('assertAllowedUrl', () => {
     expect(() => assertAllowedUrl('https://x.hf.space:8443/')).toThrow('EGRESS_BLOCKED');
     expect(() => assertAllowedUrl('https://huggingface.co/')).toThrow('EGRESS_BLOCKED');
   });
+  it('servidor de voz en un GitHub Codespace: <codespace>-8080.app.github.dev pasa; anidados, sufijos, github.dev y http no', () => {
+    expect(assertAllowedUrl('https://glorious-space-guide-x7w9q4-8080.app.github.dev/healthz').hostname)
+      .toBe('glorious-space-guide-x7w9q4-8080.app.github.dev');
+    expect(() => assertAllowedUrl('https://a.b.app.github.dev/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://app.github.dev/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x.github.dev/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x.app.github.dev.evil.example/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x-app.github.dev/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('http://x-8080.app.github.dev/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x-8080.app.github.dev:8080/')).toThrow('EGRESS_BLOCKED');
+  });
   it('el error no repite la URL (podría llevar un secreto en la query)', () => {
     expect(() => assertAllowedUrl('https://evil.example/?token=SECRETO123')).toThrow(/^EGRESS_BLOCKED:host$/);
   });

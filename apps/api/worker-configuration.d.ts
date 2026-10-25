@@ -9,7 +9,7 @@ interface CloudflareBindings {
   // exigen la ventana de 24 h); número visible de VanGUARD, solo dígitos, para los enlaces wa.me de E26.
   KAPSO_SANDBOX?: string;
   KAPSO_DISPLAY_NUMBER?: string;
-  // Servidor de voz de Guardia (apps/voz en Hugging Face Spaces, asignaciones/llamada-ataque.md): https://<usuario>-vanguard-voz.hf.space.
+  // Servidor de voz de Guardia (apps/voz en un GitHub Codespace, asignaciones/llamada-ataque.md): https://<codespace>-8080.app.github.dev.
   VOZ_URL?: string;
 
   // bindings (BACK)

@@ -79,6 +79,19 @@ describe('E45 · GET code-review', () => {
     expect(CodeReviewState.parse(await (await pedir('code-review')).json())).toMatchObject({ available: false, reason: 'conexion_inactiva' });
   });
 
+  it('varias conexiones (B0): la ACTIVA más antigua es la principal; sin ninguna activa, la más antigua (inactiva)', async () => {
+    const vieja = { id: CONN, status: 'revoked', meta: { repo_full_name: 'acme/vieja', default_branch: 'main' } };
+    const activa = { id: 'c0c00000-0000-4000-8000-000000000002', status: 'active', meta: { repo_full_name: 'acme/tienda' } };
+    const nueva = { id: 'c0c00000-0000-4000-8000-000000000003', status: 'active', meta: { repo_full_name: 'acme/segundo' } };
+    let filas: unknown[] = [vieja, activa, nueva];   // como las devuelve la base: created_at e id ascendentes
+    tabla = (op) => (op.table === 'connections' ? { data: filas } : undefined);
+    expect(CodeReviewState.parse(await (await pedir('code-review')).json())).toMatchObject({ available: true, reason: null });
+    const sel = doble.ops.find((o) => o.table === 'connections')!;
+    expect(sel.orden).toEqual([['created_at', true], ['id', true]]);
+    filas = [vieja, { ...activa, status: 'error' }];
+    expect(CodeReviewState.parse(await (await pedir('code-review')).json())).toMatchObject({ available: false, reason: 'conexion_inactiva' });
+  });
+
   it('webhook_url solo para owner/admin en producción: viewer, anónimo y local → null', async () => {
     config = filaConfig();
     const admin = CodeReviewState.parse(await (await pedir('code-review', {}, PROD)).json());

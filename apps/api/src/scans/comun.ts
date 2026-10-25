@@ -13,7 +13,9 @@ export type Borrador = { rule_id: string; severity: string; confirmed?: boolean;
   title: string; resource: string; evidence?: Record<string, unknown>; suspected_injection?: boolean; dedupe_input?: string };
 export type Conexion = { id: string; meta: Record<string, unknown>; capabilities: Record<string, unknown> };
 
-// Conexión de lectura activa del proveedor: la del params del scan_run si la pidieron, o la más reciente.
+// Conexión de lectura activa del proveedor: la del params del scan_run si la pidieron; si no, en GitHub la MÁS ANTIGUA
+// (el repo principal: conectar un 2.º repo no cambia el que mira la auditoría; varias-codebases.md B0) y en los demás
+// proveedores la más reciente.
 export async function conexionActiva(env: CloudflareBindings, m: MsgScan, provider: string): Promise<Conexion | null> {
   const admin = db(env);
   const { data: scan } = await admin.from('scan_runs').select('params').eq('id', m.scan_run_id).eq('org_id', m.org_id).maybeSingle();
@@ -21,7 +23,8 @@ export async function conexionActiva(env: CloudflareBindings, m: MsgScan, provid
   let q = admin.from('connections').select('id, meta, capabilities').eq('org_id', m.org_id).eq('provider', provider)
     .eq('kind', 'read').eq('status', 'active');
   if (pedida) q = q.eq('id', pedida);
-  const { data, error } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle();
+  const asc = provider === 'github';
+  const { data, error } = await q.order('created_at', { ascending: asc }).order('id', { ascending: asc }).limit(1).maybeSingle();
   if (error) throw new ProviderError('unavailable');
   return (data as Conexion | null) ?? null;
 }

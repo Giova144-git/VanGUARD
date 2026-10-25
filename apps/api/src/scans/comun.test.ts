@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MsgScan } from '../jobs.ts';
-import { dbDoble } from '../test/db-doble.ts';
+import { dbDoble, type Op } from '../test/db-doble.ts';
 
 // Cable trampa de vg_upsert_findings (15.8 regla 9, hallazgos 16, 19 y 24) con el cliente de supabase-js simulado.
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
-const { PARECE_SECRETO, TOPE_SUBPETICIONES, guardarHallazgos, prefiltrar } = await import('./comun.ts');
+const { PARECE_SECRETO, TOPE_SUBPETICIONES, conexionActiva, guardarHallazgos, prefiltrar } = await import('./comun.ts');
 const { ProviderError } = await import('../lib/http.ts');
 
 const m = { v: 1, kind: 'scan', scan_run_id: '5a1c0000-0000-4000-8000-000000000001', org_id: '0f6c0000-0000-4000-8000-000000000001',
@@ -152,5 +152,21 @@ describe('guardarHallazgos', () => {
     estado.client = dbDoble({ rpc: (_n, a) => { args = a; return {}; } }).client;
     await guardarHallazgos(env, m, 'cloudflare', 'c1', [b('z')], true, 'CF_ZONE_01');
     expect(args.p_rule).toBe('CF_ZONE_01');
+  });
+});
+
+describe('conexionActiva (varias-codebases B0)', () => {
+  it('GitHub: la activa MÁS ANTIGUA (created_at e id ascendentes); los demás proveedores, la más reciente', async () => {
+    const ops: Op[] = [];
+    estado.client = dbDoble({ tabla: (op) => {
+      if (op.table === 'connections') { ops.push(op); return { data: { id: 'c1', meta: {}, capabilities: {} } }; }
+      if (op.table === 'scan_runs') return { data: { params: {} } };
+      return undefined;
+    } }).client;
+    await conexionActiva(env, m, 'github');
+    await conexionActiva(env, m, 'cloudflare');
+    expect(ops[0]!.orden).toEqual([['created_at', true], ['id', true]]);
+    expect(ops[0]!.filters).toEqual(expect.arrayContaining([['status', 'eq', 'active'], ['provider', 'eq', 'github']]));
+    expect(ops[1]!.orden).toEqual([['created_at', false], ['id', false]]);
   });
 });

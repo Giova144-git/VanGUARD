@@ -217,7 +217,7 @@ export const pasoRepo: FnPaso = async (env, m, intento = 1) => {
   };
   const detalle: DetalleCodebase = { modo: 'riesgo', archivos_leidos: leido.archivos.length, archivos_total: leido.arbol.length,
     archivos_incompletos: leido.incompletos.length, archivos_sin_cupo: leido.sinCupo, arbol_truncado: leido.truncado,
-    ...(leido.vacio ? { repo_vacio: true } : {}), sha: leido.sha,
+    ...(leido.vacio ? { repo_vacio: true } : {}), sha: leido.sha, connection_id: conn.id,   // qué repo miró (varias-codebases B0)
     lockfiles_ilegibles: lk.ilegibles, deps_truncadas: depsDeMas, hallazgos_omitidos: fuera.length, miradas };
   await escribirDetalle(env, m, await leerCobertura(env, m), detalle);
 

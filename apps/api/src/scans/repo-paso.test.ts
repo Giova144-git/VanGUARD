@@ -153,6 +153,7 @@ describe('repo:archivos', () => {
     expect(rpcs).toHaveLength(1);
     expect(rpcs[0]?.complete).toBe(true);
     expect(detalle().miradas).toEqual({ secretos: true, env: true, lockfiles: true, osv: true });
+    expect(detalle().connection_id).toBe('c1');   // qué repo miró (varias-codebases B0)
     expect(coverage.seen).toBe(2);
     expect((coverage.detail as Record<string, unknown>).supabase).toEqual({ advisors: true });
   });

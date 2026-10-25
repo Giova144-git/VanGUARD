@@ -11,6 +11,7 @@ export type Op = {
   payload?: unknown;
   options?: unknown;
   single?: 'single' | 'maybe';
+  orden?: [columna: string, ascendente: boolean][];   // .order() en el orden pedido
 };
 export type Resp = { data?: unknown; error?: { code?: string; message?: string } | null; count?: number | null };
 
@@ -42,7 +43,7 @@ export function dbDoble(h: Manejadores = {}) {
       lt(col: string, v: unknown) { op.filters.push([col, 'lt', v]); return b; },
       lte(col: string, v: unknown) { op.filters.push([col, 'lte', v]); return b; },
       is(col: string, v: unknown) { op.filters.push([col, 'is', v]); return b; },
-      order() { return b; },
+      order(col: string, o?: { ascending?: boolean }) { (op.orden ??= []).push([col, o?.ascending !== false]); return b; },
       limit() { return b; },
       maybeSingle() { op.single = 'maybe'; return b; },
       single() { op.single = 'single'; return b; },

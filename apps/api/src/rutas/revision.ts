@@ -34,17 +34,20 @@ type Conexion = { id: string; status: string; meta: Fila };
 const isoN = (v: unknown) => (typeof v === 'string' ? iso(v) : null);
 const ms = (v: unknown) => (typeof v === 'string' ? Date.parse(v) : NaN);
 
-// La conexión GitHub de lectura de la org (una por org, E8). Si hubiera más, la más reciente.
+// La conexión GitHub de lectura de la org. Con connectionId, esa en cualquier estado (E46 la usa así). Sin él, la
+// principal: la ACTIVA más antigua y, si ninguna lo está, la más antigua (varias-codebases.md B0): conectar un 2.º repo
+// o usar «Reconectar» no cambia la que ve E45.
 async function conexionGithub(c: Context<AppEnv>, connectionId?: string): Promise<Conexion | null> {
   let q = db(c.env).from('connections').select('id, status, meta').eq('org_id', c.get('orgId')).eq('provider', 'github')
     .eq('kind', 'read');
   if (connectionId) q = q.eq('id', connectionId);
-  const { data, error } = await q.order('created_at', { ascending: false }).limit(1);
+  const { data, error } = await q.order('created_at', { ascending: true }).order('id', { ascending: true }).limit(20);
   if (error) {
     log('error', 'revision.conexion_error', { rid: c.get('rid'), code: error.code ?? null });
     throw new ApiError('internal', 'No pudimos leer la conexión de GitHub');
   }
-  const f = (data as Fila[] | null)?.[0];
+  const filas = (data as Fila[] | null) ?? [];
+  const f = filas.find((x) => x.status === 'active') ?? filas[0];
   return f ? { id: String(f.id), status: String(f.status), meta: (f.meta ?? {}) as Fila } : null;
 }
 

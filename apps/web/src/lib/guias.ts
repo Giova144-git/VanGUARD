@@ -70,6 +70,13 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Verás cada paso avanzar en vivo. Si una fuente no está conectada, ese paso sale «sin mirar» y el puntaje lo dice.',
     'Al final, una IA resume lo encontrado en lenguaje llano. Si la IA está en pausa, sale un resumen automático.',
   ] },
+  evolution: { titulo: '¿Cómo leer la evolución?', pasos: [
+    'Cada punto es una auditoría terminada. El puntaje es el que tenía en ese momento.',
+    'Nuevos: abiertos que no estaban abiertos en la auditoría anterior. Se mantienen: siguen abiertos. Corregidos: estaban abiertos y ya no; "comprobado" si la auditoría ya no los encontró, "marcado a mano" si alguien lo marcó.',
+    'Una clave que ya no está en el código no está arreglada hasta que la rotas: por eso no cuenta como comprobada.',
+    'Un módulo que no se pudo revisar deja sus hallazgos como estaban: no cuentan como corregidos.',
+    'Cada push a main muestra lo nuevo que trajo, lo que sigue abierto y lo corregido desde el push anterior.',
+  ] },
   incidents: { titulo: '¿Cómo funcionan los incidentes?', pasos: [
     'Cuando detectamos un ataque abrimos un incidente y el cronómetro empieza a correr.',
     'Te avisamos primero por WhatsApp; desde el mismo mensaje puedes aprobar «Bloquear IP» con un código de un solo uso.',

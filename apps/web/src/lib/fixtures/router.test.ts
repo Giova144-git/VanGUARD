@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixtures as fx, AlertPrefs, CodeReviewSaved, CodeReviewState, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
+import { fixtures as fx, AlertPrefs, AuditDelta, CodeReviewSaved, CodeReviewState, Evolution, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
 import type { ApiError } from '../errores';
 import { fixtureFetch, simularAtaque } from './router';
 
@@ -378,5 +378,91 @@ describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo
     expect(despues).toMatchObject({ review_whatsapp_min: 'medium', review_voice_min: 'off' });
     expect(despues.updated_at).not.toBeNull();
     expect(await fallo(`/api/orgs/${DEMO}/alert-prefs`, 'PUT', { review_whatsapp_min: 'altisima', review_voice_min: 'off' })).toMatchObject({ status: 422 });
+  });
+});
+
+// Evolución (E51 y E52, asignaciones/evolucion-entre-revisiones.md §6.5). Módulo nuevo (resetModules): la cadena de fotos
+// no hereda los ZIP ni el hallazgo del push que dejaron los casos de arriba, y hay cupo para crear orgs.
+describe('evolución (E51 y E52)', () => {
+  let f: typeof fixtureFetch;
+  const pide = async <T = unknown>(ruta: string, method = 'GET', body?: unknown) => {
+    const p = f<T>(ruta, { method, body }); p.catch(() => {}); await vi.advanceTimersByTimeAsync(300); return p;
+  };
+  const falla = (ruta: string) => pide(ruta).then(() => { throw new Error(`${ruta} no falló`); }, (e: unknown) => e as ApiError);
+  const delta = (org: string, id: string) => pide<AuditDelta>(`/api/orgs/${org}/scans/${id}/delta`);
+  const auditar = async (org: string) => (await pide<{ scan_run_id: string }>(`/api/orgs/${org}/scans`, 'POST', { kind: 'full_audit' })).scan_run_id;
+  const conFoto = (d: AuditDelta) => { if (!d.available) throw new Error('sin foto'); return d; };
+  beforeAll(async () => { vi.resetModules(); f = (await import('./router')).fixtureFetch; });
+
+  it('la auditoría de la demo devuelve fx.auditDelta y sus dos corregidos entran en la lista de la org', async () => {
+    const [verificado, aMano] = fx.hallazgosCorregidos;
+    expect(await pide<Finding>(`/api/orgs/${DEMO}/findings/${aMano!.id}`)).toMatchObject({ status: 'fixed' });   // ?finding= antes que E51
+    expect(AuditDelta.parse(await delta(DEMO, fx.scanDone.id))).toEqual(fx.auditDelta);
+    const lista = await pide<Finding[]>(`/api/orgs/${DEMO}/findings`);
+    expect(lista.filter((x) => x.id === verificado!.id || x.id === aMano!.id).map((x) => x.status).sort()).toEqual(['fixed', 'verified']);
+    expect(lista).toHaveLength(fx.findings.length + 2);
+  });
+
+  it('otra org, un id desconocido o que no es uuid → 404 uniforme', async () => {
+    const otra = (await pide<{ id: string }>('/api/orgs', 'POST', { name: 'Tienda sin datos' })).id;
+    const deDemo = await auditar(DEMO);
+    for (const [org, id] of [[otra, fx.scanDone.id], [otra, deDemo], [DEMO, NADA], [DEMO, 'no-es-uuid']] as const)
+      expect(await falla(`/api/orgs/${org}/scans/${id}/delta`)).toMatchObject({ status: 404, message: 'Auditoría no encontrada' });
+    expect(await falla(`/api/orgs/${AJENA}/scans/${fx.scanDone.id}/delta`)).toMatchObject({ status: 404, message: 'Organización no encontrada' });
+    await vi.advanceTimersByTimeAsync(12_000);   // deja terminada la de la demo: es la anterior del caso siguiente
+  });
+
+  it('una auditoría simulada: en_curso mientras corre; al terminar se compara con la anterior y la cadena sigue', async () => {
+    const id = await auditar(DEMO);
+    expect(await delta(DEMO, id)).toEqual({ available: false, scan_run_id: id, reason: 'en_curso' });
+    await vi.advanceTimersByTimeAsync(12_000);
+    // Frente a la del caso anterior (que a su vez se comparó con la de la demo): nada cambió, los 12 abiertos se mantienen.
+    const d = conFoto(AuditDelta.parse(await delta(DEMO, id)));
+    expect(d).toMatchObject({ first: false, score: fx.scanDone.score, modules_seen: ['supabase', 'cloudflare', 'codebase'],
+      previous: { kind: 'full_audit', score: fx.scanDone.score }, fixed_checked: 0, moved: 0, gone: 0 });
+    expect(d.previous!.scan_run_id).not.toBe(fx.scanDone.id);
+    expect([d.new.total, d.kept.total, d.fixed.total, d.ignored.total]).toEqual([0, 12, 0, 0]);
+
+    // Se marca uno a mano y se audita otra vez: «corregido» frente a la anterior, con su estado de ahora.
+    const marcado = d.kept.items[0]!.finding_id;
+    await pide(`/api/orgs/${DEMO}/findings/${marcado}`, 'PATCH', { status: 'fixed' });
+    const otra = await auditar(DEMO);
+    await vi.advanceTimersByTimeAsync(12_000);
+    const d2 = conFoto(AuditDelta.parse(await delta(DEMO, otra)));
+    expect(d2.previous?.scan_run_id).toBe(id);
+    expect([d2.new.total, d2.kept.total, d2.fixed.total]).toEqual([0, 11, 1]);
+    expect(d2.fixed.items).toEqual([expect.objectContaining({ finding_id: marcado, status: 'fixed' })]);
+    expect(d2.fixed_checked).toBe(0);
+    // La foto de antes no se rehace: sus conteos siguen, y su lista trae el estado de ahora.
+    const otraVez = conFoto(await delta(DEMO, id));
+    expect(otraVez.counts).toEqual(d.counts);
+    expect(otraVez.kept.items.find((i) => i.finding_id === marcado)?.status).toBe('fixed');
+  });
+
+  it('una org sin datos: con una fuente conectada, la primera foto (first:true, todo en 0); sin ninguna, sin_foto', async () => {
+    const org = (await pide<{ id: string }>('/api/orgs', 'POST', { name: 'Tienda nueva' })).id;
+    const sinFuentes = await auditar(org);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(await delta(org, sinFuentes)).toEqual({ available: false, scan_run_id: sinFuentes, reason: 'sin_foto' });
+
+    await pide(`/api/orgs/${org}/connections`, 'POST', { provider: 'supabase', pat: 'sbp_prueba', project_ref: 'abcdefghijklmnopqrst' });
+    const id = await auditar(org);
+    await vi.advanceTimersByTimeAsync(12_000);
+    const d = conFoto(AuditDelta.parse(await delta(org, id)));
+    expect(d).toMatchObject({ first: true, previous: null, modules_seen: ['supabase'], fixed_checked: 0, moved: 0, gone: 0 });
+    for (const k of ['open', 'new', 'kept', 'fixed', 'ignored'] as const)
+      expect(Object.values(d.counts[k]).flatMap((s) => Object.values(s)).every((v) => v === 0)).toBe(true);
+    expect([d.new, d.kept, d.fixed, d.ignored]).toEqual(Array(4).fill({ total: 0, items: [] }));
+
+    expect(Evolution.parse(await pide(`/api/orgs/${org}/evolution?days=7`))).toMatchObject({ days: 7, points: [], reviews: [],
+      incidents: [], truncated: false, totals: { versions: 0, snapshots: 0, score_first: null }, mttr: { verified: 0, hours_avg: null } });
+  });
+
+  it('E52 en la demo es fx.evolution con los días pedidos; el anónimo también la lee', async () => {
+    expect(await pide(`/api/orgs/${DEMO}/evolution`)).toEqual(fx.evolution);
+    expect(Evolution.parse(await pide(`/api/orgs/${DEMO}/evolution?days=90&limit=30`))).toEqual({ ...fx.evolution, days: 90 });
+    sesion.tipo = 'anonima';
+    expect(await pide(`/api/orgs/${DEMO}/evolution?days=30`)).toEqual(fx.evolution);
+    expect(conFoto(await delta(DEMO, fx.scanDone.id)).scan_run_id).toBe(fx.scanDone.id);
   });
 });

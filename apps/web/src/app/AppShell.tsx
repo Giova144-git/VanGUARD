@@ -111,6 +111,7 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
         {NAV.filter((n) => n.grupo === 'ecosistema').map((n) => item(n.id, 'modulo' in n ? <MarcaModulo org={org.id} modulo={n.modulo} /> : null))}
         <Rotulo texto="Respuesta" compacto={compacto} />
         {item('audit')}
+        {item('evolution')}
         {item('incidents', <MarcaNumero n={overview.data?.open_incidents} rojo />)}
         {item('export')}
       </nav>

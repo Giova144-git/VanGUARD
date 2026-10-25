@@ -1,5 +1,5 @@
 // Orden fijo del riel (S14 §14.5): no se reordena por gravedad. id = segmento de ruta; descripción = guía en una línea.
-import { Activity, BookOpen, Cloud, Database, Gauge, GitBranch, KeyRound, Settings, Share2, ShieldCheck, Siren } from 'lucide-react';
+import { Activity, BookOpen, Cloud, Database, Gauge, GitBranch, KeyRound, Settings, Share2, ShieldCheck, Siren, TrendingUp } from 'lucide-react';
 
 export const NAV = [
   { id: 'overview',    nombre: 'Resumen',        icono: Activity,    grupo: 'portada',    descripcion: 'Lo que está mal ahora en todo tu ecosistema y tu puntaje de blindaje.' },
@@ -9,6 +9,7 @@ export const NAV = [
   { id: 'wiki',        nombre: 'Wiki del repo',  icono: BookOpen,    grupo: 'ecosistema', descripcion: 'Tu repo explicado para un directivo: qué es, cómo funciona, sus piezas, el mapa y los riesgos.' },
   { id: 'performance', nombre: 'Rendimiento',    icono: Gauge,       grupo: 'ecosistema', modulo: 'performance', proveedor: null,         descripcion: 'Lighthouse de tu web, comparado con la medición anterior.' },
   { id: 'audit',       nombre: 'Auditoría',      icono: ShieldCheck, grupo: 'respuesta',  descripcion: 'Revisa todo el ecosistema con un botón.' },
+  { id: 'evolution',   nombre: 'Evolución',      icono: TrendingUp,  grupo: 'respuesta',  descripcion: 'Cómo cambió tu seguridad entre revisiones: nuevos, corregidos y puntaje en el tiempo.' },
   { id: 'incidents',   nombre: 'Incidentes',     icono: Siren,       grupo: 'respuesta',  descripcion: 'Ataques en vivo: aviso por WhatsApp y bloqueo de la IP aprobado desde el mismo mensaje.' },
   { id: 'export',      nombre: 'Llevar a tu IA', icono: Share2,      grupo: 'respuesta',  descripcion: 'Exporta hallazgos y prompts para cualquier IA, o conéctala por MCP.' },
   { id: 'connections', nombre: 'Conexiones',     icono: KeyRound,    grupo: 'pie',        descripcion: 'Tus tokens de solo lectura y tu repo.' },

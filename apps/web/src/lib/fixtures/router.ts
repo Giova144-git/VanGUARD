@@ -2,12 +2,14 @@
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
   fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
-  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
-  type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
-  type WikiRun, type ZipFinding,
+  type AuditDelta, type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type DeltaLista, type EstadoModulo, type Evolution,
+  type Finding, type Incident, type IncidentDetail, type MatrizHallazgos, type Me, type Module, type Org, type PermCheck, type ScanKind,
+  type ScanRun, type TimelineItem, type WikiRun, type ZipFinding,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { ApiError } from '../errores';
+import { SEVERIDADES, esClave } from '../evolucion';
+import { deMapa } from '../severidad';
 import { tipoSesionFalsa } from '../supabase-doble';
 
 type H = (m: RegExpMatchArray, body: unknown, q: URLSearchParams) => unknown;
@@ -170,6 +172,7 @@ const hallazgosDe = (org: string) => {
 };
 const hallazgo = (org: string, id: string) => {
   if (id === fx.hallazgoRevision.id) revisionDe(org);   // ?finding= del WhatsApp puede llegar antes que E45, que lo añade
+  if (fx.hallazgosCorregidos.some((f) => f.id === id)) conCorregidos(org);   // ídem con «Ver» de los cambios y E51
   return hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
 };
 
@@ -676,6 +679,110 @@ function generarWiki(org: string, body: unknown) {
   return { wiki_run_id: id, cached: false };
 }
 
+// ── Evolución entre revisiones (E51/E52, asignaciones/evolucion-entre-revisiones.md §6.5) ───────────────────────
+// Cadena de fotos por org, como audit_snapshots: la de la demo arranca con la de scanDone (fx.auditDelta). Cada auditoría
+// simulada o ZIP de la org que terminó deja la suya, en orden de cierre, la primera vez que se pide E51: resta los ids
+// abiertos frente a la foto anterior, como private.vg_restar (sin claves movidas: los fixtures no traen huellas). Sin
+// ningún módulo revisado no hay foto (sin_foto). Las listas salen con el estado de AHORA de cada hallazgo.
+type DeltaConFoto = Extract<AuditDelta, { available: true }>;
+type Foto = { scan_run_id: string; kind: ScanKind; taken_at: string; score: number | null; abiertos: string[]; delta: DeltaConFoto };
+const fotos = new Map<string, Foto[]>();
+const fotosDe = (org: string) => {
+  if (!fotos.has(org)) {
+    const d = fx.auditDelta as DeltaConFoto;
+    fotos.set(org, vacia(org) ? [] : [{ scan_run_id: d.scan_run_id, kind: 'full_audit', taken_at: d.taken_at, score: d.score,
+      abiertos: [...d.new.items, ...d.kept.items].map((i) => i.finding_id), delta: d }]);
+  }
+  return fotos.get(org)!;
+};
+// Los dos hallazgos que el sábado ya no están abiertos: la primera vez entran en la lista de la org (como hallazgoRevision).
+function conCorregidos(org: string) {
+  if (vacia(org)) return;
+  const lista = delOrg(org);
+  for (const f of fx.hallazgosCorregidos) if (!lista.some((x) => x.id === f.id)) lista.push(structuredClone(f as Finding));
+}
+const MODULO_PASO: Record<string, Module> = { supabase: 'supabase', cloudflare: 'cloudflare', repo: 'codebase', zip: 'codebase' };
+const MODULOS_FX = ['supabase', 'cloudflare', 'codebase', 'performance'] as const satisfies readonly Module[];
+const RANGO: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+const matrizDe = (fs: readonly Finding[]): MatrizHallazgos => {
+  const m = Object.fromEntries(MODULOS_FX.map((k) => [k, Object.fromEntries(SEVERIDADES.map((s) => [s, 0]))])) as MatrizHallazgos;
+  for (const f of fs) m[f.module][f.severity] += 1;
+  return m;
+};
+// En el orden de E13: severidad, confirmed, last_seen_at e id.
+const listaDe50 = (fs: readonly Finding[]): DeltaLista => ({ total: fs.length, items: [...fs]
+  .sort((a, b) => RANGO[a.severity]! - RANGO[b.severity]! || Number(b.confirmed) - Number(a.confirmed)
+    || b.last_seen_at.localeCompare(a.last_seen_at) || a.id.localeCompare(b.id))
+  .slice(0, 50).map((f) => ({ finding_id: f.id, module: f.module, rule_id: f.rule_id, severity: f.severity, title: f.title,
+    resource: f.resource, status: f.status })) });
+
+// verScan recalcula los pasos con las conexiones de ahora: una auditoría que cerró sin mirar nada se recuerda aquí para
+// que no gane una foto al conectar algo después.
+const sinModulos = new Set<string>();
+function fotografiar(org: string) {
+  const cadena = fotosDe(org);
+  const hechas = new Set([...cadena.map((f) => f.scan_run_id), ...sinModulos]);
+  const terminadas = [
+    ...[...scans].filter(([id, c]) => c.org === org && !hechas.has(id)).map(([id]) => verScan(org, id)),
+    ...[...zips].filter(([id, c]) => c.org === org && !hechas.has(id)).map(([id, c]) => verZip(id, c)),
+  ].filter((r) => r.status === 'succeeded' && r.finished_at).sort((a, b) => a.finished_at!.localeCompare(b.finished_at!));
+  for (const r of terminadas) {
+    const vistos = [...new Set(r.steps.filter((s) => s.status === 'done')
+      .map((s) => deMapa<string, Module | null>(MODULO_PASO, s.name, null)))].filter((m): m is Module => m !== null);
+    if (!vistos.length) { sinModulos.add(r.id); continue; }               // sin_modulos: nunca una versión sin mirar nada
+    const anterior = cadena.at(-1);
+    const todos = hallazgosDe(org);
+    const porId = new Map(todos.map((f) => [f.id, f]));
+    const abiertos = todos.filter((f) => f.status === 'open');
+    const antes = new Set(anterior?.abiertos ?? []);
+    const nuevos = anterior ? abiertos.filter((f) => !antes.has(f.id)) : [];
+    const siguen = anterior ? abiertos.filter((f) => antes.has(f.id)) : [];
+    const salieron = [...antes].filter((id) => porId.get(id)?.status !== 'open');
+    const fuera = salieron.map((id) => porId.get(id)).filter((f): f is Finding => f !== undefined);
+    const corregidos = fuera.filter((f) => f.status === 'fixed' || f.status === 'verified');
+    const ignorados = fuera.filter((f) => f.status === 'ignored');
+    cadena.push({ scan_run_id: r.id, kind: r.kind, taken_at: r.finished_at!, score: r.score, abiertos: abiertos.map((f) => f.id), delta: {
+      available: true, scan_run_id: r.id, taken_at: r.finished_at!, first: !anterior, score: r.score, modules_seen: vistos,
+      previous: anterior ? { scan_run_id: anterior.scan_run_id, kind: anterior.kind, finished_at: anterior.taken_at, score: anterior.score } : null,
+      counts: { open: matrizDe(abiertos), new: matrizDe(nuevos), kept: matrizDe(siguen), fixed: matrizDe(corregidos), ignored: matrizDe(ignorados) },
+      fixed_checked: corregidos.filter((f) => f.status === 'verified' && !esClave(f.rule_id)).length, moved: 0,
+      gone: salieron.length - fuera.length,                                // la fila ya no existe: ni corregido ni ignorado
+      new: listaDe50(nuevos), kept: listaDe50(siguen), fixed: listaDe50(corregidos), ignored: listaDe50(ignorados),
+    } });
+    hechas.add(r.id);
+  }
+}
+
+// E51: la auditoría de la demo (fx.auditDelta), una simulada o un ZIP de esta org; cualquier otra → 404 uniforme.
+function deltaScan(org: string, id: string): AuditDelta {
+  const propia = scans.get(id)?.org === org || zips.get(id)?.org === org;
+  const demo = !scans.has(id) && !zips.has(id) && !vacia(org) && id === fx.scanDone.id;
+  if (!propia && !demo) return falla(404, 'not_found', 'Auditoría no encontrada');
+  if (demo) conCorregidos(org);
+  fotografiar(org);
+  const foto = fotosDe(org).find((f) => f.scan_run_id === id);
+  if (!foto) {
+    const zip = zips.get(id);
+    const run = zip ? verZip(id, zip) : verScan(org, id);
+    return { available: false, scan_run_id: id, reason: run.status === 'queued' || run.status === 'running' ? 'en_curso' : 'sin_foto' };
+  }
+  const porId = new Map(hallazgosDe(org).map((f) => [f.id, f]));
+  const alDia = (l: DeltaLista): DeltaLista => ({ total: l.total, items: l.items.map((i) => ({ ...i, status: porId.get(i.finding_id)?.status ?? i.status })) });
+  const d = structuredClone(foto.delta);
+  return { ...d, new: alDia(d.new), kept: alDia(d.kept), fixed: alDia(d.fixed), ignored: alDia(d.ignored) };
+}
+
+// E52: la historia de la demo; en una org sin sus datos, la forma vacía. `days` vuelve tal cual (1–90, 30 por defecto);
+// los puntos no se recortan y `limit` se ignora.
+function evolucion(org: string, q: URLSearchParams): Evolution {
+  const d = Number(q.get('days') ?? 30);
+  const days = Number.isInteger(d) && d >= 1 && d <= 90 ? d : 30;
+  if (!vacia(org)) return { ...structuredClone(fx.evolution as Evolution), days };
+  return { days, points: [], truncated: false, totals: { versions: 0, snapshots: 0, score_first: null, new: matrizDe([]),
+    fixed: matrizDe([]), fixed_checked: 0, ignored: 0, gone: 0 }, reviews: [], incidents: [],
+    mttr: { verified: 0, hours_avg: null, hours_median: null } };
+}
+
 // ── Lecturas de la demo (E18, E24, E25, E28, E29b): en una org sin sus datos, lo que da la API con las tablas vacías ──
 // El tráfico del ataque simulado en esa org sí se ve: es el de la simulación, no el de la demo.
 const traficoDe = (org: string) => !vacia(org) || incidentesDe(org).some((i) => simulados.has(i.id))
@@ -723,7 +830,9 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/confirm`), (m, b) => confirmarFalso(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/traffic`),                 (m) => traficoDe(m[1]!)],
+  ['GET',  r(`${ORG}\\/scans\\/([^/]+)\\/delta`), (m) => deltaScan(m[1]!, m[2]!)],   // antes que scans/:id
   ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[1]!, m[2]!)],
+  ['GET',  r(`${ORG}\\/evolution`),               (m, _b, q) => evolucion(m[1]!, q)],
   ['POST', r(`${ORG}\\/wiki\\/estimate`),         () => { exigirAdmin(); return fx.wikiEstimate; }],   // solo lee GitHub; cached_run_id null
   ['POST', r(`${ORG}\\/wiki\\/runs`),             (m, b) => generarWiki(m[1]!, b)],
   ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m) => listarWikis(m[1]!)],

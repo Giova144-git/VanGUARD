@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AiUsage, AlertPrefs, CodeReviewState, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  AiUsage, AlertPrefs, AuditDelta, CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -189,4 +189,21 @@ export const useUsoIA = (org: string, habilitado: boolean) => useQuery({
   queryKey: ['org', org, 'ai'], enabled: habilitado, staleTime: 30_000, refetchIntervalInBackground: false,
   queryFn: async () => AiUsage.parse(await api(`/api/orgs/${org}/ai/usage`, { esquema: AiUsage })),
   refetchInterval: (q) => (es404(q) ? false : 30_000),
+});
+
+// Evolución entre revisiones (E51/E52, asignaciones/evolucion-entre-revisiones.md §6.1). Validadas con zod como E45: un
+// cuerpo fuera de contrato deja la consulta en error y el bloque no se pinta. Un 404 (aún sin desplegar) no se sondea.
+// E51 cuelga de la clave de la auditoría: el evento de scan_runs ya invalida el prefijo 'scan'. Solo con la auditoría
+// terminada (`habilitado`); 10 s de sondeo solo mientras llega 'en_curso'.
+export const useDeltaAuditoria = (org: string, id: string | undefined, habilitado: boolean) => useQuery({
+  queryKey: ['org', org, 'scan', id, 'delta'], enabled: habilitado && esId(id), staleTime: 60_000, refetchIntervalInBackground: false,
+  queryFn: async () => AuditDelta.parse(await api(`/api/orgs/${org}/scans/${id}/delta`, { esquema: AuditDelta })),
+  refetchInterval: (q) => (!es404(q) && q.state.data?.available === false && q.state.data.reason === 'en_curso' ? 10_000 : false),
+});
+
+// E52 sin `limit` (el BACK da 30 versiones; las cifras del periodo vienen en `totals`). Sin sondeo: Realtime (scan_runs,
+// findings y notifications) y volver a la pestaña la refrescan.
+export const useEvolucion = (org: string, dias: number) => useQuery({
+  ...base, queryKey: ['org', org, 'evolution', dias], staleTime: 60_000,
+  queryFn: async () => Evolution.parse(await api(`/api/orgs/${org}/evolution?days=${dias}`, { esquema: Evolution })),
 });

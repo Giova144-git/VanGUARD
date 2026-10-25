@@ -23,6 +23,7 @@ import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
+import { Cambios } from './Cambios';
 import { PINTA_PASO, estadoPaso, estadoScan, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
@@ -197,6 +198,7 @@ function Corrida({ id }: { id: string }) {
           band={run.band ?? (overview.data?.last_scan?.id === run.id ? overview.data.band : null)}
           coverage={run.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} /></section>
       ) : null}
+      {terminada ? <Cambios scanId={run.id} /> : null}
       {terminada ? <Resumen run={run} porId={porId} /> : null}
       {terminada && ordenados.length ? (
         <section className="flex flex-col gap-3" aria-labelledby="hallazgos-abiertos">

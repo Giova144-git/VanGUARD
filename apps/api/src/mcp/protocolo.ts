@@ -7,7 +7,8 @@ import { log } from '../lib/log.ts';
 // JSON-RPC 2.0 en vez del SDK: cero dependencias nuevas en el bundle del Worker, ~0,1 ms de CPU por mensaje y nada de
 // eval (el validador es zod). Cada POST trae UN mensaje y se responde en el acto; GET no abre stream (405). Sin lotes: la
 // versión 2025-06-18 del protocolo los quitó y un lote de 20 get_overview hacía 301 subpeticiones con un solo cobro.
-// Métodos: initialize, ping, tools/list, tools/call, prompts/list y prompts/get. Ninguno llama a Claude ni escribe.
+// Métodos: initialize, ping, tools/list, tools/call, prompts/list y prompts/get. Ninguno llama a Claude ni deja que la IA
+// escriba; la única escritura es la telemetría de estado de «Enviar a mi IA» (enviado → arreglando, vanguard.ts).
 export const VERSIONES = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const;
 export const MAX_TEXTO = 100_000;   // > 100 KB → isError en vez de un JSON cortado (S13 §13.7)
 // Presupuesto de subpeticiones por POST (Workers Free: ≤ 40 de 50, TOPE_SUBPETICIONES; como rutas/wiki.ts): con un

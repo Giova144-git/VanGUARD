@@ -158,7 +158,8 @@ describe('/mcp · protocolo', () => {
     const b = await (await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).json() as
       { result: { tools: { name: string; inputSchema: { required?: string[] }; annotations: { readOnlyHint: boolean } }[] } };
     const nombres = b.result.tools.map((x) => x.name);
-    expect(nombres).toEqual(expect.arrayContaining(['get_overview', 'get_repo_status', 'list_findings', 'get_finding', 'get_fix_prompt']));
+    expect(nombres).toEqual(expect.arrayContaining(['get_overview', 'get_repo_status', 'list_findings', 'get_finding', 'get_fix_prompt',
+      'list_fix_requests']));
     expect(b.result.tools.every((x) => x.annotations.readOnlyHint)).toBe(true);
     const fix = b.result.tools.find((x) => x.name === 'get_fix_prompt')!;
     expect(fix.inputSchema.required).toEqual(['id']);
@@ -249,6 +250,79 @@ describe('/mcp · herramientas', () => {
     const out = JSON.parse((await llamar('list_findings', { limit: 2 })).result.content[0]!.text);
     expect(out.untrusted_data.items).toHaveLength(2);
     expect(out.untrusted_data.next_offset).toBe(2);
+  });
+});
+
+describe('/mcp · «Enviar a mi IA» (cola fix_requests)', () => {
+  const escrituras = () => doble.ops.filter((o) => o.action !== 'select' && o.table !== 'mcp_tokens');
+
+  it('get_fix_prompt pasa SOLO la petición «enviado» de ese hallazgo, en la org del token, a «arreglando»', async () => {
+    await llamar('get_fix_prompt', { id: F });
+    const [u, ...resto] = escrituras();
+    expect(resto).toHaveLength(0);
+    expect(u).toMatchObject({ table: 'fix_requests', action: 'update' });
+    expect(u!.payload).toMatchObject({ status: 'arreglando', mcp_token_id: TOK_ID });
+    expect(Object.keys(u!.payload as object).sort()).toEqual(['mcp_token_id', 'started_at', 'status']);
+    expect(eqDe(u!, 'org_id')).toBe(ORG);
+    expect(eqDe(u!, 'finding_id')).toBe(F);
+    expect(eqDe(u!, 'status')).toBe('enviado');
+  });
+
+  it('el prompt resolver_hallazgo (el que abre «Enviar a mi IA») también; un hallazgo de otra org no escribe nada', async () => {
+    await rpc(msj(3, 'prompts/get', 'resolver_hallazgo', { id: F }));
+    expect(escrituras().map((o) => o.table)).toEqual(['fix_requests']);
+    token = { ...token, org_id: OTRA };
+    fila = null;
+    const antes = escrituras().length;
+    expect((await llamar('get_fix_prompt', { id: F })).result.isError).toBe(true);
+    expect(escrituras()).toHaveLength(antes);
+  });
+
+  it('si la telemetría falla, la corrección sale igual', async () => {
+    tabla = (op) => (op.table === 'fix_requests' ? { error: { code: '57014' } } : undefined);
+    const b = await llamar('get_fix_prompt', { id: F });
+    expect(b.result.isError).toBeUndefined();
+  });
+
+  it('get_finding y list_findings no escriben', async () => {
+    await llamar('get_finding', { id: F });
+    await llamar('list_findings');
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  it('list_fix_requests: id, título y severidad de los enviados, en la org del token y sin escribir', async () => {
+    const G = 'c3d40000-0000-4000-8000-000000000002';
+    tabla = (op) => {
+      if (op.table === 'fix_requests') return { data: [
+        { finding_id: F, status: 'arreglando', created_at: '2026-10-24T10:00:00+00:00', started_at: '2026-10-24T10:01:00+00:00' },
+        { finding_id: G, status: 'enviado', created_at: '2026-10-24T11:00:00+00:00', started_at: null }] };
+      if (op.table === 'findings') return { data: [hallazgo(), hallazgo({ id: G, title: 'Otro', severity: 'high' })] };
+      return undefined;
+    };
+    const out = JSON.parse((await llamar('list_fix_requests')).result.content[0]!.text);
+    expect(out.untrusted_data.items).toEqual([
+      expect.objectContaining({ id: F, title: '.env subido al repositorio', severity: 'critical', request_status: 'arreglando' }),
+      expect.objectContaining({ id: G, title: 'Otro', severity: 'high', request_status: 'enviado', started_at: null }),
+    ]);
+    const cola = doble.ops.find((o) => o.table === 'fix_requests')!;
+    expect(eqDe(cola, 'org_id')).toBe(ORG);
+    expect(cola.filters).toContainEqual(['status', 'in', ['enviado', 'arreglando']]);
+    expect(eqDe(doble.ops.find((o) => o.table === 'findings')!, 'org_id')).toBe(ORG);
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  it('list_fix_requests vacía → siguiente_paso; resolver_enviados no lee la base y nombra las herramientas', async () => {
+    const out = JSON.parse((await llamar('list_fix_requests')).result.content[0]!.text);
+    expect(out.untrusted_data).toMatchObject({ items: [] });
+    expect(out.untrusted_data.siguiente_paso).toContain('Enviar a mi IA');
+    const datos = () => doble.ops.filter((o) => o.table !== 'mcp_tokens' && o.table !== 'org_members').length;
+    const antes = datos();
+    const b = await (await rpc(msj(6, 'prompts/get', 'resolver_enviados'))).json() as { result: { messages: { content: { text: string } }[] } };
+    const t = b.result.messages[0]!.content.text;
+    expect(t).toContain('list_fix_requests');
+    expect(t).toContain('get_fix_prompt');
+    expect(t).toContain('espera mi confirmación');
+    expect(datos()).toBe(antes);
   });
 });
 
@@ -428,7 +502,7 @@ describe('/mcp · presupuesto de subpeticiones y logs', () => {
       ...prompts.map((x) => ({ name: x.name, presupuesto: x.subpeticiones, method: 'prompts/get',
         arguments: x.name === 'resolver_hallazgo' ? { id: F } : {} })),
     ];
-    expect(casos).toHaveLength(8);
+    expect(casos).toHaveLength(10);
     for (const caso of casos) {
       token = { ...token, last_used_at: null };     // peor caso: también escribe last_used_at
       const { claves, env } = limitador();

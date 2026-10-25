@@ -1,8 +1,9 @@
 // Bloques 3 y 4 de «Llevar a tu IA» (S13 §13.10): tokens vgk_ (E29/E29b), guías por cliente y «Resolver con un botón».
 // El token solo existe en el estado de este panel mientras se muestra (una vez); «Ya lo guardé» lo borra.
 import { useState } from 'react';
-import { KeyRound, Wand2 } from 'lucide-react';
+import { Code2, KeyRound, SquareTerminal, Wand2 } from 'lucide-react';
 import type { McpTokenCreated, McpTokenPublic } from '@vanguard/contracts';
+import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/componentes/ui/tabs';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
@@ -11,10 +12,10 @@ import { ConfirmarEnSitio } from '@/componentes/vg/ConfirmarEnSitio';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { sinBidi } from '@/lib/bidi';
-import { useTokensMcp } from '@/lib/consultas';
+import { useConexiones, useTokensMcp } from '@/lib/consultas';
 import { mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
-import { comandoClaudeCode, guiasMcp, origenApp, pedidoResolverTodo, urlMcp } from '@/lib/mcp';
+import { comandoClaudeCode, enlaceClaudeCode, enlaceVsCode, guiasMcp, origenApp, pedidoResolverTodo, repoParaArreglar, urlMcp } from '@/lib/mcp';
 import { useCrearTokenMcp, useRevocarTokenMcp } from '@/lib/mutaciones';
 
 const SELECTOR = 'h-12 rounded-lg border border-input bg-card px-3 text-[15px] outline-none focus-visible:border-info focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-60';
@@ -126,16 +127,19 @@ function Tokens({ org }: { org: string }) {
 }
 
 export function ConectarMcp({ org, puedeEscribir }: { org: string; puedeEscribir: boolean }) {
+  const repo = repoParaArreglar(null, useConexiones(org).data);
   return (
     <>
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Conectar por MCP">
-        <div className="flex items-center gap-2"><KeyRound className="size-5 text-muted-foreground" /><h3 className="flex-1 text-[17px] font-semibold">Conecta tu IA por MCP</h3><Etiqueta texto="Solo lectura" /></div>
+        <div className="flex items-center gap-2" data-info="mcp"><KeyRound className="size-5 text-muted-foreground" /><h3 className="flex-1 text-[17px] font-semibold">Conecta tu IA por MCP</h3><Etiqueta texto="Solo lectura" /></div>
         <p className="text-sm text-muted-foreground">
           Con el MCP de VanGUARD tu IA consulta el estado de tu repo, tus vulnerabilidades y los prompts de corrección, sin copiar y pegar.
           Nunca escribe en VanGUARD ni gasta tu presupuesto de IA.
         </p>
-        {puedeEscribir ? <Tokens org={org} /> : <p className="text-sm text-muted-foreground">Pide a un administrador que cree un token.</p>}
-        <details className="group">
+        <div data-guia="mcp-tokens" data-info="mcp-tokens">
+          {puedeEscribir ? <Tokens org={org} /> : <p className="text-sm text-muted-foreground">Pide a un administrador que cree un token.</p>}
+        </div>
+        <details className="group" data-guia="mcp-guias">
           <summary className="cursor-pointer text-[15px] font-medium">Cómo conectarla en cada IA</summary>
           <div className="pt-3"><GuiasMcp /></div>
         </details>
@@ -143,12 +147,13 @@ export function ConectarMcp({ org, puedeEscribir }: { org: string; puedeEscribir
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Resolver con un botón">
         <div className="flex items-center gap-2"><Wand2 className="size-5 text-muted-foreground" /><h3 className="flex-1 text-[17px] font-semibold">Resuelve tus vulnerabilidades con un botón</h3></div>
         <p className="text-sm text-muted-foreground">
-          Con el MCP conectado, copia el comando y pégalo en tu IA abierta en el repo: trae cada corrección de VanGUARD y la aplica
-          una por una, mostrándote el diff antes. En cada hallazgo tienes además «Resolver con mi IA».
+          Con el MCP conectado, un botón abre Claude Code en tu repo con la orden ya escrita: trae cada corrección de VanGUARD y
+          la aplica una por una, mostrándote el diff antes. Revisa la orden y pulsa Enter. En cada hallazgo tienes además «Enviar a mi IA».
         </p>
-        <div className="flex flex-wrap gap-3">
-          <BotonCopiar valor={comandoClaudeCode('resolver_criticos')} texto="Resolver lo más grave · Claude Code" variante="principal" tam="grande" />
-          <BotonCopiar valor={pedidoResolverTodo()} texto="Resolver lo más grave · otra IA" tam="grande" />
+        <div className="flex flex-wrap gap-3" data-guia="mcp-resolver">
+          <Button asChild variant="principal" size="grande"><a href={enlaceClaudeCode(comandoClaudeCode('resolver_criticos'), repo)}><SquareTerminal />Resolver lo más grave · Claude Code</a></Button>
+          <Button asChild variant="secundaria" size="grande"><a href={enlaceVsCode(pedidoResolverTodo())}><Code2 />Resolver lo más grave · VS Code</a></Button>
+          <BotonCopiar valor={pedidoResolverTodo()} texto="Copiar para otra IA" tam="grande" />
         </div>
       </section>
     </>

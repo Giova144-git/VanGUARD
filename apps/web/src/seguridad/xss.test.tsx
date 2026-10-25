@@ -58,6 +58,8 @@ import PaginaIncidentes from '@/modulos/incidentes/PaginaIncidentes';
 import PaginaRendimiento from '@/modulos/rendimiento/PaginaRendimiento';
 import PaginaResumen from '@/modulos/resumen/PaginaResumen';
 import PaginaWiki, { Estimacion } from '@/modulos/wiki/PaginaWiki';
+import { Burbuja } from '@/componentes/vigia/Escena';
+import { infoDeHallazgo, MAX_RECURSO } from '@/componentes/vigia/info-hallazgos';
 
 // supabase-js pide VITE_SUPABASE_URL al importarse; aquí no hay red ni sesión (solo la usan los manejadores de clic).
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
@@ -282,6 +284,16 @@ const PROHIBIDAS = new Set(['script', 'iframe', 'img', 'image', 'object', 'embed
 const ATTR_URL = new Set(['href', 'src', 'xlink:href', 'action', 'formaction', 'poster', 'srcset', 'background', 'ping', 'data', 'cite']);
 // Destinos externos que el FRONT construye a propósito (referencias CVE/OSV, revocar el token, repo de los jueces, wa.me).
 const HOSTS = new Set(['officialvanguard.com', 'www.cve.org', 'osv.dev', 'supabase.com', 'dash.cloudflare.com', 'github.com', 'wa.me']);
+// Enlaces profundos oficiales de Claude Code («Abrir en Claude Code», lib/mcp.ts): solo esos dos destinos exactos y solo
+// con sus parámetros documentados. Cualquier otro esquema sigue siendo un peligro.
+const PROFUNDOS: Record<string, { host: string; ruta: string; params: readonly string[] }> = {
+  'claude-cli:': { host: 'open', ruta: '', params: ['repo', 'q'] },
+  'vscode:': { host: 'anthropic.claude-code', ruta: '/open', params: ['prompt'] },
+};
+const esProfundo = (u: URL) => {
+  const d = PROFUNDOS[u.protocol];
+  return !!d && u.host === d.host && u.pathname === d.ruta && !u.hash && [...u.searchParams.keys()].every((k) => d.params.includes(k));
+};
 const BASE = 'https://officialvanguard.com/o/org/aqui';
 // React 19 sustituye un href/src javascript: por esta URL inerte: no se ejecuta, pero el componente se lo pasó.
 const BLOQUEO_REACT = "javascript:throw new Error('React has blocked a javascript: URL as a security precaution.')";
@@ -298,6 +310,7 @@ function peligros(html: string, estricto = false): string[] {
       if (v === BLOQUEO_REACT) { if (estricto) p.push(`<${t.nombre} ${k}> javascript: (bloqueado por React)`); continue; }
       let u: URL;
       try { u = new URL(v, BASE); } catch { continue; }                 // relativo raro: no sale del origen
+      if (esProfundo(u)) continue;
       if (u.protocol !== 'https:' && u.protocol !== 'http:') p.push(`<${t.nombre} ${k}="${v.slice(0, 60)}"> esquema ${u.protocol}`);
       else if (!HOSTS.has(u.host)) p.push(`<${t.nombre} ${k}="${v.slice(0, 60)}"> host ${u.host}`);
     }
@@ -1120,5 +1133,27 @@ describe('XSS · fechas con la carga (Ts es z.string())', () => {
   it('GraficaTrafico: una cubeta con fecha inválida no rompe el render', () => {
     const t = envenenar(Traffic, fx.traffic, IMG, { fechas: true });
     expect(() => renderToStaticMarkup(<GraficaTrafico buckets={t.buckets} />)).not.toThrow();
+  });
+});
+
+// ── Vigía: «Info» de un problema (clic derecho sobre su fila) ──────────────────
+// Es lo único del servidor que entra en la burbuja: el recurso, recortado, en una línea y con los controles bidi a la
+// vista (info-hallazgos.ts). La burbuja lo pinta como texto React: la carga sale escapada y no cambia la estructura.
+describe('XSS · Info de un hallazgo en la burbuja de Vigía', () => {
+  const burbuja = (resource: string) => {
+    const i = infoDeHallazgo({ id: 'x', module: 'supabase', rule_id: 'SB_RLS_DISABLED', severity: 'critical', resource });
+    return { i, html: renderToStaticMarkup(<Burbuja m={{ titulo: i.titulo, texto: i.texto, acciones: [] }}
+      caja={{ x: 0, y: 0, w: 0, h: 0 }} evitar={null} alHablar={() => {}} />) };
+  };
+  const base = burbuja(INOCENTE).html;
+  it.each([...CARGAS, ['RLO + script + 10 KB', '\u202E<script>alert(1)</script>' + 'B'.repeat(10_000)] as [string, string]])('«%s» en el recurso', (_n, carga) => {
+    const { i, html } = burbuja(carga);
+    expect(peligros(html, true)).toEqual([]);
+    expect(estructura(html)).toEqual(estructura(base));
+    for (const crudo of ['<img src=x', '<script>alert', '<svg onload']) expect(html).not.toContain(crudo);
+    expect(html).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
+    expect(i.texto.length).toBeLessThan(260 + MAX_RECURSO * 9);           // ⟨U+XXXX⟩ mide 8: ni 10 KB ni nada parecido
+    const recurso = /Afecta a «(.*)»\./.exec(i.texto)?.[1] ?? '';
+    expect(html).toContain(esc(recurso));
   });
 });

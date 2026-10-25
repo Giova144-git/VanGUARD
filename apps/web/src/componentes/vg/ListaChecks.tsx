@@ -1,18 +1,20 @@
 import { Check, X } from 'lucide-react';
 import type { PermCheck } from '@vanguard/contracts';
 import { sinBidi } from '@/lib/bidi';
-import { FRASE_ERROR, nombrePermiso } from '@/lib/permisos';
+import { FRASE_ERROR, nombrePermiso, PERMISOS } from '@/lib/permisos';
 import { deMapa } from '@/lib/severidad';
 
 // Resultado de «Probar conexión» (S14 §14.10): ✓/✗ por permiso; en cada ✗, qué marcar al recrear el token.
 // Un ✗ opcional va en ámbar con «opcional»: la conexión funciona sin él.
+// Cada fila de un código conocido lleva data-guia="permiso-<código>" (uno desconocido, ninguno: nada crudo del servidor
+// en atributos): Vigía señala ahí el permiso que falta (modulos/conexiones/guia-vigia.ts).
 // Un código fuera de PERMISOS se pinta tal cual llega: con los controles bidi a la vista (lib/bidi.ts) y en <bdi dir="ltr">.
 export function ListaChecks({ checks }: { checks: PermCheck[] }) {
   if (checks.length === 0) return null;
   return (
     <ul className="flex flex-col gap-1.5" aria-label="Permisos comprobados">
       {checks.map((c) => (
-        <li key={c.permission} className="flex items-start gap-2 text-sm">
+        <li key={c.permission} className="flex items-start gap-2 text-sm" data-guia={Object.hasOwn(PERMISOS, c.permission) ? `permiso-${c.permission}` : undefined}>
           {c.ok
             ? <Check className="mt-0.5 size-4 shrink-0 text-bien" aria-label="Bien" />
             : <X className={`mt-0.5 size-4 shrink-0 ${c.required === false ? 'text-aviso' : 'text-mal'}`} aria-label="Falta" />}

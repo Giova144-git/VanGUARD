@@ -1,7 +1,7 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
-  AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, McpTokenCreated, type McpTokenCreate, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
+  AlertPrefs, CodeReviewSaved, FixRequest, type FixRequestClient, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, McpTokenCreated, type McpTokenCreate, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
   MergeGateConfig, MergeGateSaved, type MergeGateAction, type MergeGatePut,
   UnderAttackProposal, type UnderAttackPropose,
   SimulateAttackOut, type SimulateAttackIn,
@@ -52,6 +52,23 @@ export function usePatchHallazgo(org: string) {
     mutationFn: ({ id, ...body }: FindingPatch & { id: string }) =>
       api(`/api/orgs/${org}/findings/${id}`, { method: 'PATCH', body, esquema: Finding }),
     onSuccess: () => invalidar('findings', 'finding', 'overview', 'module'),
+  });
+}
+
+// «Enviar a mi IA» (E58): crea la petición (idempotente) o la cancela. Solo viaja el id (UUID) y el cliente.
+export function useEnviarAIA(org: string) {
+  const invalidar = useInvalidar(org);
+  return useMutation({
+    mutationFn: ({ id, client }: { id: string; client: FixRequestClient }) =>
+      api(`/api/orgs/${org}/findings/${id}/fix-requests`, { method: 'POST', body: { client }, esquema: FixRequest }),
+    onSettled: () => invalidar('fix-requests'),
+  });
+}
+export function useCancelarEnvioIA(org: string) {
+  const invalidar = useInvalidar(org);
+  return useMutation({
+    mutationFn: (id: string) => api(`/api/orgs/${org}/findings/${id}/fix-requests`, { method: 'DELETE' }),
+    onSettled: () => invalidar('fix-requests'),
   });
 }
 

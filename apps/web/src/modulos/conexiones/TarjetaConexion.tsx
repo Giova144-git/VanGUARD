@@ -1,6 +1,6 @@
 // Tarjeta de un proveedor en Conexiones (S14 §14.10): estado, ••••last4, alcances y meta; probar, quitar y reconectar.
 // GitHub admite varios repos por org (varias-codebases §6.1): una línea por conexión de lectura, con el repo de título.
-import { Fragment, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ExternalLink, KeyRound, RotateCw } from 'lucide-react';
 import { MAX_REPOS_GITHUB, type ConnectionPublic, type ConnectionTest, type Provider, type ProviderErrorCode } from '@vanguard/contracts';
@@ -10,6 +10,7 @@ import { BotonGrande } from '@/componentes/vg/BotonGrande';
 import { ConfirmarEnSitio } from '@/componentes/vg/ConfirmarEnSitio';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { ListaChecks } from '@/componentes/vg/ListaChecks';
+import { useGuia, type Dicho } from '@/componentes/vigia/contexto';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
 import { mensajeDe } from '@/lib/errores';
@@ -18,6 +19,7 @@ import { GUIAS_CONEXION } from '@/lib/guias';
 import { lecturasGithub, nombreRepo, reposGithub } from '@/lib/repos';
 import { useProbarConexion, useQuitarConexion } from '@/lib/mutaciones';
 import { ActivarBlindaje } from './ActivarBlindaje';
+import { dichoDeChecks } from './guia-vigia';
 import { FRASE_ERROR, nombrePermiso } from '@/lib/permisos';
 import { deMapa, type Rol } from '@/lib/severidad';
 
@@ -103,6 +105,17 @@ function LineaConexion({ c, titulo, alQuitar, conEstados }: { c: ConnectionPubli
   const probar = useProbarConexion(org.id);
   const quitar = useQuitarConexion(org.id);
   const [prueba, setPrueba] = useState<ConnectionTest | null>(null);
+  // «Probar conexión»: si Vigía ya está a la vista, comenta el resultado señalando esta lista (no la llama si no lo está).
+  const guia = useGuia();
+  const lista = useRef<HTMLDivElement>(null);
+  const [reaccion, setReaccion] = useState<{ dicho: Dicho } | null>(null);
+  // Puede haber varias tarjetas con el mismo permiso: Vigía señala el elemento de ESTA lista, no el primer data-guia.
+  useEffect(() => {
+    if (!reaccion || !guia.visible) return;
+    const o = reaccion.dicho.objetivo, caja = lista.current;
+    const fila = typeof o === 'string' && caja ? caja.querySelector<HTMLElement>(`[data-guia="${CSS.escape(o)}"]`) : null;
+    guia.decir({ ...reaccion.dicho, objetivo: fila ?? caja ?? undefined });
+  }, [reaccion]);   // solo cuando hay prueba nueva
   const estado = chapaEstado(c);
   const nombre = GUIAS_CONEXION[c.provider].nombre;
   // Valores copiados de Supabase, Cloudflare y GitHub (nombre del proyecto, zona, repo, rama…): los controles bidi se ven
@@ -123,13 +136,16 @@ function LineaConexion({ c, titulo, alQuitar, conEstados }: { c: ConnectionPubli
       {meta.length ? <p className="font-mono text-[13px] break-all text-muted-foreground">
         {meta.map((m, i) => <Fragment key={m.k}>{i ? ' · ' : ''}{m.rotulo}: <bdi dir="ltr">{m.valor}</bdi></Fragment>)}</p> : null}
       {c.last_error && c.status !== 'active' ? <p className="text-sm text-mal">{fraseError(c)}</p> : null}
-      {prueba ? <ListaChecks checks={prueba.checks} /> : null}
+      {prueba ? <div ref={lista}><ListaChecks checks={prueba.checks} /></div> : null}
       {probar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(probar.error)}</p> : null}
       <div className="flex flex-wrap items-start gap-2">
         {c.provider !== 'ingest' && (c.status === 'active' || c.status === 'error') ? (
           <span className="inline-flex flex-col gap-1">
             <Button variant={c.status === 'error' ? 'principal' : 'secundaria'} disabled={!!solo} aria-busy={probar.isPending || undefined}
-              onClick={() => probar.mutate(c.id, { onSuccess: setPrueba })}>
+              onClick={() => probar.mutate(c.id, { onSuccess: (r) => {
+                setPrueba(r);
+                setReaccion({ dicho: dichoDeChecks(r.checks) });
+              } })}>
               {probar.isPending ? <Spinner /> : <RotateCw />}{c.status === 'error' ? 'Probar de nuevo' : 'Probar conexión'}
             </Button>
           </span>

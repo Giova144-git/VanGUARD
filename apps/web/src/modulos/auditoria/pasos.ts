@@ -1,7 +1,8 @@
 // La lista de pasos y su estado los da el servidor (ScanRun.steps[], E12); aquí solo textos y traducción (S14 §14.14).
 // api() en producción deja pasar un cuerpo fuera de contrato: todo mapa se lee con deMapa, así un paso, un estado o un
 // «__proto__» desconocidos caen a un respaldo neutro (L3) en vez de lanzar TypeError y tumbar la auditoría.
-import type { Module, ScanRepo, ScanRun, ScanStep } from '@vanguard/contracts';
+import type { AuditDelta, Module, ScanRepo, ScanRun, ScanStep } from '@vanguard/contracts';
+import type { FaseEspera } from '@/componentes/vigia/useEspera';
 import { sinBidi } from '@/lib/bidi';
 import { textoErrorZip } from '@/lib/errores-escaneo';
 import { deMapa, type Rol } from '@/lib/severidad';
@@ -98,4 +99,22 @@ export function lineaRepo(r: Pick<ScanRepo, 'status' | 'findings' | 'error_code'
   if (r.status === 'running') return { estado: 'Revisando…', motivo: '', hallazgos: null };
   // pending al terminar la auditoría: el mensaje de ese repo no llegó (DLQ) y se quedó sin revisar (§2.3).
   return { estado: r.status === 'pending' ? (enCurso ? 'Pendiente' : 'Sin revisar') : '—', motivo: '', hallazgos: null };
+}
+
+// ¿Trajo críticos nuevos frente a la auditoría anterior? Solo con foto y con anterior (E51); un conteo raro cuenta 0.
+export function hayCriticosNuevos(d: AuditDelta | undefined): boolean {
+  if (!d?.available || d.first || !d.counts?.new || typeof d.counts.new !== 'object') return false;
+  return Object.values(d.counts.new).some((m) => typeof m?.critical === 'number' && m.critical > 0);
+}
+
+// Lo que Vigía comenta mientras corre (useEspera): los pasos en curso y, al cerrar, el final. Una auditoría terminada
+// espera a su delta (E51) para saber si hay críticos nuevos: mientras se pide, la espera sigue.
+export function faseEspera(run: Pick<ScanRun, 'status' | 'kind'> | undefined, delta: { cargando: boolean; datos?: AuditDelta }): FaseEspera {
+  if (!run) return 'inactiva';
+  if (run.status === 'queued' || run.status === 'running') return 'esperando';
+  if (run.status === 'failed') return 'fallo';
+  if (run.status !== 'succeeded') return 'inactiva';
+  if (esMedicion(run.kind)) return 'bien';
+  if (delta.cargando) return 'esperando';
+  return hayCriticosNuevos(delta.datos) ? 'alerta' : 'bien';
 }

@@ -217,7 +217,7 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada, blindaje
   const soloLectura = !puedeEscribir ? <span className="text-[12.5px] text-texto-3">{SOLO_LECTURA}</span> : null;
   // Región siempre montada: las ramas se montan ya con su texto y así el lector sí anuncia el resultado.
   const marco = (hijo: ReactNode) => (
-    <div ref={raiz} role="group" aria-label="Modo bajo ataque">
+    <div ref={raiz} role="group" aria-label="Modo bajo ataque" data-info="bajo-ataque">
       <p className="sr-only" role="status">{estado}</p>
       {hijo}
     </div>

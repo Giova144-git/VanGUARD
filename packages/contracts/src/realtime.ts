@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { Id } from './comun.ts';
 
-export const RealtimeChange = z.object({ table: z.enum(['scan_runs', 'findings', 'incidents', 'notifications']),
+export const RealtimeChange = z.object({ table: z.enum(['scan_runs', 'findings', 'incidents', 'notifications', 'fix_requests']),
   operation: z.enum(['INSERT', 'UPDATE', 'DELETE']),
   record: z.looseObject({ id: Id, org_id: Id }).nullable(), old_record: z.looseObject({ id: Id }).nullable() });
 export type RealtimeChange = z.infer<typeof RealtimeChange>;

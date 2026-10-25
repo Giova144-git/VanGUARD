@@ -14,6 +14,7 @@ const rutas: RouteObject[] = [
   { path: '/', element: <Inicio />, errorElement: <ErrorRuta /> },
   { path: '/login', lazy: pagina(() => import('./paginas/Login')), errorElement: <ErrorRuta /> },
   { path: '/demo', lazy: pagina(() => import('./paginas/Demo')), errorElement: <ErrorRuta /> },
+  { path: '/vigia', lazy: pagina(() => import('./paginas/VigiaGaleria')), errorElement: <ErrorRuta /> },
   {
     lazy: pagina(() => import('./paginas/ConSesion')), errorElement: <ErrorRuta />,
     children: [

@@ -9,12 +9,12 @@ import { cn } from '@/lib/utils';
 // Identidad (brand/README.md): etiqueta en Geist Mono mayúsculas con espaciado; 12,5 px como mínimo (F-15, proyector).
 // Los controles bidi del texto se ven aquí dentro (lib/bidi.ts): chips y chapas del servidor pasan por esta chapa.
 // `ltr`: un nombre técnico al final del texto (la rama de «✗ Ya está en {rama}»): en <bdi dir="ltr">, sin mayúsculas y
-// partiendo donde haga falta, como ChipRepo.
-export function Etiqueta({ texto, rol = 'neutra', icono: Icono, grande, className, ltr }:
-  { texto: string; rol?: Rol; icono?: LucideIcon; mono?: boolean /* ya siempre mono; se acepta por compatibilidad */; grande?: boolean; className?: string; ltr?: string }) {
+// partiendo donde haga falta, como ChipRepo. `data-info`: lo que Vigía explica con clic derecho → «Info» (vigia/info.ts).
+export function Etiqueta({ texto, rol = 'neutra', icono: Icono, grande, className, ltr, 'data-info': info }:
+  { texto: string; rol?: Rol; icono?: LucideIcon; mono?: boolean /* ya siempre mono; se acepta por compatibilidad */; grande?: boolean; className?: string; ltr?: string; 'data-info'?: string }) {
   return (
     <span className={cn('inline-flex shrink-0 items-center rounded-lg border font-mono font-medium uppercase tracking-[0.08em]', grande ? 'h-8 gap-1.5 px-3 text-sm' : 'h-6 gap-1 px-2 text-[12.5px]',
-      deMapa(TINTE, rol, TINTE.neutra), className)}>
+      deMapa(TINTE, rol, TINTE.neutra), className)} data-info={info}>
       {Icono ? <Icono className={grande ? 'size-4' : 'size-3.5'} /> : null}
       {typeof ltr === 'string'
         ? <span>{sinBidi(texto)} <bdi dir="ltr" className="normal-case break-all">{sinBidi(ltr)}</bdi></span>
@@ -26,5 +26,5 @@ export function Etiqueta({ texto, rol = 'neutra', icono: Icono, grande, classNam
 // Una severidad fuera de contrato sale «—», neutra y sin icono (L3).
 export function ChapaSeveridad({ severity, grande }: { severity: Severity; grande?: boolean }) {
   const s = severidad(severity);
-  return <Etiqueta texto={s.etiqueta} rol={s.rol} icono={s.icono} grande={grande} className={s.fuerte ? 'font-semibold' : undefined} />;
+  return <Etiqueta texto={s.etiqueta} rol={s.rol} icono={s.icono} grande={grande} className={s.fuerte ? 'font-semibold' : undefined} data-info="severidad" />;
 }

@@ -9,6 +9,7 @@ import { Cifra, FilaCifras } from '@/componentes/vg/Cifra';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { SectorPlegable } from '@/componentes/vg/SectorPlegable';
 import { useOrg } from '@/app/guardas';
+import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
 import { sinBidi } from '@/lib/bidi';
 import { useDeltaAuditoria } from '@/lib/consultas';
 import {
@@ -50,7 +51,7 @@ function Bloque({ children }: { children: ReactNode }) {
 function Fila({ item, lista }: { item: DeltaItem; lista: ListaDelta }) {
   const chip = etiquetaCorregido(item, lista);
   return (
-    <li className="flex flex-wrap items-center gap-3 border-b py-3 last:border-b-0">
+    <li className="flex flex-wrap items-center gap-3 border-b py-3 last:border-b-0" {...marcaHallazgo({ ...item, id: item.finding_id })}>
       <ChapaSeveridad severity={item.severity} />
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Título y recurso del cliente, como «Hallazgos abiertos»: los controles bidi se ven (lib/bidi.ts). */}

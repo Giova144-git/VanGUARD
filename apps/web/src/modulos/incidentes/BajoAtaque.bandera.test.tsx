@@ -161,10 +161,10 @@ describe('BajoAtaque · ttl_s fuera de contrato en E55', () => {
     const qc = nuevaCache();
     tarjeta(qc, INUNDACION);
     await leer(qc, () => Promise.resolve(SIN_PERMISO));
-    expect(tarjeta(qc, INUNDACION)).toContain('pasa un desafío de Cloudflare durante 1 h.');
+    expect(tarjeta(qc, INUNDACION)).toContain('pasará un desafío de Cloudflare durante 1 h.');
     await leer(qc, () => Promise.resolve({ ...SIN_PERMISO, ttl_s }));
     const html = tarjeta(qc, INUNDACION);
-    expect(html).toContain('pasa un desafío de Cloudflare durante 1 h.');
+    expect(html).toContain('pasará un desafío de Cloudflare durante 1 h.');
     expect(html).not.toMatch(/NaN|durante 1 min|durante 0 min|durante 2 h/);
   });
 });

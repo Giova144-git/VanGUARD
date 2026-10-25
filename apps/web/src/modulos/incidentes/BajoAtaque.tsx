@@ -60,7 +60,7 @@ export function plazo(s: number) {
 }
 // Qué hace la regla, dicho igual en la nota del botón y en la vista previa (con el host ya en <bdi>).
 const ipsALaVez = (n: number) => `Llega tráfico de ${n} IPs a la vez: bloquearlas una a una no basta.`;
-const desafio = (h: ReactNode, ttl_s: number) => <>Cada visitante de {h} pasa un desafío de Cloudflare durante {plazo(ttl_s)}.</>;
+const desafio = (h: ReactNode, ttl_s: number) => <>Cada visitante de {h} pasará un desafío de Cloudflare durante {plazo(ttl_s)}.</>;
 const SOLO_ESE_HOST = 'Solo ese host: el resto de tu zona de Cloudflare sigue igual.';
 // Qué falta para activarlo desde aquí. Owner y admin lo leen con el enlace a Conexiones y «Copiar pasos»; el viewer y el
 // anónimo de la demo, el mismo dato en neutro y sin controles (como «añade uno en Ajustes» en la revisión de código).

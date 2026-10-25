@@ -207,7 +207,7 @@ describe('BajoAtaque · vista previa de la propuesta sin token o sin permiso', (
     const html = tarjeta(ADMIN, o);
     expect(html).toContain('Modo bajo ataque · vista previa');
     expect(html).toContain(`<div class="${MARCO_PROPUESTA}">`);                    // el marco de <Propuesta/>
-    expect(html).toContain(`<p class="text-[15px] font-semibold text-mal">Cada visitante de ${HOST_BDI} pasa un desafío de Cloudflare durante 30 min.</p>`);
+    expect(html).toContain(`<p class="text-[15px] font-semibold text-mal">Cada visitante de ${HOST_BDI} pasará un desafío de Cloudflare durante 30 min.</p>`);
     expect(html).toContain('Llega tráfico de 2 IPs a la vez: bloquearlas una a una no basta.');
     expect(html).toContain('Solo ese host: el resto de tu zona de Cloudflare sigue igual.');
     expect(html).toContain(falta);
@@ -245,7 +245,7 @@ describe('BajoAtaque · vista previa de la propuesta sin token o sin permiso', (
   it('la duración sale de ttl_s (minutos u horas), nunca un «30 min» fijo', () => {
     expect([300, 900, 1800, 2700, 3600, 5400, 7200].map(plazo)).toEqual(['5 min', '15 min', '30 min', '45 min', '1 h', '1 h 30 min', '2 h']);
     const hora = tarjeta(ADMIN, { ...SIN_PERMISO, ttl_s: 3600 });
-    expect(hora).toContain('pasa un desafío de Cloudflare durante 1 h.');
+    expect(hora).toContain('pasará un desafío de Cloudflare durante 1 h.');
     expect(hora).not.toContain('30 min');
     const cuarto = tarjeta(ADMIN, { ...SIN_CONEXION, ttl_s: 900 });
     expect(cuarto).toContain('durante 15 min.');
@@ -258,7 +258,7 @@ describe('BajoAtaque · vista previa de la propuesta sin token o sin permiso', (
   it.each([['sin_conexion', SIN_CONEXION], ['sin_permiso', SIN_PERMISO]] as const)('%s: el viewer y el anónimo de la demo ven la vista previa sin controles', (m, o) => {
     const html = tarjeta(VIEWER, o);
     expect(html).toContain('Modo bajo ataque · vista previa');
-    expect(html).toContain(`Cada visitante de ${HOST_BDI} pasa un desafío de Cloudflare durante 30 min.`);
+    expect(html).toContain(`Cada visitante de ${HOST_BDI} pasará un desafío de Cloudflare durante 30 min.`);
     expect(html).toContain('Llega tráfico de 2 IPs a la vez');
     expect(html).toContain(LECTURA[m]);
     for (const no of ['<button', '<a ', 'href=', 'Copiar pasos', 'Para activarlo desde aquí', '<form', '<input']) expect(html).not.toContain(no);

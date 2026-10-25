@@ -455,6 +455,17 @@ describe('E7, E9 y E10', () => {
     expect(c?.last_checked_at).toBe('2026-10-24T14:00:00.123Z');
   });
 
+  it('E7 no enseña la conexión del simulador de ataques (meta.simulador, E57)', async () => {
+    tabla = (op) => (op.table === 'connections' && eqDe(op, 'org_id') === ORG
+      ? { data: [fila({}), fila({ id: '27ace5b4-b217-4006-adc3-a305655c0c76', provider: 'ingest', status: 'revoked',
+        label: 'vanguard-demo-victima.pages.dev', meta: { simulador: true, purpose: 'simulador_e57' } })] } : undefined);
+    const r = await app.request(`https://officialvanguard.com/api/orgs/${ORG}/connections`,
+      { headers: { authorization: 'Bearer ana' } }, envDoble().env);
+    const xs = ConnectionPublic.array().parse(await r.json());
+    expect(xs).toHaveLength(1);
+    expect(xs[0]!.provider).not.toBe('ingest');
+  });
+
   it('E9: un 401 del proveedor deja la conexión revoked', async () => {
     tabla = (op) => (op.table === 'connections' && op.action === 'select' ? { data: fila() } : undefined);
     cred.withSecret.mockImplementation(async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn(PAT_SB));

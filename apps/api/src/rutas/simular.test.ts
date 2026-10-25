@@ -151,14 +151,14 @@ describe('E57 · «Simular ataque» por el motor real', () => {
     expect((await simular(ORG_DEMO, { body: { kind: 'ddos' } })).status).toBe(422);
   });
 
-  it('sin la conexión del simulador → 409 sin escribir; motor ocupado (vg_try_eval null) → 409', async () => {
+  it('sin la conexión del simulador → 409 sin escribir; motor ocupado (vg_try_eval null) → 429', async () => {
     conexion = null;
     expect((await simular(ORG_DEMO)).status).toBe(409);
     expect(hits).toEqual([]);
     conexion = { id: CONN, org_id: ORG_DEMO, label: HOST_SIMULADO, meta: { simulador: true } };
     tryEval = null;
     const r = await simular(ORG_DEMO);
-    expect(r.status).toBe(409);
+    expect(r.status).toBe(429);
     expect(upserts()).toEqual([]);
   });
 });

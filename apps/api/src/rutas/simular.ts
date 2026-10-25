@@ -69,7 +69,9 @@ simular.post('/orgs/:org/incidents/simulate', requireAdmin, async (c) => {
   }
 
   const ev = await evaluarAhora(c.env, { orgId, connectionId: cx.id, rid, marcas: { simulated: true } });
-  if (!ev) throw new ApiError('conflict', 'El motor está evaluando otro lote: inténtalo en unos segundos');
+  // vg_try_eval: otra evaluación de la org hace < 5 s (o el motor falló). Los eventos ya están en edge_hits: el
+  // siguiente intento los ve, pero E57 no se queda esperando.
+  if (!ev) throw new ApiError('rate_limited', 'El motor está evaluando otro lote: inténtalo en unos segundos');
   const inc = ev.registrados.find((x) => x.ip === ip);
   if (!inc) {
     log('warn', 'simular.sin_regla', { rid, kind, filas: filas.length });

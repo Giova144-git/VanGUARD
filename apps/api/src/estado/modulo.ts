@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { db } from '../lib/db.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
+import { esConexionSimulador } from '../lib/simulador.ts';
 
 // E6 · EstadoModulo (R08 §6, nombres en español a propósito). El BACK decide grupos, roles y verbos; rol 'mal' solo si
 // hay acción posible; un chequeo que no corrió va con comprobado:false y n:null (nunca verde sin mirar). Error de base o
@@ -195,7 +196,7 @@ async function estadoProveedor(env: CloudflareBindings, orgId: string, m: Provee
     return fallo('sin_conexion', hora, cifrasBase, CHECKS[m], m, fs.error ? null : ((fs.data ?? []) as FilaFinding[]));
   }
   const hallazgos = (fs.data ?? []) as FilaFinding[];
-  const conns = (cx.data ?? []) as Conexion[];
+  const conns = ((cx.data ?? []) as Conexion[]).filter((x) => !esConexionSimulador(x));
   const propias = conns.filter((c) => c.provider === PROVEEDOR[m] && c.kind === 'read');
   if (!propias.some((c) => c.status === 'active')) {
     const mala = propias[0];

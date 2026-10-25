@@ -13,6 +13,7 @@ import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
+import { esConexionSimulador } from '../lib/simulador.ts';
 import { esHostProduccion } from '../mw/prod-host.ts';
 import { probarCloudflareAcciones, probarCloudflareLectura } from '../scans/cloudflare.ts';
 import { mismoRepoGh } from '../revision/acciones-pr.ts';
@@ -105,7 +106,7 @@ connections.get('/orgs/:org/connections', async (c) => {
     log('error', 'connections.lista_error', { rid: c.get('rid'), code: error.code });
     throw new ApiError('internal', 'No pudimos leer tus conexiones');
   }
-  return c.json(((data ?? []) as unknown as Fila[]).map(aPublica));
+  return c.json(((data ?? []) as unknown as Fila[]).filter((f) => !esConexionSimulador(f)).map(aPublica));
 });
 
 // E8 · POST /api/orgs/:org/connections · admin · P0

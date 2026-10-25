@@ -29,8 +29,11 @@ import { supabase } from '@/lib/supabase';
 import { aplicarPresentacion, aplicarTema, leerPresentacion, leerTema, type Tema } from '@/lib/tema';
 import { cn } from '@/lib/utils';
 
-// La llamada llega después de WhatsApp (A8, P1): mientras no exista, «Probar llamada» va deshabilitado con su motivo.
+// La llamada de Guardia solo suena en un ataque crítico (llamada-ataque.md): «Probar llamada» sigue deshabilitado y remite
+// a «Simular ataque», que la prueba de verdad con el despachador de siempre.
 const LLAMADA_LISTA = false;
+const PROBAR_LLAMADA = 'La llamada solo suena en un ataque crítico: pruébala con «Simular ataque» en Incidentes';
+const LLAMARME = 'Llamarme por WhatsApp si hay un ataque crítico';
 const NIVEL_IA: Record<AiUsage['level'], string> = { normal: 'normal', reduced: 'síntesis con Sonnet', minimal: 'solo Haiku', off: 'apagada' };
 
 
@@ -140,7 +143,7 @@ function Contactos({ org }: { org: string }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start gap-3">
         <ProbarCanal org={org} canal="whatsapp" />
-        <ProbarCanal org={org} canal="voice" deshabilitado={LLAMADA_LISTA ? undefined : 'La llamada llega después de WhatsApp'} />
+        <ProbarCanal org={org} canal="voice" deshabilitado={LLAMADA_LISTA ? undefined : PROBAR_LLAMADA} />
       </div>
       <p className="text-sm text-muted-foreground">«Probar» envía al contacto con más prioridad que tenga ese canal activo.</p>
       {SANDBOX_KAPSO ? <p className="rounded-lg border bg-info-relleno px-3 py-2 text-sm">{SANDBOX_KAPSO}</p> : null}
@@ -162,12 +165,16 @@ function Contactos({ org }: { org: string }) {
               <Button variant="fantasma" size="icono" disabled={i === filas.length - 1} onClick={() => mover(i, 1)} aria-label="Bajar prioridad"><ArrowDown /></Button>
               <Button variant="fantasma" size="icono" onClick={() => { setFilas(filas.filter((x) => x.clave !== f.clave)); setGuardado(null); }} aria-label="Quitar contacto"><Trash2 /></Button>
             </div>
-            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto] md:items-center">
+            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-center">
               <Input value={f.name} maxLength={60} placeholder="Nombre" aria-label="Nombre" onChange={(e) => cambiar(f.clave, { name: e.target.value })} />
               <Input value={f.phone} inputMode="tel" placeholder="+58 412 123 4567" aria-label="Teléfono" className="font-mono" autoComplete="off"
                 onChange={(e) => cambiar(f.clave, { phone: e.target.value })} aria-invalid={!!errores[f.clave] || undefined} />
               <label className="flex items-center gap-2 text-sm"><Interruptor activo={f.whatsapp} onCambio={(v) => cambiar(f.clave, { whatsapp: v })} etiqueta="WhatsApp" />WhatsApp</label>
-              <label className="flex items-center gap-2 text-sm"><Interruptor activo={f.voice} onCambio={(v) => cambiar(f.clave, { voice: v })} etiqueta="Llamada" />Llamada</label>
+            </div>
+            {/* contacts.voice (E26): el despachador solo llama a contactos verificados con la llamada activada. */}
+            <div className="flex flex-col gap-1">
+              <label className="flex items-center gap-2 text-sm"><Interruptor activo={f.voice} onCambio={(v) => cambiar(f.clave, { voice: v })} etiqueta={LLAMARME} />{LLAMARME}</label>
+              <span className="text-[12.5px] text-muted-foreground">La primera vez, WhatsApp te pide permitir llamadas de VanGUARD.</span>
             </div>
             {errores[f.clave] ? <p role="alert" className="text-sm text-mal">{errores[f.clave]}</p> : null}
             {s && sinCambios && !verificado ? (

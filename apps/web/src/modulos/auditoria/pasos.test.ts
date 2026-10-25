@@ -72,4 +72,12 @@ describe('estadoPaso', () => {
     expect(textoFallo(null)).toBe('La auditoría falló');
     expect(textoFallo('')).toBe('La auditoría falló');
   });
+  it('una medición (kind lighthouse, «Medir ahora»): su paso actual y su fallo en español', () => {
+    expect(textoPasoActual('psi-mobile')).toBe('midiendo móvil (3 repeticiones)… ~1 min');
+    expect(textoPasoActual('psi-desktop')).toBe('midiendo escritorio (3 repeticiones)… ~1 min');
+    expect(textoPasoActual('perf-compare')).toBe('comparando con la medición anterior');
+    expect(textoPasoActual('psi')).toBe('Rendimiento');
+    expect(textoFallo(null, 'lighthouse')).toBe('La medición falló');
+    expect(textoFallo(null, 'full_audit')).toBe('La auditoría falló');
+  });
 });

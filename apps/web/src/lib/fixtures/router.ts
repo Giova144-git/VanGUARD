@@ -2,7 +2,7 @@
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
   fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
-  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
+  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type PerfRunExt,
   type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
   type WikiRun, type ZipFinding,
 } from '@vanguard/contracts';
@@ -209,6 +209,7 @@ const PROVEEDOR_PASO: Partial<Record<ScanRun['steps'][number]['name'], Connectio
 };
 function iniciarScan(org: string, body: unknown) {
   if ((body as { kind?: unknown } | null)?.kind === 'zip') return iniciarZip(org, body);
+  if ((body as { kind?: unknown } | null)?.kind === 'lighthouse') return iniciarMedicion(org, body);
   const id = crypto.randomUUID();
   scans.set(id, { org, inicio: Date.now() });
   return { scan_run_id: id };
@@ -216,6 +217,8 @@ function iniciarScan(org: string, body: unknown) {
 function verScan(org: string, id: string): ScanRun {
   const zip = zips.get(id);
   if (zip?.org === org) return verZip(id, zip);
+  const med = mediciones.get(id);
+  if (med?.org === org) return verMedicion(med.id, med);
   const corrida = scans.get(id);
   if (corrida?.org !== org) {
     if (!corrida && !vacia(org) && id === fx.scanDone.id) return fx.scanDone as ScanRun;   // scanRunning lleva el mismo id
@@ -281,7 +284,7 @@ function recibirZip(org: string, id: string, body: unknown) {
   exigirAdmin();
   const c = zips.get(id);
   if (c?.org !== org) {
-    const deEstaOrg = scans.get(id)?.org === org || (!scans.has(id) && !vacia(org) && id === fx.scanDone.id);
+    const deEstaOrg = scans.get(id)?.org === org || mediciones.get(id)?.org === org || (!scans.has(id) && !vacia(org) && id === fx.scanDone.id);
     return deEstaOrg ? falla(409, 'conflict', 'Esta auditoría no es de un ZIP') : falla(404, 'not_found', 'Esa auditoría no existe');
   }
   if (c.empezo !== null || c.fallo !== null || c.requested_by !== me().user.id || Date.now() - c.creado > EN_CURSO_MS)
@@ -334,6 +337,74 @@ function volcarZip(id: string, c: CorridaZip) {
       origin: 'rule', has_fix_prompt: false, fix_model: null, status: 'open', status_reason: null, suspected_injection: false,
       connection_id: null, first_seen_at: en, verified_at: null });
   }
+}
+
+// ── «Medir ahora» (E11 con kind 'lighthouse', F-17) ──────────────────────────────────────────────────────────
+// Producción aún responde 422 not_available; aquí se simula la medición de S10 §10.4 para ver el flujo entero: solo admin,
+// URL https de una zona de Cloudflare activa de la org (422 si no), 409 con scan_run_id si hay otra en curso, tope diario
+// (10; la demo 20) y 8 s de PSI: step psi-<estrategia> → perf-compare → fin. Al terminar, 3 repeticiones nuevas (un
+// run_group) en perf/runs con las cifras de la última medición de esa URL y estrategia, o unas por defecto.
+type CorridaPerf = { id: string; org: string; inicio: number; url: string; strategy: 'mobile' | 'desktop'; version_label: string | null; volcada: boolean };
+const mediciones = new Map<string, CorridaPerf>();
+const perfNuevas = new Map<string, PerfRunExt[]>();             // org → repeticiones medidas en esta pestaña (más nuevas primero)
+const perfHoy = new Map<string, number>();                     // `${org}|${día en Caracas}` → mediciones creadas
+const DURACION_PERF = 8_000;
+const zonasDe = (org: string) => [...new Set(listaDe(org)
+  .filter((c) => c.provider === 'cloudflare' && c.status === 'active' && typeof c.meta.zone_name === 'string')
+  .map((c) => String(c.meta.zone_name).toLowerCase()))];
+const perfDe = (org: string) => [...(perfNuevas.get(org) ?? []), ...(vacia(org) ? [] : fx.perfRuns as PerfRunExt[])];
+
+function iniciarMedicion(org: string, body: unknown) {
+  exigirAdmin();
+  const r = ScanCreate.safeParse(body);
+  if (!r.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(r.error));
+  const b = r.data as Extract<ScanCreate, { kind: 'lighthouse' }>;
+  const enCurso = [...mediciones.values()].find((m) => m.org === org && Date.now() - m.inicio < DURACION_PERF);
+  if (enCurso) falla(409, 'conflict', 'Ya hay una auditoría de este tipo en curso', { scan_run_id: enCurso.id });
+  // assertMeasurableUrl de S10 §10.9: el PerfUrlError sale como 422 invalid_body con su mensaje.
+  const zonas = zonasDe(org);
+  const u = new URL(b.url);
+  const host = u.hostname.toLowerCase().replace(/\.$/, '');
+  if (!zonas.length) falla(422, 'invalid_body', 'Para medir necesitamos saber que el dominio es tuyo: conecta tu zona de Cloudflare');
+  if (u.username || u.password || (u.port && u.port !== '443')) falla(422, 'invalid_body', 'Sin credenciales ni puertos');
+  if (!zonas.some((z) => host === z || host.endsWith(`.${z}`))) falla(422, 'invalid_body', `Solo dominios de tus zonas: ${zonas.join(', ')}`);
+  const clave = `${org}|${diaCaracas()}`;
+  const tope = esDemo(org) ? 20 : 10;
+  if ((perfHoy.get(clave) ?? 0) >= tope) falla(429, 'budget_exceeded', `Ya hiciste ${tope} mediciones hoy. Vuelve mañana.`);
+  perfHoy.set(clave, (perfHoy.get(clave) ?? 0) + 1);
+  const id = crypto.randomUUID();
+  mediciones.set(id, { id, org, inicio: Date.now(), url: `${u.origin}${u.pathname || '/'}`, strategy: b.strategy,
+    version_label: b.version_label ?? null, volcada: false });
+  return { scan_run_id: id };
+}
+
+function verMedicion(id: string, m: CorridaPerf): ScanRun {
+  volcarMedicion(m);
+  const t = Math.min(1, (Date.now() - m.inicio) / DURACION_PERF);
+  const hecho = t >= 1;
+  const fecha = (ms: number) => new Date(ms).toISOString();
+  return {
+    id, kind: 'lighthouse', status: hecho ? 'succeeded' : 'running', progress: Math.round(t * 100),
+    step: hecho ? null : t < 0.75 ? `psi-${m.strategy}` : t < 0.95 ? 'perf-compare' : 'fin',
+    steps: [{ name: 'psi', status: hecho ? 'done' : 'running' }], score: null, coverage: null, summary: null, error: null,
+    created_at: fecha(m.inicio), started_at: fecha(m.inicio), finished_at: hecho ? fecha(m.inicio + DURACION_PERF) : null,
+  };
+}
+
+function volcarMedicion(m: CorridaPerf) {
+  if (m.volcada || Date.now() - m.inicio < DURACION_PERF) return;
+  m.volcada = true;
+  const previa = perfDe(m.org).find((r) => r.url === m.url && r.strategy === m.strategy);
+  const base = previa ?? { scores: { performance: 0.9 }, metrics: { lcp_ms: 1800, tbt_ms: 120, cls: 0.02, fcp_ms: 900, si_ms: 1500, ttfb_ms: 130 } };
+  const run_group = crypto.randomUUID();
+  const reps = [0.98, 1, 1.03].map((f, i): PerfRunExt => ({
+    id: crypto.randomUUID(), url: m.url, strategy: m.strategy, source: 'psi', lighthouse_version: '13.5.0',
+    run_group, rep: i + 1, is_representative: i === 1, trigger: 'manual', version_label: m.version_label, runtime_error: null,
+    scores: { ...base.scores, performance: Math.min(1, Math.round((base.scores.performance ?? 0.9) / f * 100) / 100) },
+    metrics: Object.fromEntries(Object.entries(base.metrics).map(([k, v]) => [k, v == null ? null : Math.round(v * f * 1000) / 1000])) as PerfRunExt['metrics'],
+    created_at: new Date(m.inicio + 2_000 * (i + 1)).toISOString(),
+  }));
+  perfNuevas.set(m.org, [...reps.reverse(), ...(perfNuevas.get(m.org) ?? [])]);
 }
 
 // ── Incidentes (S14 §14.19) ──────────────────────────────────────────────────────────────────────────────────
@@ -737,7 +808,7 @@ const rutas: [string, RegExp, H][] = [
   ['PUT',  r(`${ORG}\\/alert-prefs`),             (m, b) => guardarPrefs(m[1]!, b)],
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],
   ['GET',  r(`${ORG}\\/ai\\/usage`),              (m) => usoIa(m[1]!)],
-  ['GET',  r(`${ORG}\\/perf\\/runs`),             (m) => (vacia(m[1]!) ? [] : fx.perfRuns)],
+  ['GET',  r(`${ORG}\\/perf\\/runs`),             (m, _b, q) => perfDe(m[1]!).slice(0, Math.min(30, Number(q.get('limit')) || 30))],
   ['GET',  r(`${ORG}\\/mcp-tokens`),              (m) => structuredClone(tokensMcpDe(m[1]!))],
   ['POST', r(`${ORG}\\/mcp-tokens`),              (m, b) => crearTokenMcp(m[1]!, b)],
   ['DELETE', r(`${ORG}\\/mcp-tokens\\/([^/]+)`), (m) => revocarTokenMcp(m[1]!, m[2]!)],

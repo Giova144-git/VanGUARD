@@ -1,5 +1,6 @@
 // /o/:orgId/performance (S14 §14.13). P0: PantallaModulo con la última medición sembrada. P0-lite (RND-15a): histórico de
-// solo lectura sobre E24, con medianas por medición; sin «Medir ahora». Con menos de 2 mediciones no se pinta.
+// solo lectura sobre E24, con medianas por medición; con menos de 2 mediciones no se pinta. F-17: «Medir ahora» arriba
+// (MedirAhora.tsx), que lanza E11 con kind 'lighthouse' y lleva a la auditoría.
 import { useMemo, useState } from 'react';
 import { PantallaModulo } from '@/componentes/vg/PantallaModulo';
 import { GraficaComparativa } from '@/componentes/vg/GraficaComparativa';
@@ -11,21 +12,11 @@ import { esApiError } from '@/lib/errores';
 import { cuando, decimal, duracion } from '@/lib/formato';
 import { agrupar, empeora, mismaSerie, type Estrategia, type Medicion, type Metrica } from '@/lib/perf';
 import { cn } from '@/lib/utils';
+import { Grupo } from './Grupo';
+import { MedirAhora } from './MedirAhora';
 
 const METRICAS: [Metrica, string][] = [['perf_score', 'Puntaje'], ['lcp_ms', 'LCP'], ['tbt_ms', 'TBT'], ['cls', 'CLS']];
 const formato = (m: Metrica, v: number | null) => v == null ? '—' : m === 'cls' ? decimal(v, 2) : m === 'perf_score' ? String(v) : duracion(v);
-
-// El texto de cada botón va en <bdi dir="ltr">: en el grupo «URL» es la URL del servidor (ya con sinBidi).
-function Grupo<T extends string>({ valor, opciones, onCambio, etiqueta }: { valor: T; opciones: [T, string][]; onCambio: (v: T) => void; etiqueta: string }) {
-  return (
-    <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label={etiqueta}>
-      {opciones.map(([v, t]) => (
-        <button key={v} type="button" aria-pressed={valor === v} onClick={() => onCambio(v)}
-          className={cn('h-11 rounded-md px-3 text-sm font-medium', valor === v ? 'bg-card text-foreground' : 'text-muted-foreground')}><bdi dir="ltr">{t}</bdi></button>
-      ))}
-    </div>
-  );
-}
 
 function Delta({ m, antes, ahora }: { m: Metrica; antes: Medicion | undefined; ahora: Medicion }) {
   if (!antes || antes[m] == null || ahora[m] == null) return <span className="text-texto-3">—</span>;
@@ -114,7 +105,7 @@ function Historico() {
 
 export default function PaginaRendimiento() {
   return (
-    <PantallaModulo modulo="performance" proveedor={null}>
+    <PantallaModulo modulo="performance" proveedor={null} arriba={<MedirAhora />}>
       <Historico />
     </PantallaModulo>
   );

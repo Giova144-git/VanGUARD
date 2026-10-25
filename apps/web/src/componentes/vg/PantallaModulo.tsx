@@ -33,7 +33,10 @@ const NOMBRE_PROV: Record<Exclude<Provider, 'ingest'>, string> = { supabase: 'Su
 const HUECOS: Record<Module, number> = { supabase: 2, cloudflare: 2, codebase: 2, performance: 6 };
 
 // `proveedor = null` (Rendimiento, S14 §14.13): sin conexión propia; «Sin datos» = ninguna cifra con n → «Aún no medimos tu web».
-export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; children?: ReactNode }) {
+// `arriba`: la acción propia del módulo justo bajo la barra («Medir ahora» de Rendimiento); también con «Aún no medimos».
+export function PantallaModulo({ modulo, proveedor, arriba, children }: {
+  modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; arriba?: ReactNode; children?: ReactNode;
+}) {
   const org = useOrg();
   const navegar = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -69,6 +72,7 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
   if (!proveedor && est && est.cifras.every((x) => x.n == null)) return (
     <div className="flex flex-col gap-6">
       {barra}
+      {arriba}
       <Vacio icono={Gauge} titulo="Aún no medimos tu web" texto={e.descripcion} />
       <GuiaModulo id={modulo as IdNav} />
     </div>
@@ -87,6 +91,7 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
   return (
     <div className="flex flex-col gap-6">
       {barra}
+      {arriba}
       {q.isError && est ? <p role="status" className="text-sm text-mal">Sin conexión · mostramos los datos de las {cuando(est.hora)}</p> : null}
       <FilaCifras>
         {(est?.cifras ?? Array<null>(HUECOS[modulo]).fill(null)).map((x, i) => x

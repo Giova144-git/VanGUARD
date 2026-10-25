@@ -8,9 +8,12 @@ import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { hashToken, nuevoToken } from '../lib/mcp-token.ts';
 import { requireAdmin } from '../mw/admin.ts';
+import { PARECE_SECRETO } from '../scans/comun.ts';
 
 // E29 · POST, E29b · GET y DELETE /api/orgs/:org/mcp-tokens · admin (S13 §13.7). Nunca se lee ni devuelve token_hash.
 // En P1 todo token lleva los cuatro alcances (solo lectura); el revocado es inmediato porque /mcp consulta la tabla.
+// Cable trampa del name (0014b_mcp_tokens_guardas.sql): nada con forma de secreto ni un vgk_ (quien pega su token como
+// nombre lo dejaría en claro en la lista de E29b). Logs con mcp_id: redact() tacha toda clave con «token».
 export const mcpTokens = new Hono<AppEnv>();
 
 const MAX_VIVOS = 10;
@@ -33,6 +36,10 @@ mcpTokens.get('/orgs/:org/mcp-tokens', requireAdmin, async (c) => {
 
 mcpTokens.post('/orgs/:org/mcp-tokens', requireAdmin, async (c) => {
   const b = await cuerpo(c, McpTokenCreate);
+  if (PARECE_SECRETO.test(b.name) || /vgk_/i.test(b.name)) {
+    throw new ApiError('invalid_body', 'El nombre parece un token o una clave. Usa uno descriptivo, como «Claude Code de Ana».',
+      { field_errors: { name: ['Parece un secreto'] } });
+  }
   const admin = db(c.env);
   const orgId = c.get('orgId');
   const ahora = new Date();
@@ -54,7 +61,7 @@ mcpTokens.post('/orgs/:org/mcp-tokens', requireAdmin, async (c) => {
     log('error', 'mcp_tokens.crear_error', { rid: c.get('rid'), code: error?.code ?? null });
     throw new ApiError('internal', 'No pudimos crear el token');
   }
-  log('info', 'mcp_token.created', { rid: c.get('rid'), user: c.get('userId'), token_id: data.id, dias: b.expires_in_days });
+  log('info', 'mcp_token.created', { rid: c.get('rid'), user: c.get('userId'), mcp_id: data.id, dias: b.expires_in_days });
   return c.json(McpTokenCreated.parse({ ...data, token, expires_at: t(data.expires_at) }), 201);
 });
 
@@ -65,6 +72,6 @@ mcpTokens.delete('/orgs/:org/mcp-tokens/:id', requireAdmin, async (c) => {
     .eq('id', id.data).eq('org_id', c.get('orgId')).is('revoked_at', null).select('id').maybeSingle();
   if (error) throw new ApiError('internal', 'No pudimos revocar el token');
   if (!data) throw new ApiError('not_found', 'Token no encontrado o ya revocado');
-  log('info', 'mcp_token.revoked', { rid: c.get('rid'), user: c.get('userId'), token_id: id.data });
+  log('info', 'mcp_token.revoked', { rid: c.get('rid'), user: c.get('userId'), mcp_id: id.data });
   return c.body(null, 204);
 });

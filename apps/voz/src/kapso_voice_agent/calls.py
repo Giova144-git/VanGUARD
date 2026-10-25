@@ -73,9 +73,11 @@ class CallManager:
         """Stable per-caller key for the booking store; raw phone numbers and BSUIDs are not stored."""
         return hmac.new(self.settings.caller_secret().encode(), identity.encode(), hashlib.sha256).hexdigest()
 
-    def note_attack_call(self, recipient, user_id, context):
-        """An outbound attack call reached this person: a call back within INBOUND_CALLBACK_MINUTES is answered."""
-        for key in {str(recipient or ""), str(user_id or "")} - {""}:
+    def note_attack_call(self, recipient, user_id, context, ticket=None):
+        """An attack involves this person (an outbound attack call reached them, or VanGUARD sent them the
+        «Llamar a Guardia» button): their call within INBOUND_CALLBACK_MINUTES is answered with this context.
+        Keys: phone digits, Meta user ID and the button's ticket (it comes back as cta_payload)."""
+        for key in {str(recipient or ""), str(user_id or ""), "ticket:" + ticket if ticket else ""} - {""}:
             self.attack_calls[key] = (time.monotonic(), context)
             self.attack_calls.move_to_end(key)
         while len(self.attack_calls) > SEEN_LIMIT:
@@ -84,7 +86,8 @@ class CallManager:
     def callback_context(self, call):
         """The context of the attack call this inbound call answers, or None (then it is rejected)."""
         window = self.settings.inbound_callback_minutes * 60
-        for key in (call.get("from_user_id"), call.get("from")):
+        payload = str(call.get("cta_payload") or "")
+        for key in (call.get("from_user_id"), call.get("from"), "ticket:" + payload if payload else None):
             found = self.attack_calls.get(str(key or ""))
             if found and time.monotonic() - found[0] <= window:
                 return found[1]

@@ -51,7 +51,7 @@ class Settings:
     hf_token: str = ""
     # VanGUARD: inbound calls are answered only from someone VanGUARD called about an attack in
     # the last N minutes (a call back); every other inbound call is rejected before any agent starts.
-    inbound_callback_minutes: int = 15
+    inbound_callback_minutes: int = 30
     cal_api_key: str = ""
     # "calcom" (real bookings), "local" (offline development calendar) or "" (none: no calls start).
     calendar: str = ""
@@ -172,7 +172,7 @@ def load_settings(environ=None, env_file=None):
         xai_api_key=get("XAI_API_KEY"),
         gemini_api_key=get("GEMINI_API_KEY"),
         hf_token=get("HF_TOKEN"),
-        inbound_callback_minutes=_int(get("INBOUND_CALLBACK_MINUTES", "15"), "INBOUND_CALLBACK_MINUTES", 0, 240),
+        inbound_callback_minutes=_int(get("INBOUND_CALLBACK_MINUTES", "30"), "INBOUND_CALLBACK_MINUTES", 0, 240),
         cal_api_key=cal_api_key,
         calendar=calendar,
         operator_token=operator_token,

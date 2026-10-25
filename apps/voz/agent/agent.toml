@@ -51,7 +51,7 @@ voice = "Kore"
 
 [greetings]
 # {tipo}, {host}, {ip}, {eventos} y {severidad} llegan con la llamada (outbound.CallContext).
-inbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Te llamé hace un momento por {tipo} contra {host}. ¿Qué quieres saber?"
+inbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Gracias por llamar. Detectamos {tipo} contra {host}. El botón para bloquear la IP está en el WhatsApp. ¿Te explico qué pasa?"
 outbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Detectamos {tipo} contra {host}. Te mandé por WhatsApp el botón para bloquear la IP. ¿Te explico qué pasa?"
 recording_notice = "Esta llamada se graba."
 

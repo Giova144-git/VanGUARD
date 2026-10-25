@@ -36,7 +36,7 @@ from .bridge import ElevenSession, make_connection
 from .calls import CallManager, NotReady
 from .config import load_settings
 from .events import EventLog
-from .outbound import OutboundError
+from .outbound import OutboundError, call_context, normalize_recipient
 from . import turn
 from .private import private_dir, prune_local_artifacts
 from .provider import SetupError, ensure_webhook
@@ -68,6 +68,11 @@ class Recipient(Strict):
 class AttackCall(Recipient):
     """VanGUARD: the outbound call carries the incident's short, already redacted fields."""
     context: dict[str, str] | None = None
+
+
+class AttackExpect(AttackCall):
+    """VanGUARD: an attack for this person; their WhatsApp call (from the «Llamar a Guardia» button) is answered."""
+    ticket: str | None = Field(default=None, min_length=4, max_length=64, pattern=r"^[A-Za-z0-9:_-]+$")
 
 
 def verify_signature(secret, raw, header):
@@ -299,6 +304,17 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
             raise HTTPException(error.status, str(error)) from None
         except Exception as error:
             raise HTTPException(502, f"Permission check failed: {type(error).__name__}") from None
+
+    @api.post("/attack/expect")
+    async def attack_expect(body: AttackExpect):
+        try:
+            recipient = normalize_recipient(body.recipient)
+            context = call_context(body.context)
+        except OutboundError as error:
+            raise HTTPException(error.status, str(error)) from None
+        manager.note_attack_call(recipient, None, context, body.ticket)
+        log.add("attack_expected")
+        return {"expected": True, "minutes": settings.inbound_callback_minutes}
 
     @api.post("/outbound/call")
     async def outbound_call(body: AttackCall):

@@ -8,7 +8,7 @@ saludar ni a presentarte.
 
 Motivo de la llamada: {{call_purpose}}.
 - aviso_de_ataque: llamaste tú porque las reglas de VanGUARD detectaron un ataque.
-- devolucion_de_llamada: la persona te devuelve la llamada por ese mismo ataque.
+- devolucion_de_llamada: la persona te llama desde el botón «Llamar a Guardia» del WhatsApp de ese ataque.
 
 ## Lo que sabes (y es lo único que sabes)
 

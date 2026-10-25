@@ -1,8 +1,9 @@
 // Tarjeta de un proveedor en Conexiones (S14 §14.10): estado, ••••last4, alcances y meta; probar, quitar y reconectar.
-import { Fragment, useState } from 'react';
+// GitHub admite varios repos por org (varias-codebases §6.1): una línea por conexión de lectura, con el repo de título.
+import { Fragment, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { ExternalLink, KeyRound, RotateCw } from 'lucide-react';
-import type { ConnectionPublic, ConnectionTest, Provider, ProviderErrorCode } from '@vanguard/contracts';
+import { MAX_REPOS_GITHUB, type ConnectionPublic, type ConnectionTest, type Provider, type ProviderErrorCode } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
 import { BotonGrande } from '@/componentes/vg/BotonGrande';
@@ -14,6 +15,7 @@ import { sinBidi } from '@/lib/bidi';
 import { mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { GUIAS_CONEXION } from '@/lib/guias';
+import { lecturasGithub, nombreRepo, reposGithub } from '@/lib/repos';
 import { useProbarConexion, useQuitarConexion } from '@/lib/mutaciones';
 import { ActivarBlindaje } from './ActivarBlindaje';
 import { FRASE_ERROR, nombrePermiso } from '@/lib/permisos';
@@ -42,6 +44,14 @@ export function chapaEstado(c: ConnectionPublic): { texto: string; rol: Rol } {
   }
 }
 
+// Chapa de GitHub con varios repos (§6.1 y §6.2): «N repos» en verde, o la del primero que falla (con su «Reconectar»
+// al lado en PantallaModulo). Con uno, la de su conexión, como siempre. `repos` sale de reposGithub (sin repetidos).
+export function chapaGithub(repos: ConnectionPublic[]): { texto: string; rol: Rol } | null {
+  if (repos.length < 2) return repos[0] ? chapaEstado(repos[0]) : null;
+  const peor = repos.find((c) => c.status !== 'active');
+  return peor ? chapaEstado(peor) : { texto: `${repos.length} repos`, rol: 'bien' };
+}
+
 function urlRevocar(u: string | null): string | null {
   if (!u) return null;
   try { const x = new URL(u); return x.protocol === 'https:' && HOSTS_REVOCAR.has(x.host) ? x.href : null; } catch { return null; }
@@ -62,7 +72,7 @@ function AvisoQuitada({ q }: { q: Quitada }) {
 }
 
 // Una línea de conexión: lectura o modo blindaje.
-function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: string; alQuitar: (q: Quitada) => void }) {
+function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: ReactNode; alQuitar: (q: Quitada) => void }) {
   const org = useOrg();
   const navegar = useNavigate();
   const probar = useProbarConexion(org.id);
@@ -100,7 +110,8 @@ function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: 
           </span>
         ) : null}
         {c.status !== 'active' ? (
-          <Button variant="principal" disabled={!!solo} onClick={() => navegar(`/o/${org.id}/connections/${c.provider}`)}><KeyRound />Reconectar</Button>
+          // GitHub: el asistente llega con el repo puesto y E8 reconecta la MISMA conexión (mismo id, hallazgos y revisión).
+          <Button variant="principal" disabled={!!solo} onClick={() => navegar(`/o/${org.id}/connections/${c.provider}${c.provider === 'github' && nombreRepo(c) ? `?repo=${encodeURIComponent(nombreRepo(c))}` : ''}`)}><KeyRound />Reconectar</Button>
         ) : null}
         <ConfirmarEnSitio verbo="Quitar" deshabilitado={solo}
           aviso={c.kind === 'action' ? 'Sin este token no podrás bloquear IPs desde VanGUARD.' : 'Dejamos de mirar este servicio; los hallazgos se conservan.'}
@@ -121,6 +132,10 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
   const lectura = conexiones.find((c) => c.provider === proveedor && c.kind === 'read');
   const accion = conexiones.find((c) => c.provider === proveedor && c.kind === 'action');
   const g = GUIAS_CONEXION[proveedor];
+  // GitHub: todas las conexiones de lectura (también las viejas de «Reconectar», para poder quitarlas); el tope y la
+  // chapa cuentan nombres de repo distintos.
+  const repos = proveedor === 'github' ? reposGithub(conexiones).length : 0;
+  const tope = repos >= MAX_REPOS_GITHUB ? `Tope de ${MAX_REPOS_GITHUB} repos por organización` : undefined;
   return (
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-labelledby={`tarjeta-${proveedor}`}>
       <div className="flex items-center gap-3">
@@ -130,9 +145,24 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
           <p className="text-sm text-muted-foreground">{descripcion}</p>
         </div>
         {lectura ? null : <Etiqueta texto="Falta" />}
+        {repos >= 2 ? <Etiqueta texto={`${repos} repos`} /> : null}
       </div>
       {quitada ? <AvisoQuitada q={quitada} /> : null}
-      {lectura ? <>
+      {lectura && proveedor === 'github' ? <>
+        {lecturasGithub(conexiones).map((c) => (
+          <LineaConexion key={c.id} c={c} alQuitar={setQuitada}
+            titulo={<bdi dir="ltr" className="font-mono break-all">{sinBidi(nombreRepo(c) || c.label)}</bdi>} />
+        ))}
+        <div className="flex flex-col gap-1">
+          <div>
+            <Button variant="secundaria" disabled={!org.puedeEscribir || !!tope} onClick={() => navegar(`/o/${org.id}/connections/github`)}>
+              <KeyRound />Conectar otro repo
+            </Button>
+          </div>
+          {org.puedeEscribir ? (tope ? <span className="text-[12.5px] text-texto-3">{tope}</span> : null)
+            : <span className="text-[12.5px] text-texto-3">{SOLO_LECTURA}</span>}
+        </div>
+      </> : lectura ? <>
         <LineaConexion c={lectura} titulo={proveedor === 'cloudflare' ? 'Lectura' : undefined} alQuitar={setQuitada} />
         {proveedor === 'cloudflare' ? (accion
           ? <LineaConexion c={accion} titulo="Modo blindaje (acciones)" alQuitar={setQuitada} />

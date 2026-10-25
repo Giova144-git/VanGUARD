@@ -2,6 +2,8 @@
 // vigilada y VanGUARD revisa lo añadido. Bandera: si E45 da 404 (aún sin desplegar), la tarjeta no se pinta (§8.0).
 // El secreto `vgw_` del alta o de «Generar otro secreto» (E46) se ve UNA vez: vive en el estado de este componente, la
 // mutación va con gcTime 0 y reset() en cuanto llega (lib/mutaciones.ts), y nunca toca storage, la URL ni la caché de consultas.
+// Una tarjeta por repo (varias-codebases §6.2): todo va por `conexion.id` (E45 ?connection_id=, la clave de la consulta y
+// el contenedor del secreto). La monta PestanaRepo, con key `${org}:${conexion.id}`.
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ChevronDown, ExternalLink, GitCommitHorizontal, GitPullRequest } from 'lucide-react';
@@ -26,7 +28,9 @@ const RAPIDO_MS = 180_000;            // 5 s durante 3 min tras montar o volver 
 const TRAS_ACTIVAR_MS = 600_000;      // y durante 10 min tras activar desde aquí (esperando el ping de GitHub)
 const REPO_VALIDO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;   // solo así se arma el enlace a github.com
 
-export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic }) {
+// `varios`: la org tiene 2 o más repos. Entonces una config de OTRA conexión quiere decir que el BACK aún no tiene B6 e
+// ignoró ?connection_id=: la tarjeta no se pinta (mostraría la revisión de otro repo), como con el 404.
+export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: ConnectionPublic; varios?: boolean }) {
   const org = useOrg();
   const [params, setParams] = useSearchParams();
   const [rapidoHasta, setRapidoHasta] = useState(() => Date.now() + RAPIDO_MS);
@@ -35,10 +39,10 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
     document.addEventListener('visibilitychange', volver);
     return () => document.removeEventListener('visibilitychange', volver);
   }, []);
-  const q = useRevisionCodigo(org.id, rapidoHasta);
+  const q = useRevisionCodigo(org.id, rapidoHasta, conexion.id);
   const prefs = usePrefsAvisos(org.id);
   const guardar = useGuardarRevision(org.id);
-  const [secreto, setSecreto] = useState<string | null>(() => tomarSecreto(org.id));   // un alta de antes de desmontar
+  const [secreto, setSecreto] = useState<string | null>(() => tomarSecreto(org.id, conexion.id));   // un alta de antes de desmontar
   const [rotado, setRotado] = useState(false);   // el secreto a la vista es uno nuevo: hay que pegarlo en el webhook que ya existe
   const [error, setError] = useState<string | null>(null);
   const abierta = params.get('revision');
@@ -58,6 +62,7 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
 
   if (q.isError && esApiError(q.error) && q.error.status === 404) return null;
   if (!q.data) return null;   // hasta saber si la ruta existe no se promete nada
+  if (varios && q.data.config && q.data.config.connection_id !== conexion.id) return null;
   const s = q.data;
   const c = s.config;
   const rama = c?.branch ?? (typeof conexion.meta.default_branch === 'string' ? conexion.meta.default_branch : null);
@@ -67,7 +72,7 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
     setError(null);
     guardar.mutate({ connection_id: conexion.id, enabled }, {
       onSuccess: () => {
-        const s = tomarSecreto(org.id);                        // lo dejó ahí el onSuccess de opcionesGuardarRevision
+        const s = tomarSecreto(org.id, conexion.id);           // lo dejó ahí el onSuccess de opcionesGuardarRevision
         if (s) setSecreto(s);
         guardar.reset();                                       // fuera del MutationCache ya (gcTime 0)
         if (enabled) setRapidoHasta(Date.now() + TRAS_ACTIVAR_MS);
@@ -82,7 +87,7 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
     setError(null);
     try {
       await guardar.mutateAsync({ connection_id: conexion.id, enabled: true, rotate_secret: true });
-      const s = tomarSecreto(org.id);
+      const s = tomarSecreto(org.id, conexion.id);
       if (s) { setSecreto(s); setRotado(true); }
       setRapidoHasta(Date.now() + TRAS_ACTIVAR_MS);        // se espera el ping del secreto nuevo
     } catch (e) {
@@ -122,7 +127,7 @@ export function TarjetaRevisionCodigo({ conexion }: { conexion: ConnectionPublic
         token de solo lectura y no guardamos tu código.
       </p>
       {s.reason === 'conexion_inactiva'
-        ? <p className="text-sm font-medium">La conexión de GitHub no está activa: <Link to={`/o/${org.id}/connections/github`} className="underline underline-offset-4">reconéctala</Link> para revisar los pushes.</p>
+        ? <p className="text-sm font-medium">La conexión de GitHub no está activa: <Link to={`/o/${org.id}/connections/github${typeof conexion.meta.repo_full_name === 'string' ? `?repo=${encodeURIComponent(conexion.meta.repo_full_name)}` : ''}`} className="underline underline-offset-4">reconéctala</Link> para revisar los pushes.</p>
         : null}
       <Umbral org={org.id} prefs={prefs.data} puedeEscribir={org.puedeEscribir} />
       {/* Línea reservada: el error de activar aparece sin empujar nada (L7). */}

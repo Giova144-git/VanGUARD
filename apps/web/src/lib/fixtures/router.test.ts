@@ -403,3 +403,60 @@ describe('varias codebases (asignaciones/varias-codebases.md §6.5)', () => {
     expect(await pedir(`/api/orgs/${DEMO}/wiki/runs/${id}/doc`)).toMatchObject({ run_id: id, repo_full_name: REPO_2 });
   });
 });
+
+// Sigue en la org de demo y después del bloque de la wiki: el 2.º repo se queda conectado para los casos siguientes.
+describe('varias codebases · conexiones, revisión por repo y auditoría (§6.5)', () => {
+  const CONN_GITHUB = fx.connections.find((c) => c.provider === 'github')!.id;
+  const REPO = fx.connections.find((c) => c.provider === 'github')!.meta.repo_full_name;
+  const REPO_2 = fx.conexionGithub2.meta.repo_full_name;
+  const conectar = (repo: string, pat: string) => pedir<ConnectionCreated>(`/api/orgs/${DEMO}/connections`, 'POST', { provider: 'github', repo_full_name: repo, pat });
+  const fallaConectar = (repo: string, pat: string) => fallo(`/api/orgs/${DEMO}/connections`, 'POST', { provider: 'github', repo_full_name: repo, pat });
+
+  it('E8: el mismo repo activo (otras mayúsculas) da 409 repo_duplicado; REPO_2 devuelve conexionGithub2 con la marca', async () => {
+    expect(await fallaConectar(REPO.toUpperCase(), 'github_pat_token_del_repo_uno_000')).toMatchObject({ status: 409, details: { reason: 'repo_duplicado' } });
+    const r = await conectar(REPO_2, 'github_pat_token_del_repo_dos_0000');
+    expect(r.connection).toEqual(fx.conexionGithub2);
+    expect(r.connection.meta).toMatchObject({ hallazgos_por_repo: true });
+    expect((await pedir<{ id: string }[]>(`/api/orgs/${DEMO}/connections`)).map((c) => c.id)).toContain(fx.conexionGithub2.id);
+  });
+
+  it('E8: el mismo token que otra conexión da 409 sin reason; con 5 repos distintos, 409 tope_repos', async () => {
+    const e = await fallaConectar('equipo/otro', 'github_pat_token_del_repo_dos_0000');
+    expect(e).toMatchObject({ status: 409, message: 'Ese token ya está conectado en esta organización.' });
+    expect(e.details?.reason).toBeUndefined();
+    for (const n of [3, 4, 5]) await conectar(`equipo/repo-${n}`, `github_pat_token_del_repo_${n}_00000`);
+    expect(await fallaConectar('equipo/repo-6', 'github_pat_token_del_repo_6_00000')).toMatchObject({ status: 409, details: { reason: 'tope_repos' } });
+    // Quitar uno libera su token y un hueco.
+    const lista = await pedir<{ id: string; meta: { repo_full_name?: string } }[]>(`/api/orgs/${DEMO}/connections`);
+    await pedir(`/api/orgs/${DEMO}/connections/${lista.find((c) => c.meta.repo_full_name === 'equipo/repo-5')!.id}`, 'DELETE');
+    expect((await conectar('equipo/repo-6', 'github_pat_token_del_repo_5_00000')).connection.meta).toMatchObject({ repo_full_name: 'equipo/repo-6' });
+  });
+
+  it('E45 por conexión: ?connection_id= da el estado de ESE repo; sin él, el principal; malformado 422; ajeno sin_conexion', async () => {
+    expect(await pedir(`/api/orgs/${DEMO}/code-review?connection_id=${fx.conexionGithub2.id}`)).toEqual(fx.codeReviewStateRepo2);
+    const principal = CodeReviewState.parse(await pedir(`/api/orgs/${DEMO}/code-review`));
+    expect(principal.config?.connection_id).toBe(CONN_GITHUB);
+    expect((await pedir<CodeReviewState>(`/api/orgs/${DEMO}/code-review?connection_id=${CONN_GITHUB}`)).recent).toHaveLength(principal.recent.length);
+    expect(await fallo(`/api/orgs/${DEMO}/code-review?connection_id=no-es-un-id`)).toMatchObject({ status: 422 });
+    expect(await pedir(`/api/orgs/${DEMO}/code-review?connection_id=${NADA}`)).toMatchObject({ available: false, reason: 'sin_conexion', config: null, recent: [] });
+    // Activar el 2.º repo crea SU config (con su repo) y no toca la del primero.
+    const alta = CodeReviewSaved.parse(await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: fx.conexionGithub2.id, enabled: true }));
+    expect(alta.config).toMatchObject({ connection_id: fx.conexionGithub2.id, repo_full_name: REPO_2, state: 'waiting_ping' });
+    expect(alta.webhook_secret).toMatch(/^vgw_/);
+    expect((await pedir<CodeReviewState>(`/api/orgs/${DEMO}/code-review?connection_id=${CONN_GITHUB}`)).config?.id).toBe(principal.config?.id);
+  });
+
+  it('E12 con dos o más repos trae una línea por repo; E5 lleva el connection_id de cada hallazgo de «Ahora»', async () => {
+    const run = ScanRun.parse(await pedir(`/api/orgs/${DEMO}/scans/${fx.scanDone.id}`));
+    expect(run.repos?.slice(0, 2)).toEqual(fx.scanDoneDosRepos.repos);
+    const { scan_run_id: id } = await pedir<{ scan_run_id: string }>(`/api/orgs/${DEMO}/scans`, 'POST', { kind: 'full_audit' });
+    expect((await pedir<ScanRun>(`/api/orgs/${DEMO}/scans/${id}`)).repos).toBeUndefined();   // el paso repo aún no terminó
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect((await pedir<ScanRun>(`/api/orgs/${DEMO}/scans/${id}`)).repos?.map((r) => r.status)).toEqual(['done', 'done', 'done', 'done', 'done']);
+    const o = await pedir<{ ahora: { kind: string; connection_id?: string | null }[] }>(`/api/orgs/${DEMO}/overview`);
+    const hallazgos = o.ahora.filter((a) => a.kind === 'finding');
+    expect(hallazgos.length).toBeGreaterThan(0);
+    expect(hallazgos.every((a) => a.connection_id !== undefined)).toBe(true);
+    expect(o.ahora.filter((a) => a.kind === 'incident').every((a) => a.connection_id === undefined)).toBe(true);
+  });
+});

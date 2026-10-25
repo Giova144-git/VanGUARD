@@ -10,12 +10,13 @@ import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { BotonGrande } from '@/componentes/vg/BotonGrande';
 import { Cifra, FilaCifras } from '@/componentes/vg/Cifra';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
+import { ChipRepo } from '@/componentes/vg/ChipRepo';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { MarcasContador } from '@/componentes/vg/MarcasContador';
 import { PuntajeBlindaje } from '@/componentes/vg/PuntajeBlindaje';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
-import { chapaEstado } from '@/modulos/conexiones/TarjetaConexion';
+import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
@@ -24,17 +25,20 @@ import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
+import { reposGithub, useRepoDeConexion } from '@/lib/repos';
 
 // Un módulo de overview.ahora fuera de contrato (o «__proto__») sale «—» neutro: deMapa, no NOMBRE[k].
 const NOMBRE: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
 
-function FilaAhora({ item, org }: { item: AhoraItem; org: string }) {
+// `repo`: el de su conexión, si la org tiene 2 o más (varias-codebases §6.4); los incidentes no llevan.
+function FilaAhora({ item, org, repo }: { item: AhoraItem; org: string; repo: string | null }) {
   const id = encodeURIComponent(item.id);
   const href = item.kind === 'incident' ? `/o/${org}/incidents/${id}` : `?finding=${id}`;   // el detalle se abre encima
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
       <Etiqueta texto={deMapa(NOMBRE, item.module, '—')} />
       <ChapaSeveridad severity={item.severity} />
+      <ChipRepo repo={repo} />
       <div className="flex min-w-0 flex-1 flex-col" title={item.rule_id}>
         <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(item.title)}</span>
         <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(item.resource)}</bdi></span>
@@ -54,12 +58,13 @@ function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones, pue
   const estado = useEstadoModulo(org, modulo);
   const c = conexiones?.find((x) => x.provider === proveedor && x.kind === 'read');
   const e = entradaNav(modulo)!;
+  // Codebase con varios repos (varias-codebases §6.1): «N repos» o el peor estado, con la regla de PantallaModulo.
   if (conexiones && !c) return (
     // El viewer no puede conectar nada: el botón va apagado con su motivo, como en PantallaModulo.
     <BotonGrande icono={Icono} titulo={`Conectar ${NOMBRE[modulo]}`} descripcion={e.descripcion}
       deshabilitado={puedeEscribir ? undefined : SOLO_LECTURA} onClick={() => navegar(`/o/${org}/connections/${proveedor}`)} />
   );
-  const chapa = c ? chapaEstado(c) : null;
+  const chapa = proveedor === 'github' ? chapaGithub(reposGithub(conexiones)) : c ? chapaEstado(c) : null;
   return (
     <Link to={`/o/${org}/${modulo}`} className="flex min-h-16 items-center gap-4 rounded-xl border bg-card px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground"><Icono className="size-6" strokeWidth={1.5} /></span>
@@ -78,6 +83,7 @@ export default function PaginaResumen() {
   const navegar = useNavigate();
   const q = useOverview(org.id);
   const conexiones = useConexiones(org.id);
+  const repoDe = useRepoDeConexion(org.id);
   const lanzar = useLanzarScan(org.id);
   const [errorAuditar, setErrorAuditar] = useState<string | null>(null);
   const o = q.data;
@@ -136,7 +142,7 @@ export default function PaginaResumen() {
         {!o ? <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>
           : o.ahora.length === 0
             ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender · revisado {cuando(q.dataUpdatedAt)}</div>
-            : <ul className="overflow-hidden rounded-xl border bg-card">{o.ahora.map((a) => <FilaAhora key={`${a.kind}-${a.id}`} item={a} org={org.id} />)}</ul>}
+            : <ul className="overflow-hidden rounded-xl border bg-card">{o.ahora.map((a) => <FilaAhora key={`${a.kind}-${a.id}`} item={a} org={org.id} repo={a.kind === 'finding' ? repoDe(a.connection_id) : null} />)}</ul>}
       </section>
 
       <section className="flex flex-col gap-3" aria-label="Tu ecosistema">

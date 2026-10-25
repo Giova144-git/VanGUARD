@@ -8,6 +8,7 @@ import type { Finding, Module, ScanRun, Severity } from '@vanguard/contracts';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
+import { ChipRepo } from '@/componentes/vg/ChipRepo';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { PuntajeBlindaje } from '@/componentes/vg/PuntajeBlindaje';
 import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
@@ -23,6 +24,7 @@ import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
+import { useRepoDeConexion } from '@/lib/repos';
 import { PINTA_PASO, estadoPaso, estadoScan, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
@@ -155,6 +157,7 @@ function Corrida({ id }: { id: string }) {
   const q = useScan(org.id, id);
   const overview = useOverview(org.id);
   const hallazgos = useHallazgos(org.id, { status: 'open' });
+  const repoDe = useRepoDeConexion(org.id);   // chip del repo con 2 o más (varias-codebases §6.4)
   const { auditar, ocupado, error } = useLanzarYNavegar();
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   const run = q.data;
@@ -205,6 +208,7 @@ function Corrida({ id }: { id: string }) {
             {ordenados.map((f) => (
               <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
                 <ChapaSeveridad severity={f.severity} />
+                <ChipRepo repo={repoDe(f.connection_id)} />
                 <div className="flex min-w-0 flex-1 flex-col">
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>

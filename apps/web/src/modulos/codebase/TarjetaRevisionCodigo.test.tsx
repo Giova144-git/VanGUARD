@@ -23,15 +23,16 @@ const GH = z.array(ConnectionPublic).parse(fx.connections).find((c) => c.provide
 const ESPERANDO: CodeReviewState = { ...fx.codeReviewState as CodeReviewState,
   config: { ...fx.codeReviewState.config as NonNullable<CodeReviewState['config']>, state: 'waiting_ping', last_ping_at: null, last_event_at: null } };
 
-function tarjeta(org: OrgActual, estado: CodeReviewState | ApiError, ruta = `/o/${ORG}/codebase`, prefs = fx.alertPrefs) {
+// La consulta va por conexión (varias-codebases §6.2): ['org', org, 'revision', connection_id].
+function tarjeta(org: OrgActual, estado: CodeReviewState | ApiError, ruta = `/o/${ORG}/codebase`, prefs = fx.alertPrefs, varios = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  if (estado instanceof ApiError) qc.getQueryCache().build(qc, { queryKey: ['org', ORG, 'revision'] }).setState({ status: 'error', error: estado, fetchStatus: 'idle' });
-  else qc.setQueryData(['org', ORG, 'revision'], estado);
+  if (estado instanceof ApiError) qc.getQueryCache().build(qc, { queryKey: ['org', ORG, 'revision', GH.id] }).setState({ status: 'error', error: estado, fetchStatus: 'idle' });
+  else qc.setQueryData(['org', ORG, 'revision', GH.id], estado);
   qc.setQueryData(['org', ORG, 'alert-prefs'], prefs);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[ruta]}>
-        <OrgDePrueba org={org}><TarjetaRevisionCodigo conexion={GH} /></OrgDePrueba>
+        <OrgDePrueba org={org}><TarjetaRevisionCodigo conexion={GH} varios={varios} /></OrgDePrueba>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -114,13 +115,43 @@ describe('TarjetaRevisionCodigo', () => {
       m.reset();
       await new Promise((ok) => setTimeout(ok, 10));                   // gcTime 0: el recolector corre en el siguiente tick
       // Queda en el contenedor en memoria hasta que la tarjeta lo toma (aunque se desmontara al activar), y solo una vez.
-      expect(tomarSecreto(ORG)).toBe(SECRETO);
-      expect(tomarSecreto(ORG)).toBeNull();
+      expect(tomarSecreto(ORG, GH.id)).toBe(SECRETO);
+      expect(tomarSecreto(ORG, GH.id)).toBeNull();
       expect(JSON.stringify(qc.getMutationCache().getAll().map((x) => x.state))).not.toContain('vgw_');
       expect(JSON.stringify(qc.getQueryCache().getAll().map((x) => x.state.data))).not.toContain('vgw_');
       expect(guardados.join('\n')).not.toContain('vgw_');
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('TarjetaRevisionCodigo · varias codebases (§6.2)', () => {
+  const OTRA = 'c0000000-0000-4000-8000-000000000007';
+
+  it('el secreto vgw_ de un repo no salta a la pestaña de otro', async () => {
+    api.mockResolvedValueOnce({ config: fx.codeReviewSaved.config, webhook_secret: SECRETO });
+    const qc = new QueryClient();
+    await new MutationObserver(qc, opcionesGuardarRevision(ORG, qc)).mutate({ connection_id: GH.id, enabled: true });
+    expect(tomarSecreto(ORG, OTRA)).toBeNull();
+    expect(tomarSecreto(ORG, GH.id)).toBe(SECRETO);
+  });
+
+  it('setQueryData escribe en la clave de la pestaña de ese repo y no deja una entrada suelta sin conexión', async () => {
+    api.mockResolvedValueOnce({ config: { ...fx.codeReviewSaved.config, enabled: false, state: 'off' }, webhook_secret: null });
+    const qc = new QueryClient();
+    qc.setQueryData(['org', ORG, 'revision', GH.id], ESPERANDO);
+    qc.setQueryData(['org', ORG, 'revision', OTRA], { ...ESPERANDO, config: null });
+    await new MutationObserver(qc, opcionesGuardarRevision(ORG, qc)).mutate({ connection_id: GH.id, enabled: false });
+    expect(qc.getQueryData<CodeReviewState>(['org', ORG, 'revision', GH.id])?.config).toMatchObject({ enabled: false, state: 'off' });
+    expect(qc.getQueryData<CodeReviewState>(['org', ORG, 'revision', OTRA])?.config).toBeNull();
+    expect(qc.getQueryCache().find({ queryKey: ['org', ORG, 'revision'], exact: true })).toBeUndefined();
+  });
+
+  it('con varios repos, una config de otra conexión (BACK sin ?connection_id=) no se pinta; con uno, como siempre', () => {
+    const deOtro = { ...ESPERANDO, config: { ...ESPERANDO.config!, connection_id: OTRA } };
+    expect(tarjeta(ADMIN, deOtro, undefined, undefined, true)).toBe('');
+    expect(tarjeta(ADMIN, deOtro)).toContain('Revisión automática de código');
+    expect(tarjeta(ADMIN, ESPERANDO, undefined, undefined, true)).toContain('Revisión automática de código');
   });
 });

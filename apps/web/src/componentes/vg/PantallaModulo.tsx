@@ -8,10 +8,11 @@ import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
-import { chapaEstado } from '@/modulos/conexiones/TarjetaConexion';
+import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useEstadoModulo } from '@/lib/consultas';
 import { rutaDe } from '@/lib/destino';
+import { reposGithub } from '@/lib/repos';
 import { cuando } from '@/lib/formato';
 import { deMapa } from '@/lib/severidad';
 import { entradaNav, type IdNav } from '@/lib/nav';
@@ -33,24 +34,31 @@ const NOMBRE_PROV: Record<Exclude<Provider, 'ingest'>, string> = { supabase: 'Su
 const HUECOS: Record<Module, number> = { supabase: 2, cloudflare: 2, codebase: 2, performance: 6 };
 
 // `proveedor = null` (Rendimiento, S14 §14.13): sin conexión propia; «Sin datos» = ninguna cifra con n → «Aún no medimos tu web».
-export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; children?: ReactNode }) {
+// `arriba`: la acción propia del módulo justo bajo la barra («Medir ahora» de Rendimiento); también con «Aún no medimos».
+export function PantallaModulo({ modulo, proveedor, arriba, children }: {
+  modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; arriba?: ReactNode; children?: ReactNode;
+}) {
   const org = useOrg();
   const navegar = useNavigate();
   const [params, setParams] = useSearchParams();
   const e = entradaNav(modulo)!;
   const q = useEstadoModulo(org.id, modulo);
   const conexiones = useConexiones(org.id);
-  const c = proveedor ? conexiones.data?.find((x) => x.provider === proveedor && x.kind === 'read') : undefined;
+  // GitHub admite varios repos (varias-codebases §6.2): uno por nombre, con la chapa «N repos» o la del que falla.
+  const repos = proveedor === 'github' ? reposGithub(conexiones.data) : [];
+  const c = proveedor === 'github' ? repos[0] : proveedor ? conexiones.data?.find((x) => x.provider === proveedor && x.kind === 'read') : undefined;
+  const chapa = proveedor === 'github' ? chapaGithub(repos) : c ? chapaEstado(c) : null;
+  const caida = proveedor === 'github' ? repos.some((x) => x.status !== 'active') : !!c && c.status !== 'active';
   const filtro = params.get('filtro');
   const est = q.data;
   // L3: la chapa roja de la conexión lleva al lado la acción que la arregla.
   const arreglo = !proveedor ? null
-    : est?.error === 'token_invalido' || (c && c.status !== 'active') ? 'Reconectar'
+    : est?.error === 'token_invalido' || caida ? 'Reconectar'
     : est?.error === 'sin_permiso' ? 'Ver' : null;
 
   const barra = (
     <BarraModulo titulo={e.nombre} descripcion={e.descripcion} contador={est?.contador ?? null} extra={<>
-      {c ? <Etiqueta {...chapaEstado(c)} /> : null}
+      {chapa ? <Etiqueta {...chapa} /> : null}
       {/* sin_conexion = aún no hay conexión (estado/modulo.ts del BACK): no es un fallo; lo explica el «Conecta …» de abajo (L3). */}
       {est && !est.ok && est.error === 'sin_conexion' ? (c ? <Etiqueta texto="Sin conexión activa" rol="neutra" /> : null)
         // limite_api se reintenta solo: no pide nada al usuario, así que no va en rojo (L3).
@@ -69,8 +77,9 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
   if (!proveedor && est && est.cifras.every((x) => x.n == null)) return (
     <div className="flex flex-col gap-6">
       {barra}
+      {arriba}
       <Vacio icono={Gauge} titulo="Aún no medimos tu web" texto={e.descripcion} />
-      <GuiaModulo id={modulo as IdNav} />
+      <GuiaModulo id={modulo as IdNav} soloLectura={!org.puedeEscribir} />
     </div>
   );
 
@@ -80,13 +89,14 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
       <Vacio icono={KeyRound} titulo={`Conecta ${NOMBRE_PROV[proveedor]} para ver este módulo`} texto={e.descripcion}
         accion={<BotonGrande icono={KeyRound} titulo={`Conectar ${NOMBRE_PROV[proveedor]}`} descripcion="Con un token de solo lectura"
           deshabilitado={org.puedeEscribir ? undefined : SOLO_LECTURA} onClick={() => navegar(`/o/${org.id}/connections/${proveedor}`)} />} />
-      <GuiaModulo id={modulo as IdNav} />
+      <GuiaModulo id={modulo as IdNav} soloLectura={!org.puedeEscribir} />
     </div>
   );
 
   return (
     <div className="flex flex-col gap-6">
       {barra}
+      {arriba}
       {q.isError && est ? <p role="status" className="text-sm text-mal">Sin conexión · mostramos los datos de las {cuando(est.hora)}</p> : null}
       <FilaCifras>
         {(est?.cifras ?? Array<null>(HUECOS[modulo]).fill(null)).map((x, i) => x
@@ -117,7 +127,7 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
           <ChecksEnCero checks={est.checks} />
         </section>
       ) : null}
-      <GuiaModulo id={modulo as IdNav} />
+      <GuiaModulo id={modulo as IdNav} soloLectura={!org.puedeEscribir} />
       <DetalleEnPanel />
     </div>
   );

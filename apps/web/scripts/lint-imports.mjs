@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
-const RAIZ = join(import.meta.dirname, '..');
+const RAIZ = join(import.meta.dirname, '..', '..', '..');   // apps/web/scripts → raíz del monorepo
 const WEB = join(RAIZ, 'apps', 'web', 'src');
 const ZIP = join(WEB, 'modulos', 'codebase', 'zip') + sep;
 const EXTENSIONES = /\.(ts|tsx|js|jsx|mjs|cjs)$/;

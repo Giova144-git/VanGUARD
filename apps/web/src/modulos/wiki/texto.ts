@@ -9,10 +9,15 @@ export const topeUsd = (est: number) => Math.min(5, Math.max(0.01, Math.ceil(est
 // Cada push cambia el commit y la caché de E40 incluye además la huella de los hallazgos, así que casi nunca hay caché:
 // la wiki terminada más reciente del mismo repo (de otro commit, o del mismo antes de otra auditoría) se ofrece junto a
 // «Generar» para no pagar otra vez por un cambio pequeño.
+// También es «la última wiki lista» de un repo, la que la página abre sola (varias-codebases §6.3). El nombre se compara
+// en minúsculas: GitHub no distingue mayúsculas y la conexión puede traerlo escrito de otra forma que la corrida.
 export function wikiAnterior(runs: readonly WikiRun[], e: Pick<WikiEstimate, 'repo_full_name'>): WikiRun | null {
   const t = (r: WikiRun) => Date.parse(r.finished_at ?? r.created_at) || 0;
-  return runs.filter((r) => r.status === 'succeeded' && r.repo_full_name === e.repo_full_name).sort((a, b) => t(b) - t(a))[0] ?? null;
+  return runs.filter((r) => r.status === 'succeeded' && mismoRepo(r.repo_full_name, e.repo_full_name)).sort((a, b) => t(b) - t(a))[0] ?? null;
 }
+// api() en producción deja pasar una corrida fuera de contrato: un repo que no es texto no casa con ninguno (sin lanzar,
+// que tumbaría la página de la wiki del jurado).
+export const mismoRepo = (a: unknown, b: string) => typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
 
 // Historial (E43): campo vacío → todas las wikis de la org; un owner/repo que pasa RepoFullName → las de ese repo; un
 // texto a medio escribir o una URL que no es de GitHub → no se consulta (E43 respondería 422) y basta la ayuda de formato.

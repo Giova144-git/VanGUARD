@@ -27,16 +27,24 @@ Track **AI Security** · Platanus Hack 26 Caracas · team-22
   - **Cloudflare:** estado de la zona y, si tu app nos manda su tráfico firmado, escaneos de rutas, herramientas de
     ataque e inundaciones desde una IP, en vivo.
 - **Revisión de código en cada push, merge y pull request a `main`** (webhook de GitHub). Si aparece una clave o un
-  `.env`, te avisa por WhatsApp según la severidad mínima que elijas en Ajustes.
+  `.env`, te avisa por WhatsApp según la severidad mínima que elijas en Ajustes. El aviso trae botones con acción real:
+  **«Enviarme el arreglo»** y **«Silenciar repo 1 h»**.
+- **Bloqueo de merge:** un pull request con un hallazgo crítico queda con el estado en rojo y, en repos privados del plan
+  gratuito de GitHub (que no deja exigir el check), VanGUARD lo cierra y comenta el motivo.
+- **Evolución entre revisiones:** cada auditoría y cada push dejan una foto; VanGUARD compara cada una con la anterior y
+  dice qué empeoró y qué se corrigió.
+- **Rendimiento:** «Medir ahora» lanza una medición real con PageSpeed Insights (Lighthouse) en móvil o escritorio, y el
+  histórico marca la métrica que empeoró.
+- **Varias codebases por organización**, cada repo con su **wiki** generada por IA y los hallazgos cruzados.
 - **Prompt de corrección** por hallazgo, escrito por Claude, y **exportación** a cualquier IA (`.md` o `.json`, con los
-  secretos tapados).
+  secretos tapados), o consulta desde tu IA con nuestro **servidor MCP** (`/mcp`, con token propio).
 - **Análisis de un ZIP en el navegador:** el código no sale de tu equipo.
-- **Wiki del repositorio** generada por IA, con los hallazgos cruzados.
 - **Modo blindaje:** bloquear una IP atacante en Cloudflare con un token aparte y confirmación por código; se deshace sola
-  en una hora.
+  en una hora. El **modo bajo ataque** propone un desafío temporal para un host, con vista previa, confirmación, TTL y
+  Deshacer.
 
-**Próximamente:** llamada de voz, salud de la base (CPU, memoria y disco), mediciones de rendimiento con PageSpeed,
-«Verificar arreglo» y avisos de WhatsApp fuera de la ventana de 24 h (plantilla de Meta en revisión).
+**Próximamente:** llamada de voz, salud de la base (CPU, memoria y disco), «Verificar arreglo» y avisos de WhatsApp fuera
+de la ventana de 24 h (plantilla de Meta en revisión).
 
 ## Seguro por diseño
 
@@ -44,7 +52,8 @@ Track **AI Security** · Platanus Hack 26 Caracas · team-22
   código no apaga una alerta.
 - **Credenciales cifradas** con AES-256-GCM; la clave maestra se arma con una mitad en Supabase Vault y otra en el
   Worker. Robar la base no basta.
-- **Solo lectura** en las integraciones. La única escritura (bloquear una IP) usa un segundo token opcional y un código.
+- **Solo lectura** en las integraciones. Las escrituras (bloquear una IP, modo bajo ataque, estado y cierre del PR) usan
+  un segundo token opcional y se confirman aparte.
 - **Nada sensible sale:** los secretos se redactan antes de llegar a logs, a la IA o a WhatsApp; CSP estricta sin
   scripts de terceros.
 
@@ -53,7 +62,8 @@ Detalle y pruebas: [SECURITY.md](SECURITY.md) · [THREAT_MODEL.md](THREAT_MODEL.
 ## Stack
 
 Cloudflare Workers (plan gratuito) con Hono, que sirve la API y la SPA (React 19 + Vite) · Supabase (Postgres, Auth,
-Vault y Realtime) · Claude API · Kapso (WhatsApp) · OSV · contratos compartidos con zod · monorepo pnpm.
+Vault y Realtime) · Claude API · Kapso (WhatsApp) · OSV · PageSpeed Insights · contratos compartidos con zod ·
+monorepo pnpm.
 
 | Carpeta | Qué hay |
 |---|---|

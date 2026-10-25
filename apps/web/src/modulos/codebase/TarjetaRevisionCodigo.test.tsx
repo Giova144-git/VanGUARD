@@ -1,6 +1,6 @@
 // «Revisión automática de código» (§6.1 y F6): bandera por 404, lo que ve el viewer y que el secreto del alta no se
 // queda en el MutationCache ni en el almacenamiento tras reset(). Sin jsdom: renderToStaticMarkup y la caché a mano.
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { MutationObserver, QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -23,15 +23,16 @@ const GH = z.array(ConnectionPublic).parse(fx.connections).find((c) => c.provide
 const ESPERANDO: CodeReviewState = { ...fx.codeReviewState as CodeReviewState,
   config: { ...fx.codeReviewState.config as NonNullable<CodeReviewState['config']>, state: 'waiting_ping', last_ping_at: null, last_event_at: null } };
 
-function tarjeta(org: OrgActual, estado: CodeReviewState | ApiError, ruta = `/o/${ORG}/codebase`, prefs = fx.alertPrefs) {
+// La consulta va por conexión (varias-codebases §6.2): ['org', org, 'revision', connection_id].
+function tarjeta(org: OrgActual, estado: CodeReviewState | ApiError, ruta = `/o/${ORG}/codebase`, prefs = fx.alertPrefs, varios = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  if (estado instanceof ApiError) qc.getQueryCache().build(qc, { queryKey: ['org', ORG, 'revision'] }).setState({ status: 'error', error: estado, fetchStatus: 'idle' });
-  else qc.setQueryData(['org', ORG, 'revision'], estado);
+  if (estado instanceof ApiError) qc.getQueryCache().build(qc, { queryKey: ['org', ORG, 'revision', GH.id] }).setState({ status: 'error', error: estado, fetchStatus: 'idle' });
+  else qc.setQueryData(['org', ORG, 'revision', GH.id], estado);
   qc.setQueryData(['org', ORG, 'alert-prefs'], prefs);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[ruta]}>
-        <OrgDePrueba org={org}><TarjetaRevisionCodigo conexion={GH} /></OrgDePrueba>
+        <OrgDePrueba org={org}><TarjetaRevisionCodigo conexion={GH} varios={varios} /></OrgDePrueba>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -114,13 +115,104 @@ describe('TarjetaRevisionCodigo', () => {
       m.reset();
       await new Promise((ok) => setTimeout(ok, 10));                   // gcTime 0: el recolector corre en el siguiente tick
       // Queda en el contenedor en memoria hasta que la tarjeta lo toma (aunque se desmontara al activar), y solo una vez.
-      expect(tomarSecreto(ORG)).toBe(SECRETO);
-      expect(tomarSecreto(ORG)).toBeNull();
+      expect(tomarSecreto(ORG, GH.id)).toBe(SECRETO);
+      expect(tomarSecreto(ORG, GH.id)).toBeNull();
       expect(JSON.stringify(qc.getMutationCache().getAll().map((x) => x.state))).not.toContain('vgw_');
       expect(JSON.stringify(qc.getQueryCache().getAll().map((x) => x.state.data))).not.toContain('vgw_');
       expect(guardados.join('\n')).not.toContain('vgw_');
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// Evolución (evolucion-entre-revisiones.md §6.2 y §9.3): la foto de Codebase de cada push, con los deltas del router.
+describe('TarjetaRevisionCodigo · foto de cada push (evolución F3)', () => {
+  const CON_FOTO: CodeReviewState = { ...ESPERANDO, recent: ESPERANDO.recent.map((r) => ({ ...r, delta: fx.deltasRevision[r.id] ?? null })) };
+  const NOTA = 'un push no ve lo que se quita';
+
+  it('la fila del push de las 19:20Z dice «1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior», con una sola nota', () => {
+    const html = tarjeta(ADMIN, CON_FOTO);
+    expect(html).toContain('1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior');
+    expect(html).toContain('0 nuevos · 7 siguen abiertos · 2 corregidos desde el push anterior (1 comprobado por una auditoría)');
+    expect(html.split(NOTA)).toHaveLength(2);
+    // Debajo de lo que ya hay en la fila: después de los chips, dentro del mismo botón.
+    const fila = html.slice(html.indexOf(`id="revision-${CON_FOTO.recent[0]!.id}"`));
+    expect(fila.indexOf('1 nuevo · 7 siguen abiertos')).toBeGreaterThan(fila.indexOf('WhatsApp en 6,4 s'));
+    expect(fila.indexOf('1 nuevo · 7 siguen abiertos')).toBeLessThan(fila.indexOf('</button>'));
+    expect(tarjeta(VIEWER, CON_FOTO)).toContain('1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior');
+  });
+
+  it('con dos o más repos la foto es de toda la org', () => {
+    expect(tarjeta(ADMIN, CON_FOTO, undefined, undefined, true)).toContain('1 nuevo · 7 siguen abiertos en Codebase (todos los repos) · 0 corregidos');
+  });
+
+  it('sin delta (null o ausente: BACK sin 0015 o foto fallida), nada; un PR, nada aunque traiga delta', () => {
+    for (const estado of [ESPERANDO, { ...ESPERANDO, recent: ESPERANDO.recent.map((r) => ({ ...r, delta: null })) }]) {
+      const html = tarjeta(ADMIN, estado);
+      expect(html).toContain('Revisiones recientes');
+      expect(html).not.toContain('siguen abiertos');
+      expect(html).not.toContain(NOTA);
+    }
+    const pr = { ...CON_FOTO.recent[0]!, event: 'pull_request' as const, pr_number: 7 };
+    const html = tarjeta(ADMIN, { ...CON_FOTO, recent: [pr] });
+    expect(html).toContain('PR #7 · ');
+    expect(html).not.toContain('siguen abiertos');
+    expect(html).not.toContain(NOTA);
+  });
+});
+
+// Anexo de botones de WhatsApp (avisos-whatsapp-botones.md, «FRONT»): la acción tomada desde el mensaje y el repo silenciado.
+describe('TarjetaRevisionCodigo · acciones desde WhatsApp', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-24T19:40:00.000Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+  const conAccion = (whatsapp_action: unknown) => ({ ...ESPERANDO, recent: [{ ...ESPERANDO.recent[0]!,
+    alert: { ...ESPERANDO.recent[0]!.alert, whatsapp_action: whatsapp_action as never, whatsapp_action_at: '2026-10-24T19:22:05.000Z' } }] });
+
+  it('la fila de la revisión dice lo que se hizo desde WhatsApp y a qué hora; una acción nueva, el texto por defecto', () => {
+    expect(tarjeta(ADMIN, conAccion('fix_sent'))).toContain('Arreglo enviado por WhatsApp · 15:22');
+    expect(tarjeta(VIEWER, conAccion('pr_reopened'))).toContain('PR reabierto por WhatsApp · 15:22');
+    const rara = tarjeta(ADMIN, conAccion('__proto__'));
+    expect(rara).toContain('Acción por WhatsApp · 15:22');
+    expect(rara).not.toContain('__proto__');
+    expect(tarjeta(ADMIN, ESPERANDO)).not.toMatch(/(Arreglo enviado|Issue creado|Silenciado 1 h|PR reabierto|Acción) por WhatsApp/);   // BACK sin el anexo: nada
+  });
+
+  it('«Silenciado hasta hh:mm» (hora de Caracas) solo con muted_until en el futuro', () => {
+    const silenciado = (muted_until: string | null) => tarjeta(VIEWER, { ...ESPERANDO, config: { ...ESPERANDO.config!, muted_until } });
+    expect(silenciado('2026-10-24T20:30:00.000Z')).toContain('Silenciado hasta 16:30');
+    expect(silenciado('2026-10-24T19:00:00.000Z')).not.toContain('Silenciado hasta');
+    expect(silenciado(null)).not.toContain('Silenciado hasta');
+    expect(tarjeta(ADMIN, ESPERANDO)).not.toContain('Silenciado hasta');
+  });
+});
+
+describe('TarjetaRevisionCodigo · varias codebases (§6.2)', () => {
+  const OTRA = 'c0000000-0000-4000-8000-000000000007';
+
+  it('el secreto vgw_ de un repo no salta a la pestaña de otro', async () => {
+    api.mockResolvedValueOnce({ config: fx.codeReviewSaved.config, webhook_secret: SECRETO });
+    const qc = new QueryClient();
+    await new MutationObserver(qc, opcionesGuardarRevision(ORG, qc)).mutate({ connection_id: GH.id, enabled: true });
+    expect(tomarSecreto(ORG, OTRA)).toBeNull();
+    expect(tomarSecreto(ORG, GH.id)).toBe(SECRETO);
+  });
+
+  it('setQueryData escribe en la clave de la pestaña de ese repo y no deja una entrada suelta sin conexión', async () => {
+    api.mockResolvedValueOnce({ config: { ...fx.codeReviewSaved.config, enabled: false, state: 'off' }, webhook_secret: null });
+    const qc = new QueryClient();
+    qc.setQueryData(['org', ORG, 'revision', GH.id], ESPERANDO);
+    qc.setQueryData(['org', ORG, 'revision', OTRA], { ...ESPERANDO, config: null });
+    await new MutationObserver(qc, opcionesGuardarRevision(ORG, qc)).mutate({ connection_id: GH.id, enabled: false });
+    expect(qc.getQueryData<CodeReviewState>(['org', ORG, 'revision', GH.id])?.config).toMatchObject({ enabled: false, state: 'off' });
+    expect(qc.getQueryData<CodeReviewState>(['org', ORG, 'revision', OTRA])?.config).toBeNull();
+    expect(qc.getQueryCache().find({ queryKey: ['org', ORG, 'revision'], exact: true })).toBeUndefined();
+  });
+
+  it('con varios repos, una config de otra conexión (BACK sin ?connection_id=) no se pinta; con uno, como siempre', () => {
+    const deOtro = { ...ESPERANDO, config: { ...ESPERANDO.config!, connection_id: OTRA } };
+    expect(tarjeta(ADMIN, deOtro, undefined, undefined, true)).toBe('');
+    expect(tarjeta(ADMIN, deOtro)).toContain('Revisión automática de código');
+    expect(tarjeta(ADMIN, ESPERANDO, undefined, undefined, true)).toContain('Revisión automática de código');
   });
 });

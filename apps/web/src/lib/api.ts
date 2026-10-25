@@ -7,8 +7,11 @@ import { caminoValido } from './ids';
 type Opts<T> = { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown; esquema?: z.ZodType<T>; crudo?: boolean };
 type CuerpoError = { error?: { code?: string; message?: string; request_id?: string; details?: Record<string, unknown> } } | null;
 
-const aError = (status: number, b: CuerpoError) =>
-  new ApiError(status, b?.error?.code ?? 'internal', b?.error?.message ?? 'Algo falló', b?.error?.request_id, b?.error?.details);
+// Retry-After solo en segundos (la forma de fecha HTTP se ignora): lo usa el «Espera …» de un 429.
+const segundos = (h: string | null) => (h && /^\d{1,5}$/.test(h.trim()) ? Number(h.trim()) || undefined : undefined);
+const aError = (status: number, b: CuerpoError, h?: Headers) =>
+  new ApiError(status, b?.error?.code ?? 'internal', b?.error?.message ?? 'Algo falló', b?.error?.request_id, b?.error?.details,
+    segundos(h?.get('retry-after') ?? null));
 
 async function pedir(ruta: string, o: Opts<unknown>): Promise<Response> {
   const { data } = await supabase.auth.getSession();     // en el navegador sí; getSession() solo está prohibido en el servidor
@@ -33,10 +36,10 @@ export async function api<T>(ruta: string, o: Opts<T> = {}): Promise<T> {
     const { data } = await supabase.auth.refreshSession().catch(() => ({ data: { session: null } }));
     if (data.session) res = await pedir(ruta, o);
   }
-  if (o.crudo) { if (!res.ok) throw aError(res.status, await res.json().catch(() => null)); return res as unknown as T; } // antes del 204: DELETE connections necesita leer X-VG-Revoke-Url
+  if (o.crudo) { if (!res.ok) throw aError(res.status, await res.json().catch(() => null), res.headers); return res as unknown as T; } // antes del 204: DELETE connections necesita leer X-VG-Revoke-Url
   if (res.status === 204) return undefined as T;
   const cuerpo: unknown = await res.json().catch(() => null);
-  if (!res.ok) throw aError(res.status, cuerpo as CuerpoError);
+  if (!res.ok) throw aError(res.status, cuerpo as CuerpoError, res.headers);
   if (!o.esquema) return cuerpo as T;
   const r = o.esquema.safeParse(cuerpo);
   if (r.success) return r.data;

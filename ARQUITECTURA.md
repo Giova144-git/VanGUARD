@@ -64,7 +64,7 @@ Node ≥ 24.12 (`package.json`). TypeScript 6.0.3 y Vitest 4.1.12 en todo el mon
 | `packages/contracts` | Esquemas zod compartidos entre FRONT y BACK, tipos de la base y fixtures (`packages/contracts/src`) | La importan `apps/web`, `apps/api`, `core` y `deepwiki` |
 | `packages/deepwiki` | Motor «Wiki del repo» por pasos, sin SDK de Anthropic (`packages/deepwiki/LEEME.md`) | Lo importa `apps/api` |
 | `supabase/` | 19 migraciones SQL (`supabase/migrations/0000`–`0010`), seeds y pruebas SQL (`supabase/tests/*.sql`) | Se aplican a mano al proyecto de producción (no hay CI de base) |
-| `scripts/`, `demo/` | Herramientas: simulador de ataque (`scripts/ataque.mjs`), subida de secretos por API (`scripts/subir-secretos-worker.mjs`), repo vulnerable de demo (`demo/repo-vulnerable`) | No se despliegan |
+| `scripts/` (local, fuera del repo), `demo/` | Herramientas: simulador de ataque (`scripts/ataque.mjs`), subida de secretos por API (`scripts/subir-secretos-worker.mjs`), repo vulnerable de demo (`demo/repo-vulnerable`) | No se despliegan |
 
 Desarrollo local sin `workerd`: `apps/api/src/dev-node.ts` corre la misma app Hono en Node 24 y sustituye la cola por
 `colaEnSerie()` (`apps/api/src/jobs.ts`), un doble que imita reintentos, retrasos y DLQ.
@@ -369,7 +369,7 @@ generación completa en producción; las pruebas del motor y de los pasos están
 - `database.types.ts` trae los tipos generados de la base.
 - `fixtures/` permite desarrollar el FRONT sin backend (`vite --mode fixtures`).
 
-Frontera de seguridad: `scripts/lint-imports.mjs` falla si `apps/web/src` importa `@vanguard/core`. Así el cifrado,
+Frontera de seguridad: `apps/web/scripts/lint-imports.mjs` falla si `apps/web/src` importa `@vanguard/core`. Así el cifrado,
 las guardas de claves y la redacción no llegan al bundle principal del navegador. Corre dentro del build de la web.
 Tiene una sola excepción: `apps/web/src/modulos/codebase/zip/`, el análisis local del ZIP en un Web Worker, que
 reutiliza los escáneres puros de core. Fuera de esa carpeta nadie puede importar `zip/analizar`, `zip/leer` ni
@@ -385,7 +385,7 @@ del equipo está configurado para ir a la vez al repo público y al espejo (el m
 plantilla del hackatón).
 
 - **Build command:** `pnpm --filter @vanguard/web build`. Ese script (`apps/web/package.json`) ejecuta, en orden,
-  `apps/web/scripts/lint-seguridad.mjs`, `scripts/lint-imports.mjs`, `tsc --noEmit` y `vite build`. Si algo falla, no se
+  `apps/web/scripts/lint-seguridad.mjs`, `apps/web/scripts/lint-imports.mjs`, `tsc --noEmit` y `vite build`. Si algo falla, no se
   despliega y producción sigue con la versión anterior.
 - **Deploy command:** `npx wrangler@4.152.0 deploy -c apps/api/wrangler.jsonc --var VG_VERSION:$WORKERS_CI_COMMIT_SHA`.
   wrangler va fijado y no está en ningún `package.json`.

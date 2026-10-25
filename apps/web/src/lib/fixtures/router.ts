@@ -1,13 +1,17 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
-  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
-  type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
-  type WikiRun, type ZipFinding,
+  fixtures as fx, AlertPrefsIn, CodeReviewPut, CodeReviewQuery, GATE_CONTEXT, MAX_REPOS_GITHUB, McpTokenCreate, MergeGateAction, MergeGatePut, type McpTokenCreated, type McpTokenPublic, RepoFullName, ScanCreate, WikiRepoRef, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
+  type AuditDelta, type CodeReview, type CodeReviewConfig, type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type DeltaLista, type EstadoModulo, type Evolution, type PerfRunExt,
+  type MergeGateConfig, type MergeGateSaved, type Overview, type RespuestaEscritura,
+  type Finding, type Incident, type IncidentDetail, type MatrizHallazgos, type Me, type Module, type Org, type PermCheck, type ScanKind,
+  type ScanRun, type TimelineItem, type WikiRun, type ZipFinding,
+  type UnderAttackActivo, type UnderAttackMotivo, type UnderAttackOffer, type UnderAttackProposal,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { ApiError } from '../errores';
+import { SEVERIDADES, esClave } from '../evolucion';
+import { deMapa } from '../severidad';
 import { tipoSesionFalsa } from '../supabase-doble';
 
 type H = (m: RegExpMatchArray, body: unknown, q: URLSearchParams) => unknown;
@@ -51,14 +55,44 @@ function crearOrg(body: unknown): Org {
   return org;
 }
 
-// Conexiones por org: la demo arranca con las del fixture; una org nueva (o ?escenario=vacio), vacía.
+// Conexiones por org: la demo arranca con las del fixture; una org nueva (o ?escenario=vacio), vacía. El token de Modo
+// blindaje de la demo trae Zone · Config Rules · Edit (config_rules_edit: true, lo que guardaría la sonda de E9), así E55
+// ofrece el modo bajo ataque con permiso 'ok' como fx.underAttackOffer; sin la clave sería 'sin_probar'.
 const conexiones = new Map<string, ConnectionPublic[]>();
+function conexionesDemo(): ConnectionPublic[] {
+  const lista = structuredClone(fx.connections as unknown as ConnectionPublic[]);   // el literal con satisfies no casa con Record<string, boolean>
+  for (const c of lista) if (c.provider === 'cloudflare' && c.kind === 'action') c.capabilities = { ...c.capabilities, config_rules_edit: true };
+  return lista;
+}
 const listaDe = (org: string) => {
-  if (!conexiones.has(org)) conexiones.set(org, vacia(org) ? [] : structuredClone(fx.connections as unknown as ConnectionPublic[]));  // el literal con satisfies no casa con Record<string, boolean>
+  if (!conexiones.has(org)) conexiones.set(org, vacia(org) ? [] : conexionesDemo());
   return conexiones.get(org)!;
 };
 const conectado = (org: string, p: ConnectionPublic['provider']) =>
   listaDe(org).some((c) => c.provider === p && c.kind === 'read' && c.status === 'active');
+
+// ── Varias codebases (asignaciones/varias-codebases.md §6.5) ─────────────────────────────────────────────────────
+// Un repo = una conexión GitHub de lectura. Las parejas viejas de «Reconectar» son el mismo repo (nombre en minúsculas).
+const nombreGh = (c: ConnectionPublic) => String(c.meta.repo_full_name ?? '').toLowerCase();
+const lecturasGh = (org: string) => listaDe(org).filter((c) => c.provider === 'github' && c.kind === 'read');
+// Un representante por repo, en el orden de E7: la activa del grupo o, si ninguna, la más antigua.
+function reposGh(org: string): ConnectionPublic[] {
+  const grupos = new Map<string, ConnectionPublic>();
+  for (const c of lecturasGh(org)) {
+    const k = nombreGh(c) || c.id, previa = grupos.get(k);
+    if (!previa || (previa.status !== 'active' && c.status === 'active')) grupos.set(k, c);
+  }
+  return [...grupos.values()];
+}
+// Tokens GitHub ya usados en cada org: una huella corta en memoria (FNV-1a), nunca el token. huella → conexión.
+const huellasGh = new Map<string, Map<string, string>>();
+const huellasDe = (org: string) => huellasGh.get(org) ?? huellasGh.set(org, new Map()).get(org)!;
+function huella(t: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16);
+}
+const REPO_2 = String(fx.conexionGithub2.meta.repo_full_name);
 
 // E6 de una org sin los datos de la demo: la forma de la demo con todo «sin mirar» (n:null, comprobado:false), como antes
 // de la primera auditoría. Igual que estado/modulo.ts del BACK: sin conexión read activa del proveedor, ok:false con
@@ -96,6 +130,9 @@ function guardaFalsa(token: string) {
   if (/^sb_secret_|^gh[pousr]_|^cfk_/.test(token))
     falla(422, 'key_rejected', 'Esa clave puede escribir: VanGUARD solo acepta tokens de solo lectura', { reason: 'write_capable' });
 }
+// Sonda falsa del permiso del modo bajo ataque (el dry_run de Config Rules de E8/E9): un token de acciones con «sin-config»
+// hace de token sin Zone · Config Rules · Edit (la sonda vería un 403: config_rules_edit false); cualquier otro lo trae.
+const conConfigRules = (token: string) => !/sin-config/i.test(token);
 
 function conectarFalso(org: string, body: unknown): ConnectionCreated {
   const b = (body ?? {}) as Record<string, string | undefined>;
@@ -116,15 +153,37 @@ function conectarFalso(org: string, body: unknown): ConnectionCreated {
       connection = { ...base, provider: 'cloudflare', label: 'Cloudflare · officialvanguard.com', last4: (b.read_token ?? '').slice(-4),
         scopes: ['zone_read', 'analytics_read'], meta: { zone_id: b.zone_id, zone_name: 'officialvanguard.com', plan: 'free' } };
       if (b.action_token) action_connection = { ...connection, id: crypto.randomUUID(), kind: 'action', label: `${connection.label} · blindaje`,
-        last4: b.action_token.slice(-4), scopes: ['firewall_read'] };
+        last4: b.action_token.slice(-4), scopes: ['firewall_read'],
+        capabilities: { firewall_read: true, config_rules_edit: conConfigRules(b.action_token) } };
       checks = CHECKS.cloudflare;
       break;
-    case 'github':
+    case 'github': {
+      // Como E8 con B1 (varias-codebases §2.1): mismo repo activo → 409 repo_duplicado; mismo repo no activo → la MISMA
+      // conexión vuelve a active; 5 repos distintos → 409 tope_repos; el mismo token que otra conexión → 409 sin reason.
       guardaFalsa(b.pat ?? '');
-      connection = { ...base, provider: 'github', label: `GitHub · ${b.repo_full_name}`, last4: (b.pat ?? '').slice(-4),
-        scopes: ['metadata:read', 'contents:read'], meta: { repo_full_name: b.repo_full_name, default_branch: 'main' } };
+      const repo = String(b.repo_full_name ?? '');
+      const previas = lecturasGh(org);
+      const mismo = previas.filter((c) => nombreGh(c) === repo.toLowerCase());
+      if (mismo.some((c) => c.status === 'active')) falla(409, 'conflict', 'Ese repo ya está conectado.', { reason: 'repo_duplicado' });
+      if (!mismo.length && new Set(previas.map(nombreGh)).size >= MAX_REPOS_GITHUB)
+        falla(409, 'conflict', `Ya tienes ${MAX_REPOS_GITHUB} repos conectados: quita uno para conectar otro.`, { reason: 'tope_repos' });
+      const reconectar = mismo[0];                                  // la más antigua: es la que tiene los hallazgos
+      const h = huella((b.pat ?? '').trim());
+      const duena = huellasDe(org).get(h);
+      if (duena && duena !== reconectar?.id) falla(409, 'conflict', 'Ese token ya está conectado en esta organización.');
+      if (reconectar) {
+        Object.assign(reconectar, { status: 'active', last4: (b.pat ?? '').slice(-4), last_checked_at: ahora, last_error: null });
+        huellasDe(org).set(h, reconectar.id);
+        return { connection: structuredClone(reconectar), action_connection: null, checks: CHECKS.github, ingest_secret: null };
+      }
+      connection = repo.toLowerCase() === REPO_2.toLowerCase() ? structuredClone(fx.conexionGithub2 as ConnectionPublic)
+        : { ...base, provider: 'github', label: `GitHub · ${repo}`, last4: (b.pat ?? '').slice(-4), scopes: ['metadata:read', 'contents:read'],
+          // La org ya tenía otro repo: los hallazgos de este llevan el repo en la clave (§2.2).
+          meta: { repo_full_name: repo, default_branch: 'main', ...(previas.length ? { hallazgos_por_repo: true } : {}) } };
+      huellasDe(org).set(h, connection.id);
       checks = CHECKS.github;
       break;
+    }
     case 'ingest':
       connection = { ...base, provider: 'ingest', label: b.label ?? 'Mi app', last4: null, scopes: [], meta: { purpose: 'ingest' } };
       ingest_secret = 'vgi_' + crypto.randomUUID().replace(/-/g, '');
@@ -140,8 +199,13 @@ function conectarFalso(org: string, body: unknown): ConnectionCreated {
 function probarFalso(org: string, id: string) {
   const c = listaDe(org).find((x) => x.id === id) ?? falla(404, 'not_found', 'Esa conexión no existe');
   c.last_checked_at = new Date().toISOString();
+  // GitHub kind 'action' es el token de estados del bloqueo de merge: E9 lo sondea leyendo estados, sin escribir. El de
+  // acciones de Cloudflare también dice si su token trae Config Rules · Edit (opcional: sin él solo no hay modo bajo ataque).
+  const config: PermCheck = c.capabilities?.config_rules_edit === false
+    ? { permission: 'config_rules_edit', ok: false, required: false, error_code: 'forbidden' } : { permission: 'config_rules_edit', ok: true, required: false };
   const checks = c.provider === 'ingest' ? [] : c.kind === 'action'
-    ? [{ permission: 'firewall_edit', ok: true, required: true }] : CHECKS[c.provider];
+    ? (c.provider === 'github' ? [{ permission: 'statuses:read', ok: true, required: true }] : [{ permission: 'firewall_edit', ok: true, required: true }, config])
+    : CHECKS[c.provider];
   return { ok: checks.every((k) => k.ok || k.required === false), checks, checked_at: c.last_checked_at };
 }
 
@@ -154,6 +218,14 @@ function quitarFalso(org: string, id: string) {
   const i = lista.findIndex((x) => x.id === id);
   if (i < 0) falla(404, 'not_found', 'Esa conexión no existe');
   const [c] = lista.splice(i, 1);
+  for (const [h, id] of huellasDe(org)) if (id === c!.id) huellasDe(org).delete(h);   // su token se puede volver a usar
+  // Bloqueo de merge (§2.8 y varias §2.6.6): quitar la GitHub de lectura de un repo quita también su token de estados;
+  // quitar el token de estados deja el bloqueo pidiendo otro.
+  if (c!.provider === 'github' && c!.kind === 'read') {
+    const t = lista.findIndex((x) => x.provider === 'github' && x.kind === 'action' && nombreGh(x) === nombreGh(c!));
+    if (t >= 0) { lista.splice(t, 1); sinTokenDeEstados(org); }
+  }
+  if (c!.provider === 'github' && c!.kind === 'action') sinTokenDeEstados(org);
   const url = REVOCAR[c!.provider];
   return new Response(null, { status: 204, headers: url ? { 'x-vg-revoke-url': url } : {} });
 }
@@ -169,7 +241,8 @@ const hallazgosDe = (org: string) => {
   return delOrg(org);
 };
 const hallazgo = (org: string, id: string) => {
-  if (id === fx.hallazgoRevision.id) revisionDe(org);   // ?finding= del WhatsApp puede llegar antes que E45, que lo añade
+  if (id === fx.hallazgoRevision.id) sembrarHallazgoRevision(org);   // ?finding= del WhatsApp puede llegar antes que E45
+  if (fx.hallazgosCorregidos.some((f) => f.id === id)) conCorregidos(org);   // ídem con «Ver» de los cambios y E51
   return hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
 };
 
@@ -207,8 +280,29 @@ const scans = new Map<string, { org: string; inicio: number }>();
 const PROVEEDOR_PASO: Partial<Record<ScanRun['steps'][number]['name'], ConnectionPublic['provider']>> = {
   supabase: 'supabase', cloudflare: 'cloudflare', repo: 'github',
 };
+// Con dos o más repos, E12 trae una línea por repo (ScanRun.repos; varias-codebases §6.5): la del fixture para los dos
+// repos de la demo (scanDoneDosRepos) y, para otro, limpio si su conexión está activa o «Conexión quitada» si no.
+function reposDeAuditoria(org: string): ScanRun['repos'] {
+  const repos = reposGh(org);
+  if (repos.length < 2) return undefined;
+  return repos.slice(0, MAX_REPOS_GITHUB).map((c) => {
+    const delFixture = fx.scanDoneDosRepos.repos.find((x) => x.connection_id === c.id);
+    if (c.status === 'active' && delFixture && !vacia(org)) return delFixture;
+    const repo_full_name = String(c.meta.repo_full_name ?? '').slice(0, 140);
+    return c.status === 'active' ? { connection_id: c.id, repo_full_name, status: 'done' as const, findings: 0 }
+      : { connection_id: c.id, repo_full_name, status: 'skipped' as const, error_code: 'no_connection' };
+  });
+}
+// E5 con B4: con dos o más repos, cada hallazgo de «Ahora» lleva su connection_id (el FRONT pinta el chip del repo).
+function overviewDe(org: string): Overview {
+  if (vacia(org)) return fx.overviewVacio as Overview;
+  if (reposGh(org).length < 2) return fx.overview as Overview;
+  const porId = new Map(hallazgosDe(org).map((f) => [f.id, f.connection_id]));
+  return { ...(fx.overview as Overview), ahora: fx.overview.ahora.map((a) => (a.kind === 'finding' ? { ...a, connection_id: porId.get(a.id) ?? null } : a)) };
+}
 function iniciarScan(org: string, body: unknown) {
   if ((body as { kind?: unknown } | null)?.kind === 'zip') return iniciarZip(org, body);
+  if ((body as { kind?: unknown } | null)?.kind === 'lighthouse') return iniciarMedicion(org, body);
   const id = crypto.randomUUID();
   scans.set(id, { org, inicio: Date.now() });
   return { scan_run_id: id };
@@ -216,9 +310,14 @@ function iniciarScan(org: string, body: unknown) {
 function verScan(org: string, id: string): ScanRun {
   const zip = zips.get(id);
   if (zip?.org === org) return verZip(id, zip);
+  const med = mediciones.get(id);
+  if (med?.org === org) return verMedicion(med.id, med);
   const corrida = scans.get(id);
   if (corrida?.org !== org) {
-    if (!corrida && !vacia(org) && id === fx.scanDone.id) return fx.scanDone as ScanRun;   // scanRunning lleva el mismo id
+    if (!corrida && !vacia(org) && id === fx.scanDone.id) {                                // scanRunning lleva el mismo id
+      const repos = reposDeAuditoria(org);
+      return repos ? { ...(fx.scanDone as ScanRun), repos } : fx.scanDone as ScanRun;
+    }
     return falla(404, 'not_found', 'Esa auditoría no existe');
   }
   const { inicio } = corrida;
@@ -236,11 +335,12 @@ function verScan(org: string, id: string): ScanRun {
   const hecho = t >= 1;
   const actual = steps.find((s) => s.status === 'running')?.name ?? null;
   const puntaje = !sinDemo && t >= (n - 1) / n;
+  const repos = steps.find((s) => s.name === 'repo')?.status === 'done' ? reposDeAuditoria(org) : undefined;
   return {
     ...base, id, kind: 'full_audit', status: hecho ? 'succeeded' : 'running', progress: Math.round(t * 100), step: hecho ? null : actual, steps,
     score: puntaje ? base.score : null, coverage: puntaje ? base.coverage : null, summary: hecho && !sinDemo ? base.summary : null,
     created_at: new Date(inicio).toISOString(), started_at: new Date(inicio).toISOString(),
-    finished_at: hecho ? new Date(inicio + DURACION).toISOString() : null,
+    finished_at: hecho ? new Date(inicio + DURACION).toISOString() : null, ...(repos ? { repos } : {}),
   };
 }
 
@@ -281,7 +381,7 @@ function recibirZip(org: string, id: string, body: unknown) {
   exigirAdmin();
   const c = zips.get(id);
   if (c?.org !== org) {
-    const deEstaOrg = scans.get(id)?.org === org || (!scans.has(id) && !vacia(org) && id === fx.scanDone.id);
+    const deEstaOrg = scans.get(id)?.org === org || mediciones.get(id)?.org === org || (!scans.has(id) && !vacia(org) && id === fx.scanDone.id);
     return deEstaOrg ? falla(409, 'conflict', 'Esta auditoría no es de un ZIP') : falla(404, 'not_found', 'Esa auditoría no existe');
   }
   if (c.empezo !== null || c.fallo !== null || c.requested_by !== me().user.id || Date.now() - c.creado > EN_CURSO_MS)
@@ -334,6 +434,93 @@ function volcarZip(id: string, c: CorridaZip) {
       origin: 'rule', has_fix_prompt: false, fix_model: null, status: 'open', status_reason: null, suspected_injection: false,
       connection_id: null, first_seen_at: en, verified_at: null });
   }
+}
+
+// ── «Medir ahora» (E11 con kind 'lighthouse', F-17) ──────────────────────────────────────────────────────────
+// Como el BACK (rutas/scans.ts y scans/psi.ts): solo admin; la URL pasa por urlMedible (https de internet, sin IPs, hosts
+// locales, credenciales, puertos, secretos ni hosts de VanGUARD, salvo la víctima de la demo desde la org de demo; sin
+// zona de Cloudflare) → 422 invalid_body con reason y field_errors.url; 409 con scan_run_id si hay otra en curso; tope
+// diario 10 (la demo 20) → 429 budget_exceeded. Un único paso psi (8 s; en producción ~10 s) y, al terminar, UNA fila
+// nueva en perf/runs (rep 1, run_group = el id del scan) con las cifras de la última medición de esa URL y estrategia.
+type CorridaPerf = { id: string; org: string; inicio: number; url: string; strategy: 'mobile' | 'desktop'; version_label: string | null; volcada: boolean };
+const mediciones = new Map<string, CorridaPerf>();
+const perfNuevas = new Map<string, PerfRunExt[]>();             // org → mediciones de esta pestaña (más nuevas primero)
+const perfHoy = new Map<string, number>();                     // `${org}|${día en Caracas}` → mediciones creadas
+const DURACION_PERF = 8_000;
+const perfDe = (org: string) => [...(perfNuevas.get(org) ?? []), ...(vacia(org) ? [] : fx.perfRuns as PerfRunExt[])];
+
+// Copia de urlMedible/urlMedibleOrg (scans/psi.ts): mismos motivos y mensajes. PARECE_SECRETO, el de scans/comun.ts.
+const HOSTS_VANGUARD = ['officialvanguard.com', 'giovannizm14.workers.dev', 'accshmgmfrqrxubpuxcl.supabase.co'];
+const HOST_VICTIMA_DEMO = 'demo.officialvanguard.com';
+const INTERNOS = ['localhost', 'local', 'internal', 'lan', 'arpa', 'test', 'invalid', 'example', 'onion'];
+const ETIQUETA_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const URL_BD = /^https:\/\/[a-z0-9.-]+(\/[^?#\s]*)?$/;
+const PARECE_SECRETO = /(sb_secret_[A-Za-z0-9_-]{16,}|sbp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|vg[iks]_[A-Za-z0-9_-]{20,}|cf(k|ut|at)_[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.)/;
+function urlMedible(org: string, raw: string): string {
+  const no = (motivo: string, mensaje: string): never => falla(422, 'invalid_body', mensaje, { reason: motivo, field_errors: { url: [mensaje] } });
+  if (raw.length > 2048) no('largo', 'La URL es demasiado larga (máximo 2048 caracteres)');
+  let u: URL | null = null;
+  try { u = new URL(raw); } catch { /* abajo */ }
+  if (!u) return no('url', 'No es una URL válida');
+  if (u.protocol !== 'https:') no('https', 'Solo medimos URLs https://');
+  if (u.username || u.password) no('credenciales', 'Quita el usuario y la contraseña de la URL');
+  if (u.port) no('puerto', 'Solo medimos el puerto estándar de https (443)');
+  const h = u.hostname.toLowerCase().replace(/\.$/, '');
+  if (h.startsWith('[') || /^\d+(\.\d+){3}$/.test(h)) no('ip', 'No medimos direcciones IP: usa el dominio del sitio');
+  if (INTERNOS.some((x) => h === x || h.endsWith(`.${x}`))) no('interno', 'No medimos hosts locales ni de red interna');
+  const etiquetas = h.split('.');
+  if (etiquetas.length < 2 || !etiquetas.every((e) => ETIQUETA_HOST.test(e))) no('host', 'Usa un dominio público, como tusitio.com');
+  if (!(h === HOST_VICTIMA_DEMO && esDemo(org)) && HOSTS_VANGUARD.some((x) => h === x || h.endsWith(`.${x}`))) {
+    no('propio', 'Esa URL es de VanGUARD: mide la de tu sitio');
+  }
+  const limpia = `https://${h}${u.pathname || '/'}`;
+  if (!URL_BD.test(limpia)) no('url', 'No es una URL válida');
+  if (PARECE_SECRETO.test(limpia)) no('secreto', 'La URL parece llevar un secreto: quítalo antes de medir');
+  return limpia;
+}
+
+// Mismo orden que E11: admin, cuerpo, URL, 409 de la que está en curso y tope diario.
+function iniciarMedicion(org: string, body: unknown) {
+  exigirAdmin();
+  const r = ScanCreate.safeParse(body);
+  if (!r.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(r.error));
+  const b = r.data as Extract<ScanCreate, { kind: 'lighthouse' }>;
+  const url = urlMedible(org, b.url);
+  const enCurso = [...mediciones.values()].find((m) => m.org === org && Date.now() - m.inicio < DURACION_PERF);
+  if (enCurso) falla(409, 'conflict', 'Ya hay una medición de rendimiento en curso: espera a que termine', { scan_run_id: enCurso.id });
+  const clave = `${org}|${diaCaracas()}`;
+  const tope = esDemo(org) ? 20 : 10;
+  if ((perfHoy.get(clave) ?? 0) >= tope) falla(429, 'budget_exceeded', `Ya hiciste ${tope} mediciones de rendimiento hoy, el máximo diario. Vuelve mañana.`);
+  perfHoy.set(clave, (perfHoy.get(clave) ?? 0) + 1);
+  const id = crypto.randomUUID();
+  mediciones.set(id, { id, org, inicio: Date.now(), url, strategy: b.strategy, version_label: b.version_label ?? null, volcada: false });
+  return { scan_run_id: id };
+}
+
+function verMedicion(id: string, m: CorridaPerf): ScanRun {
+  volcarMedicion(m);
+  const t = Math.min(1, (Date.now() - m.inicio) / DURACION_PERF);
+  const hecho = t >= 1;
+  const fecha = (ms: number) => new Date(ms).toISOString();
+  return {
+    id, kind: 'lighthouse', status: hecho ? 'succeeded' : 'running', progress: Math.round(t * 100),
+    step: hecho ? null : 'psi',                                   // vg_claim_step deja 'psi' toda la medición
+    steps: [{ name: 'psi', status: hecho ? 'done' : 'running' }], score: null, coverage: null, summary: null, error: null,
+    created_at: fecha(m.inicio), started_at: fecha(m.inicio), finished_at: hecho ? fecha(m.inicio + DURACION_PERF) : null,
+  };
+}
+
+function volcarMedicion(m: CorridaPerf) {
+  if (m.volcada || Date.now() - m.inicio < DURACION_PERF) return;
+  m.volcada = true;
+  const previa = perfDe(m.org).find((r) => r.url === m.url && r.strategy === m.strategy);
+  const base = previa ?? { scores: { performance: 0.9 }, metrics: { lcp_ms: 1800, tbt_ms: 120, cls: 0.02, fcp_ms: 900, si_ms: 1500, ttfb_ms: 130 } };
+  const fila: PerfRunExt = {
+    id: crypto.randomUUID(), url: m.url, strategy: m.strategy, source: 'psi', lighthouse_version: '13.5.0',
+    run_group: m.id, rep: 1, is_representative: true, trigger: 'manual', version_label: m.version_label, runtime_error: null,
+    scores: { ...base.scores }, metrics: { ...base.metrics }, created_at: new Date(m.inicio + DURACION_PERF).toISOString(),
+  };
+  perfNuevas.set(m.org, [fila, ...(perfNuevas.get(m.org) ?? [])]);
 }
 
 // ── Incidentes (S14 §14.19) ──────────────────────────────────────────────────────────────────────────────────
@@ -408,8 +595,9 @@ function muteFalso(org: string, id: string) {
   return { ok: true, resultado: 'Silenciado 1 h', en: iso(Date.now()) };
 }
 
-// Aprobaciones pendientes: approval_id → incidente, IP e intentos. Código válido en fixtures: 123456.
-const aprobaciones = new Map<string, { org: string; incident_id: string; target: string; intentos: number; vence: number; usada: boolean }>();
+// Aprobaciones pendientes: approval_id → incidente, objetivo (IP o host), tipo e intentos. Código válido en fixtures: 123456.
+type Aprobacion = { org: string; incident_id: string; target: string; kind: 'block_ip' | 'under_attack_on'; intentos: number; vence: number; usada: boolean };
+const aprobaciones = new Map<string, Aprobacion>();
 function proponerFalso(org: string, body: unknown) {
   const b = (body ?? {}) as { incident_id?: string; target?: string };
   const i = incidente(org, b.incident_id ?? '');
@@ -417,7 +605,7 @@ function proponerFalso(org: string, body: unknown) {
   if (!/^[\d.]+$|^[\da-f:]+$/i.test(ip)) falla(422, 'invalid_body', 'Solo bloqueamos una IP suelta (/32 o /128)', { reason: 'not_an_ip' });
   const approval_id = crypto.randomUUID();
   const vence = Date.now() + 600_000;          // el fixture trae una expires_at fija (sábado): se recalcula aquí (A9)
-  aprobaciones.set(approval_id, { org, incident_id: i.id, target: ip, intentos: 3, vence, usada: false });
+  aprobaciones.set(approval_id, { org, incident_id: i.id, target: ip, kind: 'block_ip', intentos: 3, vence, usada: false });
   marca(i, 'action_proposed', `Propuesto bloquear ${ip}`);
   return { ...fx.actionProposal, approval_id, efecto: `Bloquear ${ip} (/32) en la zona officialvanguard.com durante 1 h`, expires_at: iso(vence) };
 }
@@ -443,6 +631,10 @@ function confirmarFalso(org: string, approvalId: string, body: unknown) {
     return falla(422, 'invalid_body', 'Código incorrecto', { reason: 'wrong_code', attempts_left: a.intentos });   // misma forma que E21 (H9)
   }
   a.usada = true;
+  if (a.kind === 'under_attack_on') {
+    const accion = ejecutarBajoAtaque(org, a.incident_id, a.target, approvalId);
+    return { ok: true, resultado: `Modo bajo ataque activo ${TTL_BAJO_ATAQUE / 60_000} min en ${a.target}`, en: accion.created_at, action_id: accion.id };
+  }
   const accion = ejecutarBloqueo(org, a.incident_id, a.target, approvalId);
   return { ok: true, resultado: 'IP bloqueada 1 h', en: accion.created_at, action_id: accion.id };
 }
@@ -450,13 +642,88 @@ function deshacerFalso(org: string, actionId: string) {
   for (const i of incidentesDe(org)) {
     const a = i.actions.find((x) => x.id === actionId);
     if (!a) continue;
-    if (a.status === 'undone') falla(409, 'conflict', 'Ese bloqueo ya se deshizo', { reason: 'already_undone' });
+    const bajo = a.kind === 'under_attack_on';
+    if (a.status === 'undone') falla(409, 'conflict', bajo ? 'El modo bajo ataque ya se desactivó' : 'Ese bloqueo ya se deshizo', { reason: 'already_undone' });
     a.status = 'undone'; a.undone_at = iso(Date.now());
-    i.status = i.acked_at ? 'ack' : 'open'; i.mitigated_at = null;
-    marca(i, 'action_undone', `IP ${a.target} desbloqueada`);
-    return { ok: true, resultado: 'Desbloqueada', en: a.undone_at };
+    // Sigue mitigado si queda otra acción viva (un bloqueo y el modo bajo ataque a la vez).
+    if (!i.actions.some((x) => x.status === 'executed')) { i.status = i.acked_at ? 'ack' : 'open'; i.mitigated_at = null; }
+    marca(i, 'action_undone', bajo ? `Modo bajo ataque desactivado en ${a.target}` : `IP ${a.target} desbloqueada`);
+    return { ok: true, resultado: bajo ? 'Modo bajo ataque desactivado' : 'Desbloqueada', en: a.undone_at };
   }
   return falla(404, 'not_found', 'Esa acción no existe');
+}
+
+// ── Modo bajo ataque (E55 y E56; confirmar y deshacer, E21 y E22 de arriba; asignaciones/modo-bajo-ataque.md §9) ──
+// La demo trae dos IPs inundando demo.officialvanguard.com (fx.underAttackOffer). Como leerOfertaBajoAtaque del BACK: sin
+// CF_IP_FLOOD no aplica, resuelto está cerrado, sin host no hay nada; con la regla de acuerdo (ofrece sigue true), sin Modo
+// blindaje es sin_conexion y con un token al que la sonda le vio el 403 de Config Rules, sin_permiso, los dos con `copiar`.
+// El modo vivo es del host, así que se busca en toda la org.
+const APPROVAL_BAJO_ATAQUE = fx.underAttackProposal.approval_id;
+const ACTION_BAJO_ATAQUE = 'ac000000-0000-4000-8000-000000000001';   // el de fixtures/ids.ts (el paquete no exporta los ids)
+const TTL_BAJO_ATAQUE = fx.underAttackOffer.ttl_s * 1000;
+const blindajeDe = (org: string) => listaDe(org).find((c) => c.provider === 'cloudflare' && c.kind === 'action' && c.status === 'active');
+
+// pasosManualesBajoAtaque de core (que la web no puede importar): el mismo texto que fx.underAttackOfferSinPermiso.copiar.
+function pasosManuales(host: string, zona: string | null): string {
+  return [
+    zona ? `Para activarlo a mano en Cloudflare (zona ${zona}):` : 'Para activarlo a mano en Cloudflare:',
+    '1. Rules → Configuration Rules → Create rule.',
+    `2. If incoming requests match: Hostname · equals · ${host}.`,
+    '3. Then the settings are: I\'m Under Attack → On. Deploy.',
+    '4. Cuando pase el ataque, borra la regla.',
+    'Para hacerlo desde VanGUARD: añade Zone · Config Rules · Edit al token de Modo blindaje y pulsa «Probar conexión».',
+  ].join('\n').slice(0, 1500);
+}
+function activoBajoAtaque(org: string, host: string): UnderAttackActivo | null {
+  for (const i of incidentesDe(org)) {
+    const a = i.actions.find((x) => x.kind === 'under_attack_on' && x.status === 'executed' && x.target === host);
+    if (a) return { action_id: a.id, scope: 'host', target: a.target, created_at: a.created_at, expires_at: a.expires_at, retirada_fallida: false };
+  }
+  return null;
+}
+function ofertaBajoAtaque(org: string, id: string): UnderAttackOffer {
+  const i = incidente(org, id);
+  const host = typeof i.details.host === 'string' && i.details.host ? i.details.host : null;
+  const c = blindajeDe(org);
+  const zona = typeof c?.meta.zone_name === 'string' ? c.meta.zone_name : null;
+  const cap = c?.capabilities.config_rules_edit;
+  const permiso = !c ? null : cap === true ? 'ok' : cap === false ? 'falta' : 'sin_probar';
+  const base: UnderAttackOffer = { ...fx.underAttackOffer, hostname: host, zone_name: zona, connection_id: c?.id ?? null, permiso,
+    activo: host ? activoBajoAtaque(org, host) : null };
+  const no = (motivo: UnderAttackMotivo, extra: Partial<UnderAttackOffer> = {}): UnderAttackOffer => ({ ...base, ofrece: false, motivo, scopes: [], ...extra });
+  // El orden de ofreceBajoAtaque de core: resuelto da cerrado aunque no haya host (y sin host, ips 0, como el BACK).
+  if (!i.rule_ids.includes('CF_IP_FLOOD')) return no('no_aplica', { ips: 0 });
+  if (i.status === 'resolved') return no('cerrado', host ? {} : { ips: 0 });
+  if (!host) return no('sin_host', { ips: 0 });
+  if (!c) return { ...base, motivo: 'sin_conexion', scopes: [], copiar: pasosManuales(host, null) };
+  if (permiso === 'falta') return { ...base, motivo: 'sin_permiso', scopes: [], copiar: pasosManuales(host, zona) };
+  return base;
+}
+function proponerBajoAtaque(org: string, id: string): UnderAttackProposal {
+  exigirAdmin();
+  const o = ofertaBajoAtaque(org, id);
+  if (o.activo) return falla(409, 'conflict', `El modo bajo ataque ya está activo en ${o.activo.target}`, { reason: 'already_active', action_id: o.activo.action_id });
+  if (o.motivo === 'sin_conexion') return falla(409, 'conflict', 'Activa el Modo blindaje con un token de acciones', { reason: 'no_action_connection' });
+  // El dry_run de E56 con ese token daría el 403: el mismo 409 con los pasos para hacerlo a mano.
+  if (o.motivo === 'sin_permiso') return falla(409, 'conflict', 'Te falta el permiso Zone · Config Rules · Edit en el token de Modo blindaje',
+    { reason: 'sin_permiso', ...(o.copiar ? { copiar: o.copiar } : {}) });
+  if (o.motivo === 'cerrado') return falla(409, 'conflict', 'El incidente ya se cerró', { reason: 'resolved' });
+  if (o.motivo || !o.hostname) return falla(422, 'invalid_body', 'El modo bajo ataque es solo para inundaciones de tráfico', { reason: o.motivo ?? 'sin_host' });
+  const vence = Date.now() + 600_000;          // como en el bloqueo: la expires_at del fixture es fija
+  aprobaciones.set(APPROVAL_BAJO_ATAQUE, { org, incident_id: id, target: o.hostname, kind: 'under_attack_on', intentos: 3, vence, usada: false });
+  marca(incidente(org, id), 'action_proposed', `Propuesto el modo bajo ataque en ${o.hostname}`);
+  return { ...fx.underAttackProposal, expires_at: iso(vence) };
+}
+function ejecutarBajoAtaque(org: string, incident_id: string, target: string, approval_id: string) {
+  const i = incidente(org, incident_id);
+  const ahora = Date.now();
+  const usado = incidentesDe(org).some((x) => x.actions.some((a) => a.id === ACTION_BAJO_ATAQUE));   // reactivarlo: id nuevo
+  const accion: ActionPublic = { id: usado ? crypto.randomUUID() : ACTION_BAJO_ATAQUE, kind: 'under_attack_on', target, status: 'executed',
+    created_at: iso(ahora), undone_at: null, expires_at: iso(ahora + TTL_BAJO_ATAQUE), approval_id };
+  i.actions.push(accion);
+  i.status = 'mitigated'; i.mitigated_at ??= iso(ahora);
+  marca(i, 'action_executed', `Modo bajo ataque activo en ${target}`);
+  return accion;
 }
 
 // Botones que solo existen en modo fixtures (S14 §14.19): ensayar el tramo de incidentes del guion sin BACK.
@@ -541,31 +808,186 @@ function exigirAdmin() { if (tipoSesionFalsa() === 'anonima') falla(403, 'forbid
 // Revisión de código (E45/E46, asignaciones/revision-codigo.md §4.1 y §6.3). La org de demo arranca con el fixture
 // (webhook conectado y el push con la clave de Stripe); una org sin GitHub, con available:false. Tras activar, la 3.ª
 // consulta simula el ping de GitHub («Esperando a GitHub» → «Conectada»), como «VERIFICAR» en contactos.
+// Varias codebases (§6.5): un estado por conexión (`${org}:${connection_id}`). En la demo, el del repo de la víctima es el
+// fixture y el del 2.º repo, codeReviewStateRepo2 (sin activar); cualquier otra conexión GitHub empieza sin config.
 const revisiones = new Map<string, { estado: CodeReviewState; consultas: number; altaVista?: boolean }>();
-const revisionDe = (org: string) => {
-  if (!revisiones.has(org)) {
+function sembrarHallazgoRevision(org: string) {
+  if (!vacia(org) && !delOrg(org).some((f) => f.id === fx.hallazgoRevision.id)) delOrg(org).push(structuredClone(fx.hallazgoRevision as Finding));
+}
+const CONN_REVISION = fx.codeReviewState.config.connection_id;
+function revisionDe(org: string, gh: ConnectionPublic) {
+  sembrarHallazgoRevision(org);
+  const k = `${org}:${gh.id}`;
+  if (!revisiones.has(k)) {
     const demo = !vacia(org);
-    if (demo && !delOrg(org).some((f) => f.id === fx.hallazgoRevision.id)) delOrg(org).push(structuredClone(fx.hallazgoRevision as Finding));
-    revisiones.set(org, { consultas: 0, estado: demo ? structuredClone(fx.codeReviewState as CodeReviewState) : { available: false, reason: 'sin_conexion', config: null, recent: [] } });
+    const estado = demo && gh.id === CONN_REVISION ? estadoBloqueoDemo() : demo && gh.id === fx.conexionGithub2.id ? fx.codeReviewStateRepo2
+      : { available: true, reason: null, config: null, recent: [] };
+    revisiones.set(k, { consultas: 0, estado: structuredClone(estado as CodeReviewState) });
   }
-  return revisiones.get(org)!;
-};
-const githubDe = (org: string) => listaDe(org).find((c) => c.provider === 'github' && c.kind === 'read');
+  return revisiones.get(k)!;
+}
+
+// ── Bloqueo de merge con críticos (E45 con gate, E53, E54; bloqueo-merge-criticos.md §6.5) ──────────────────────────
+// La demo arranca con codeReviewStateBloqueo (gate `unchecked`, el PR #7 con ✗). El anexo de cierre de PR va aquí: el
+// contrato lo trae opcional y sus fixtures no lo usan; el token de la demo tiene permiso de pull requests y el PR #7 quedó
+// cerrado por VanGUARD. La conexión de estados no está en `connections` hasta guardar un token con E53 (como el fixture).
+function estadoBloqueoDemo(): CodeReviewState {
+  const s = structuredClone(fx.codeReviewStateBloqueo as CodeReviewState);
+  if (s.config?.gate) Object.assign(s.config.gate, { close_pr: true, can_close_pr: true });
+  for (const r of s.recent) if (r.gate && r.event === 'pull_request' && r.gate.state === 'failure') Object.assign(r.gate, { pr_action: 'closed', pr_close_error: null });
+  return s;
+}
+const GATE_APAGADO = { enabled: false, min_severity: 'critical', state: 'off', context: GATE_CONTEXT, statuses_connection: null,
+  protection: null, last_error: null, close_pr: false, can_close_pr: false } satisfies MergeGateConfig;
+const estadosGh = (org: string) => listaDe(org).find((c) => c.provider === 'github' && c.kind === 'action');
+// El repo del bloqueo (varias §2.6, punto 3): el del token de estados si lo hay; si no, el principal. Solo su config
+// trae `gate` en E45; en las demás pestañas no viene y el FRONT no pinta la sección.
+function repoBloqueo(org: string): ConnectionPublic | undefined {
+  const t = estadosGh(org);
+  return t ? lecturasGh(org).find((c) => nombreGh(c) === nombreGh(t)) : githubDe(org);
+}
+// Como E45: `off` con la revisión o el bloqueo apagados; `needs_token` sin token activo; `error` con last_error; con la
+// protección leída (P1), `active` si GitHub exige el check y `needs_protection` si no; si no, `unchecked`.
+function estadoGate(cfg: CodeReviewConfig, g: MergeGateConfig): MergeGateConfig['state'] {
+  if (!cfg.enabled || !g.enabled) return 'off';
+  if (g.statuses_connection?.status !== 'active') return 'needs_token';
+  if (g.last_error) return 'error';
+  const r = g.protection?.required;
+  return r === 'yes' ? 'active' : r === 'no' || r === 'other_source' ? 'needs_protection' : 'unchecked';
+}
+// La config tal como la ve el FRONT: con `gate` solo en el repo del bloqueo (sembrado apagado la primera vez).
+function vistaConfig(org: string, gh: ConnectionPublic, cfg: CodeReviewConfig | null): CodeReviewConfig | null {
+  if (!cfg) return null;
+  const copia = structuredClone(cfg);
+  if (gh.id !== repoBloqueo(org)?.id) { delete copia.gate; return copia; }
+  cfg.gate ??= structuredClone(GATE_APAGADO);
+  copia.gate = { ...structuredClone(cfg.gate), state: estadoGate(cfg, cfg.gate) };
+  return copia;
+}
+function sinTokenDeEstados(org: string) {
+  for (const [k, v] of revisiones) if (k.startsWith(`${org}:`) && v.estado.config?.gate) v.estado.config.gate.statuses_connection = null;
+}
+const REPOS_DEL_PRODUCTO = new Set(['platanus-hack/platanus-hack-26-ve-team-22', 'giova144-git/vanguard']);
+const shaFalso = () => [...crypto.getRandomValues(new Uint8Array(20))].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+// E53. Con statuses_pat: guarda prefijo (github_pat_), mismo token que el de lectura, permisos de más (en fixtures, un
+// token que contenga «admin» o «contents», para ensayar el 422) y alta o rotación de la MISMA conexión de estados. La
+// prueba de la demo cae en el push de las 19:20Z con la clave: ✗ (mergeGateSaved); en otra org, «pendiente».
+function guardarBloqueo(org: string, body: unknown): MergeGateSaved {
+  exigirAdmin();
+  const b = MergeGatePut.safeParse(body);
+  if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
+  const { enabled, min_severity, statuses_pat, close_pr } = b.data;
+  const gh = repoBloqueo(org) ?? falla(404, 'not_found', 'Conecta primero tu repo de GitHub');
+  if (gh.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
+  const cfg = revisionDe(org, gh).estado.config;
+  if (!cfg?.enabled) return falla(409, 'conflict', 'Activa primero “Revisar cada push”', { reason: 'sin_revision' });
+  if (enabled && REPOS_DEL_PRODUCTO.has(nombreGh(gh)))
+    falla(409, 'conflict', 'No actives el bloqueo en el repo desde el que se despliega VanGUARD: si VanGUARD falla, no podrías fusionar su propio arreglo', { reason: 'repo_del_producto' });
+  const g = (cfg.gate ??= structuredClone(GATE_APAGADO));
+  let checks: PermCheck[] = [], probe_sha: string | null = null, probe_state: MergeGateSaved['probe_state'] = null;
+  if (statuses_pat !== undefined) {
+    const t = statuses_pat.trim();
+    guardaFalsa(t);
+    if (!t.startsWith('github_pat_')) falla(400, 'invalid_body', 'Usa un token fine-grained (github_pat_…)', { field_errors: { statuses_pat: ['Debe empezar por github_pat_'] } });
+    const duena = huellasDe(org).get(huella(t));
+    if (duena && lecturasGh(org).some((c) => c.id === duena)) falla(422, 'key_rejected', 'Usa un token nuevo, solo con Commit statuses', { reason: 'same_token' });
+    if (/admin|contents/i.test(t))
+      falla(422, 'key_rejected', 'Ese token tiene permisos de más (Contents, Administration). Crea uno con solo Commit statuses: Read and write', { reason: 'excess_scope', excess_permissions: ['contents', 'administration'] });
+    const ahora = new Date().toISOString(), expira = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    let est = estadosGh(org);
+    if (est) Object.assign(est, { status: 'active', last4: t.slice(-4), expires_at: expira, last_checked_at: ahora, last_error: null });
+    else {
+      est = { id: esDemo(org) ? fx.mergeGateSaved.gate.statuses_connection.id : crypto.randomUUID(), provider: 'github', kind: 'action',
+        label: `GitHub · estados · ${nombreRepoGh(gh)}`.slice(0, 80), status: 'active', last4: t.slice(-4), scopes: ['statuses:write', 'pull_requests:write'],
+        meta: { repo_full_name: gh.meta.repo_full_name, repo_id: gh.meta.repo_id, branch: cfg.branch, purpose: 'commit_statuses' },
+        capabilities: { statuses: true, pull_requests: true }, expires_at: expira, last_checked_at: ahora, last_error: null };
+      listaDe(org).push(est);
+    }
+    huellasDe(org).set(huella(t), est.id);
+    if (!g.can_close_pr) g.close_pr = true;            // encendido por defecto cuando el token llega con el permiso
+    Object.assign(g, { statuses_connection: { id: est.id, status: 'active', last4: est.last4, expires_at: expira }, last_error: null, can_close_pr: true });
+    checks = [{ permission: 'statuses:write', ok: true, required: true }, { permission: 'pull_requests:write', ok: true, required: false }];
+    probe_sha = esDemo(org) ? fx.mergeGateSaved.probe_sha : shaFalso();
+    probe_state = esDemo(org) ? fx.mergeGateSaved.probe_state : 'pending';
+  }
+  Object.assign(g, { enabled, min_severity });
+  if (close_pr !== undefined) g.close_pr = close_pr && g.can_close_pr !== false;
+  // P1 (§6.5): sin token y encendido, E53 relee la protección («Comprobar de nuevo»). En fixtures, la de §9: GitHub exige
+  // «VanGUARD», los admins pueden saltárselo (demo sin «Do not allow bypassing») y la regla clásica no deja ver si exige PR.
+  if (statuses_pat === undefined && enabled && g.statuses_connection?.status === 'active')
+    g.protection = { required: 'yes', admins: 'bypass', pr_required: 'unknown', checked_at: new Date().toISOString() };
+  return { gate: vistaConfig(org, gh, cfg)!.gate!, checks, probe_sha, probe_state };
+}
+const nombreRepoGh = (c: ConnectionPublic) => String(c.meta.repo_full_name ?? '');
+
+// E54 (§6.5): override → ✓ «Aprobado a mano» al momento (el BACK lo encola); revert → vuelve el ✗ (o el error de una
+// revisión incompleta); reopen_pr → el PR queda «reabierto»; republish (P1) → publica lo que ya se sabe de la revisión,
+// solo en la más reciente de ese PR (o de ese commit en un push).
+function accionBloqueo(org: string, id: string, body: unknown): RespuestaEscritura {
+  exigirAdmin();
+  const b = MergeGateAction.safeParse(body);
+  if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
+  let r: CodeReview | undefined, cfg: CodeReviewConfig | null = null, recientes: CodeReview[] = [];
+  for (const [k, v] of revisiones) {
+    if (!k.startsWith(`${org}:`)) continue;
+    r = v.estado.recent.find((x) => x.id === id);
+    if (r) { cfg = v.estado.config; recientes = v.estado.recent; break; }
+  }
+  if (!r) return falla(404, 'not_found', 'Esa revisión no existe');
+  if (!cfg?.enabled || !cfg.gate?.enabled) falla(409, 'conflict', 'El bloqueo está apagado', { reason: 'apagado' });
+  const g = r.gate, ahora = new Date().toISOString();
+  switch (b.data.op) {
+    case 'override':
+      if (!g || g.override_at || (g.state !== 'failure' && g.state !== 'error')) falla(409, 'conflict', 'Esta revisión no tiene nada que aprobar', { reason: 'nada_que_aprobar' });
+      Object.assign(g!, { override_at: ahora, state: 'success', published_at: ahora });
+      break;
+    case 'revert':
+      if (!g?.override_at) falla(409, 'conflict', 'No había ninguna aprobación que deshacer', { reason: 'sin_override' });
+      Object.assign(g!, { override_at: null, state: (g!.blocking ?? 0) > 0 ? 'failure' : 'error', published_at: ahora });
+      break;
+    case 'reopen_pr':
+      if (g?.pr_action !== 'closed') falla(409, 'conflict', 'Ese pull request no está cerrado por VanGUARD', { reason: 'no_cerrado' });
+      g!.pr_action = 'reopened';
+      break;
+    case 'republish': {
+      // recent va de la más nueva a la más vieja: la primera del mismo PR (o del mismo commit) es la última.
+      const ultima = recientes.find((x) => (r!.event === 'pull_request' ? x.event === 'pull_request' && x.pr_number === r!.pr_number : x.head_sha === r!.head_sha));
+      if (ultima?.id !== r.id) falla(409, 'conflict', 'Solo se publica de nuevo la revisión más reciente de ese PR o de ese commit', { reason: 'no_es_la_ultima' });
+      if (!g) return falla(409, 'conflict', 'Esta revisión es de antes del bloqueo', { reason: 'sin_calculo' });
+      const incompleta = r.status === 'failed' || (r.partial && r.error_code !== 'hallazgos_truncados');
+      Object.assign(g, { state: g.override_at ? 'success' : (g.blocking ?? 0) > 0 ? 'failure' : incompleta ? 'error' : 'success', error: null, published_at: ahora });
+      break;
+    }
+  }
+  return { ok: true, resultado: 'encolado' };
+}
+// Sin connection_id, la principal (B0): la activa más antigua; si ninguna está activa, la más antigua. Con él, esa
+// conexión GitHub de lectura de la org en cualquier estado (ajena o inexistente → undefined).
+const githubDe = (org: string, id?: string) => id === undefined
+  ? lecturasGh(org).find((c) => c.status === 'active') ?? lecturasGh(org)[0]
+  : lecturasGh(org).find((c) => c.id === id);
 // 'vgw_' + 32 bytes de getRandomValues en base64url sin relleno = 43 caracteres (CodeReviewSaved; §6.3).
 const secretoWebhook = () => 'vgw_' + btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-function verRevision(org: string): CodeReviewState {
-  const r = revisionDe(org);
-  const gh = githubDe(org);
+function verRevision(org: string, q: URLSearchParams): CodeReviewState {
+  const p = CodeReviewQuery.safeParse({ connection_id: q.get('connection_id') || undefined });
+  if (!p.success) return falla(422, 'invalid_body', 'Revisa la conexión', { field_errors: { connection_id: ['Id no válido'] } });
+  const gh = githubDe(org, p.data.connection_id);
+  if (!gh) return { available: false, reason: 'sin_conexion', config: null, recent: [] };
+  const r = revisionDe(org, gh);
   // La conexión puede cambiar en Conexiones: available y reason se recalculan siempre.
-  r.estado.available = gh?.status === 'active';
-  r.estado.reason = !gh ? 'sin_conexion' : gh.status !== 'active' ? 'conexion_inactiva' : null;
+  r.estado.available = gh.status === 'active';
+  r.estado.reason = gh.status !== 'active' ? 'conexion_inactiva' : null;
   const c = r.estado.config;
   if (c?.enabled && c.state === 'waiting_ping' && ++r.consultas >= 3) {
     Object.assign(c, { state: 'connected', last_ping_at: new Date().toISOString(), hook_events: ['pull_request', 'push'] });
   }
-  const copia = structuredClone(r.estado);
+  const copia = { ...structuredClone(r.estado), config: vistaConfig(org, gh, r.estado.config) };
   if (copia.config && tipoSesionFalsa() === 'anonima') copia.config.webhook_url = null;   // la URL solo la ve un admin
+  // Evolución (§6.5): cada revisión con su foto de Codebase, también sobre codeReviewStateBloqueo. El PR #7 y cualquier
+  // revisión que no esté en deltasRevision salen con delta null, como un BACK con 0015 sin foto.
+  for (const x of copia.recent) x.delta = structuredClone(deMapa<string, CodeReview['delta']>(fx.deltasRevision, x.id, null));
   return copia;
 }
 function guardarRevision(org: string, body: unknown): CodeReviewSaved {
@@ -573,10 +995,9 @@ function guardarRevision(org: string, body: unknown): CodeReviewSaved {
   const b = CodeReviewPut.safeParse(body);
   if (!b.success) falla(422, 'invalid_body', 'Revisa los campos marcados');
   const { connection_id, enabled, rotate_secret } = b.data!;
-  const gh = githubDe(org);
-  if (!gh || gh.id !== connection_id) falla(404, 'not_found', 'Esa conexión no existe');
-  if (gh!.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
-  const r = revisionDe(org);
+  const gh = githubDe(org, connection_id) ?? falla(404, 'not_found', 'Esa conexión no existe');
+  if (gh.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
+  const r = revisionDe(org, gh);
   r.consultas = 0;
   let secreto: string | null = null;
   if (rotate_secret && r.estado.config) {
@@ -589,12 +1010,12 @@ function guardarRevision(org: string, body: unknown): CodeReviewSaved {
   } else if (!r.estado.config) {
     secreto = secretoWebhook();
     const id = crypto.randomUUID();
-    const meta = gh!.meta as { repo_full_name?: unknown; default_branch?: unknown };
+    const meta = gh.meta as { repo_full_name?: unknown; default_branch?: unknown };
     r.estado.config = { id, connection_id, repo_full_name: typeof meta.repo_full_name === 'string' ? meta.repo_full_name : 'equipo/repo',
       branch: typeof meta.default_branch === 'string' ? meta.default_branch : 'main', enabled, state: enabled ? 'waiting_ping' : 'off',
       webhook_url: `https://officialvanguard.com/webhooks/github/${id}`, secret_last4: secreto.slice(-4), hook_events: [],
       last_ping_at: null, last_event_at: null, last_error: null };
-  } else if (enabled && esDemo(org) && !r.altaVista) {
+  } else if (enabled && esDemo(org) && gh.id === CONN_REVISION && !r.altaVista) {
     // La demo arranca con la config hecha: la primera vez que se activa desde aquí hace de alta (codeReviewSaved, §6.3)
     // para que se vean el secreto de una vez y «Esperando a GitHub» → «Conectada». El BACK real solo da el secreto al crear.
     r.altaVista = true;
@@ -605,7 +1026,7 @@ function guardarRevision(org: string, body: unknown): CodeReviewSaved {
     c.enabled = enabled;
     c.state = !enabled ? 'off' : c.last_ping_at ? 'connected' : 'waiting_ping';
   }
-  return { config: structuredClone(r.estado.config), webhook_secret: secreto };
+  return { config: vistaConfig(org, gh, r.estado.config)!, webhook_secret: secreto };
 }
 
 // Preferencias de avisos (E48/E49). whatsapp_ready_contacts sale de los contactos (WhatsApp activado y verificados).
@@ -651,29 +1072,157 @@ function probarCanal(org: string, body: unknown) {
 
 // ── DeepWiki (E40–E44) ───────────────────────────────────────────────────────────────────────────────────────
 // E42 devuelve wikiRunRunning en las primeras consultas de cada corrida y luego wikiRunDone, para ver el progreso.
-// fx.wikiRuns solo existen en la demo con datos; en otra org cada generación es una corrida nueva de esa org.
+// fx.wikiRuns solo existen en la demo con datos (son del repo de la víctima); cualquier otra generación es una corrida
+// nueva de esa org y de su repo. E43 filtra por ?repo= sin distinguir mayúsculas (varias-codebases §4.1).
 const consultasWiki = new Map<string, number>();
-const wikisNuevas = new Map<string, string>();                  // corrida → org
+const wikisNuevas = new Map<string, { org: string; repo: string }>();   // corrida → org y repo
 function verWikiRun(org: string, id: string, contar = true): WikiRun {
-  const deOrg = wikisNuevas.get(id);
-  const deDemo = deOrg === undefined && !vacia(org);
-  if (deOrg !== org && !deDemo) return falla(404, 'not_found', 'Esa wiki no existe');
+  const nueva = wikisNuevas.get(id);
+  const deDemo = nueva === undefined && !vacia(org);
+  if (nueva?.org !== org && !deDemo) return falla(404, 'not_found', 'Esa wiki no existe');
   if (deDemo && id !== fx.wikiRunDone.id) return fx.wikiRuns.find((x) => x.id === id) ?? falla(404, 'not_found', 'Esa wiki no existe');
   const n = (consultasWiki.get(id) ?? 0) + (contar ? 1 : 0);   // sin contar: el doc no adelanta el progreso
   consultasWiki.set(id, n);
-  return n <= 3 ? { ...fx.wikiRunRunning, id } : { ...fx.wikiRunDone, id };
+  const repo = nueva ? { repo_full_name: nueva.repo } : {};
+  return n <= 3 ? { ...fx.wikiRunRunning, id, ...repo } : { ...fx.wikiRunDone, id, ...repo };
 }
-const listarWikis = (org: string) => vacia(org)
-  ? [...wikisNuevas].filter(([, o]) => o === org).map(([id]) => verWikiRun(org, id, false)).reverse()   // más recientes primero
-  : fx.wikiRuns;
+function listarWikis(org: string, q: URLSearchParams) {
+  const repo = q.get('repo');
+  if (repo !== null && !RepoFullName.safeParse(repo).success) falla(422, 'invalid_body', 'Repo no válido', { field_errors: { repo: ['owner/repo'] } });
+  const nuevas = [...wikisNuevas].filter(([id, w]) => w.org === org && id !== fx.wikiRunDone.id).map(([id]) => verWikiRun(org, id, false)).reverse();   // más recientes primero
+  const todas = vacia(org) ? nuevas : [...nuevas, ...fx.wikiRuns];
+  return repo === null ? todas : todas.filter((r) => r.repo_full_name.toLowerCase() === repo.toLowerCase());
+}
+// B8 (§7): un connection_id tiene que ser una conexión GitHub de lectura activa de la org y del MISMO repo; si no, 404.
+function conexionWiki(org: string, b: { connection_id?: unknown; repo_full_name?: unknown }) {
+  if (b.connection_id === undefined) return;
+  const repo = typeof b.repo_full_name === 'string' ? b.repo_full_name.toLowerCase() : '';
+  const c = listaDe(org).find((x) => x.id === b.connection_id && x.provider === 'github' && x.kind === 'read' && x.status === 'active');
+  if (!c || String(c.meta.repo_full_name ?? '').toLowerCase() !== repo) falla(404, 'not_found', 'Conexión no encontrada');
+}
+function estimarWiki(org: string, body: unknown) {
+  exigirAdmin();
+  const b = WikiRepoRef.safeParse(body);
+  if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
+  conexionWiki(org, b.data);
+  return { ...fx.wikiEstimate, repo_full_name: b.data.repo_full_name };   // solo lee GitHub; cached_run_id null
+}
 function generarWiki(org: string, body: unknown) {
   exigirAdmin();
-  const b = (body ?? {}) as { max_usd?: number };
+  const b = (body ?? {}) as { max_usd?: number; repo_full_name?: unknown; connection_id?: unknown };
   if (b.max_usd != null && (b.max_usd <= 0 || b.max_usd > 5)) falla(422, 'invalid_body', 'El tope va de 0 a 5 USD');
-  const id = vacia(org) ? crypto.randomUUID() : fx.wikiRunDone.id;
-  if (vacia(org)) wikisNuevas.set(id, org);
+  conexionWiki(org, b);
+  const repo = typeof b.repo_full_name === 'string' ? b.repo_full_name : fx.wikiRunDone.repo_full_name;
+  // En la demo, la del repo de la víctima es la corrida del fixture (con su documento); la de otro repo, una nueva.
+  const delFixture = !vacia(org) && repo.toLowerCase() === fx.wikiRunDone.repo_full_name.toLowerCase();
+  const id = delFixture ? fx.wikiRunDone.id : crypto.randomUUID();
+  if (!delFixture) wikisNuevas.set(id, { org, repo });
   consultasWiki.set(id, 0);                                      // cada generación vuelve a mostrar el progreso
   return { wiki_run_id: id, cached: false };
+}
+
+// ── Evolución entre revisiones (E51/E52, asignaciones/evolucion-entre-revisiones.md §6.5) ───────────────────────
+// Cadena de fotos por org, como audit_snapshots: la de la demo arranca con la de scanDone (fx.auditDelta). Cada auditoría
+// simulada o ZIP de la org que terminó deja la suya, en orden de cierre, la primera vez que se pide E51: resta los ids
+// abiertos frente a la foto anterior, como private.vg_restar (sin claves movidas: los fixtures no traen huellas). Sin
+// ningún módulo revisado no hay foto (sin_foto). Las listas salen con el estado de AHORA de cada hallazgo.
+type DeltaConFoto = Extract<AuditDelta, { available: true }>;
+type Foto = { scan_run_id: string; kind: ScanKind; taken_at: string; score: number | null; abiertos: string[]; delta: DeltaConFoto };
+const fotos = new Map<string, Foto[]>();
+const fotosDe = (org: string) => {
+  if (!fotos.has(org)) {
+    const d = fx.auditDelta as DeltaConFoto;
+    fotos.set(org, vacia(org) ? [] : [{ scan_run_id: d.scan_run_id, kind: 'full_audit', taken_at: d.taken_at, score: d.score,
+      abiertos: [...d.new.items, ...d.kept.items].map((i) => i.finding_id), delta: d }]);
+  }
+  return fotos.get(org)!;
+};
+// Los dos hallazgos que el sábado ya no están abiertos: la primera vez entran en la lista de la org (como hallazgoRevision).
+function conCorregidos(org: string) {
+  if (vacia(org)) return;
+  const lista = delOrg(org);
+  for (const f of fx.hallazgosCorregidos) if (!lista.some((x) => x.id === f.id)) lista.push(structuredClone(f as Finding));
+}
+const MODULO_PASO: Record<string, Module> = { supabase: 'supabase', cloudflare: 'cloudflare', repo: 'codebase', zip: 'codebase' };
+const MODULOS_FX = ['supabase', 'cloudflare', 'codebase', 'performance'] as const satisfies readonly Module[];
+const RANGO: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+const matrizDe = (fs: readonly Finding[]): MatrizHallazgos => {
+  const m = Object.fromEntries(MODULOS_FX.map((k) => [k, Object.fromEntries(SEVERIDADES.map((s) => [s, 0]))])) as MatrizHallazgos;
+  for (const f of fs) m[f.module][f.severity] += 1;
+  return m;
+};
+// En el orden de E13: severidad, confirmed, last_seen_at e id.
+const listaDe50 = (fs: readonly Finding[]): DeltaLista => ({ total: fs.length, items: [...fs]
+  .sort((a, b) => RANGO[a.severity]! - RANGO[b.severity]! || Number(b.confirmed) - Number(a.confirmed)
+    || b.last_seen_at.localeCompare(a.last_seen_at) || a.id.localeCompare(b.id))
+  .slice(0, 50).map((f) => ({ finding_id: f.id, module: f.module, rule_id: f.rule_id, severity: f.severity, title: f.title,
+    resource: f.resource, status: f.status })) });
+
+// verScan recalcula los pasos con las conexiones de ahora: una auditoría que cerró sin mirar nada se recuerda aquí para
+// que no gane una foto al conectar algo después.
+const sinModulos = new Set<string>();
+function fotografiar(org: string) {
+  const cadena = fotosDe(org);
+  const hechas = new Set([...cadena.map((f) => f.scan_run_id), ...sinModulos]);
+  const terminadas = [
+    ...[...scans].filter(([id, c]) => c.org === org && !hechas.has(id)).map(([id]) => verScan(org, id)),
+    ...[...zips].filter(([id, c]) => c.org === org && !hechas.has(id)).map(([id, c]) => verZip(id, c)),
+  ].filter((r) => r.status === 'succeeded' && r.finished_at).sort((a, b) => a.finished_at!.localeCompare(b.finished_at!));
+  for (const r of terminadas) {
+    const vistos = [...new Set(r.steps.filter((s) => s.status === 'done')
+      .map((s) => deMapa<string, Module | null>(MODULO_PASO, s.name, null)))].filter((m): m is Module => m !== null);
+    if (!vistos.length) { sinModulos.add(r.id); continue; }               // sin_modulos: nunca una versión sin mirar nada
+    const anterior = cadena.at(-1);
+    const todos = hallazgosDe(org);
+    const porId = new Map(todos.map((f) => [f.id, f]));
+    const abiertos = todos.filter((f) => f.status === 'open');
+    const antes = new Set(anterior?.abiertos ?? []);
+    const nuevos = anterior ? abiertos.filter((f) => !antes.has(f.id)) : [];
+    const siguen = anterior ? abiertos.filter((f) => antes.has(f.id)) : [];
+    const salieron = [...antes].filter((id) => porId.get(id)?.status !== 'open');
+    const fuera = salieron.map((id) => porId.get(id)).filter((f): f is Finding => f !== undefined);
+    const corregidos = fuera.filter((f) => f.status === 'fixed' || f.status === 'verified');
+    const ignorados = fuera.filter((f) => f.status === 'ignored');
+    cadena.push({ scan_run_id: r.id, kind: r.kind, taken_at: r.finished_at!, score: r.score, abiertos: abiertos.map((f) => f.id), delta: {
+      available: true, scan_run_id: r.id, taken_at: r.finished_at!, first: !anterior, score: r.score, modules_seen: vistos,
+      previous: anterior ? { scan_run_id: anterior.scan_run_id, kind: anterior.kind, finished_at: anterior.taken_at, score: anterior.score } : null,
+      counts: { open: matrizDe(abiertos), new: matrizDe(nuevos), kept: matrizDe(siguen), fixed: matrizDe(corregidos), ignored: matrizDe(ignorados) },
+      fixed_checked: corregidos.filter((f) => f.status === 'verified' && !esClave(f.rule_id)).length, moved: 0,
+      gone: salieron.length - fuera.length,                                // la fila ya no existe: ni corregido ni ignorado
+      new: listaDe50(nuevos), kept: listaDe50(siguen), fixed: listaDe50(corregidos), ignored: listaDe50(ignorados),
+    } });
+    hechas.add(r.id);
+  }
+}
+
+// E51: la auditoría de la demo (fx.auditDelta), una simulada o un ZIP de esta org; cualquier otra → 404 uniforme.
+function deltaScan(org: string, id: string): AuditDelta {
+  const propia = scans.get(id)?.org === org || zips.get(id)?.org === org;
+  const demo = !scans.has(id) && !zips.has(id) && !vacia(org) && id === fx.scanDone.id;
+  if (!propia && !demo) return falla(404, 'not_found', 'Auditoría no encontrada');
+  if (demo) conCorregidos(org);
+  fotografiar(org);
+  const foto = fotosDe(org).find((f) => f.scan_run_id === id);
+  if (!foto) {
+    const zip = zips.get(id);
+    const run = zip ? verZip(id, zip) : verScan(org, id);
+    return { available: false, scan_run_id: id, reason: run.status === 'queued' || run.status === 'running' ? 'en_curso' : 'sin_foto' };
+  }
+  const porId = new Map(hallazgosDe(org).map((f) => [f.id, f]));
+  const alDia = (l: DeltaLista): DeltaLista => ({ total: l.total, items: l.items.map((i) => ({ ...i, status: porId.get(i.finding_id)?.status ?? i.status })) });
+  const d = structuredClone(foto.delta);
+  return { ...d, new: alDia(d.new), kept: alDia(d.kept), fixed: alDia(d.fixed), ignored: alDia(d.ignored) };
+}
+
+// E52: la historia de la demo; en una org sin sus datos, la forma vacía. `days` vuelve tal cual (1–90, 30 por defecto);
+// los puntos no se recortan y `limit` se ignora.
+function evolucion(org: string, q: URLSearchParams): Evolution {
+  const d = Number(q.get('days') ?? 30);
+  const days = Number.isInteger(d) && d >= 1 && d <= 90 ? d : 30;
+  if (!vacia(org)) return { ...structuredClone(fx.evolution as Evolution), days };
+  return { days, points: [], truncated: false, totals: { versions: 0, snapshots: 0, score_first: null, new: matrizDe([]),
+    fixed: matrizDe([]), fixed_checked: 0, ignored: 0, gone: 0 }, reviews: [], incidents: [],
+    mttr: { verified: 0, hours_avg: null, hours_median: null } };
 }
 
 // ── Lecturas de la demo (E18, E24, E25, E28, E29b): en una org sin sus datos, lo que da la API con las tablas vacías ──
@@ -703,7 +1252,7 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r('\\/api\\/me'),                      () => me()],
   ['POST', r('\\/api\\/demo\\/join'),             () => ({ org_id: ORG_DEMO })],
   ['POST', r('\\/api\\/orgs'),                    (_m, b) => crearOrg(b)],
-  ['GET',  r(`${ORG}\\/overview`),                (m) => vacia(m[1]!) ? fx.overviewVacio : fx.overview],
+  ['GET',  r(`${ORG}\\/overview`),                (m) => overviewDe(m[1]!)],
   ['GET',  r(`${ORG}\\/modules\\/(\\w+)\\/state`), (m) => estadoModulo(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/connections`),             (m) => structuredClone(listaDe(m[1]!))],   // copia: TanStack no ve cambios en el mismo array
   ['POST', r(`${ORG}\\/connections`),             (m, b) => conectarFalso(m[1]!, b)],
@@ -719,25 +1268,31 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     (m) => structuredClone(incidente(m[1]!, m[2]!))],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/ack`),  (m) => ackFalso(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/mute`), (m) => muteFalso(m[1]!, m[2]!)],
+  ['GET',  r(`${ORG}\\/incidents\\/([^/]+)\\/under-attack`), (m) => ofertaBajoAtaque(m[1]!, m[2]!)],
+  ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/under-attack\\/propose`), (m) => proponerBajoAtaque(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/actions\\/propose`),       (m, b) => proponerFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/confirm`), (m, b) => confirmarFalso(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/traffic`),                 (m) => traficoDe(m[1]!)],
+  ['GET',  r(`${ORG}\\/scans\\/([^/]+)\\/delta`), (m) => deltaScan(m[1]!, m[2]!)],   // antes que scans/:id
   ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[1]!, m[2]!)],
-  ['POST', r(`${ORG}\\/wiki\\/estimate`),         () => { exigirAdmin(); return fx.wikiEstimate; }],   // solo lee GitHub; cached_run_id null
+  ['GET',  r(`${ORG}\\/evolution`),               (m, _b, q) => evolucion(m[1]!, q)],
+  ['POST', r(`${ORG}\\/wiki\\/estimate`),         (m, b) => estimarWiki(m[1]!, b)],
   ['POST', r(`${ORG}\\/wiki\\/runs`),             (m, b) => generarWiki(m[1]!, b)],
-  ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m) => listarWikis(m[1]!)],
-  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), (m) => ({ ...fx.wikiDoc, run_id: verWikiRun(m[1]!, m[2]!, false).id })],
+  ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m, _b, q) => listarWikis(m[1]!, q)],
+  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), (m) => { const w = verWikiRun(m[1]!, m[2]!, false); return { ...fx.wikiDoc, run_id: w.id, repo_full_name: w.repo_full_name }; }],
   ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                (m) => listarContactos(m[1]!)],
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
-  ['GET',  r(`${ORG}\\/code-review`),             (m) => verRevision(m[1]!)],
+  ['GET',  r(`${ORG}\\/code-review`),             (m, _b, q) => verRevision(m[1]!, q)],
   ['PUT',  r(`${ORG}\\/code-review`),             (m, b) => guardarRevision(m[1]!, b)],
+  ['PUT',  r(`${ORG}\\/code-review\\/gate`),       (m, b) => guardarBloqueo(m[1]!, b)],
+  ['POST', r(`${ORG}\\/code-review\\/reviews\\/([^/]+)\\/gate`), (m, b) => accionBloqueo(m[1]!, m[2]!, b)],
   ['GET',  r(`${ORG}\\/alert-prefs`),             (m) => verPrefs(m[1]!)],
   ['PUT',  r(`${ORG}\\/alert-prefs`),             (m, b) => guardarPrefs(m[1]!, b)],
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],
   ['GET',  r(`${ORG}\\/ai\\/usage`),              (m) => usoIa(m[1]!)],
-  ['GET',  r(`${ORG}\\/perf\\/runs`),             (m) => (vacia(m[1]!) ? [] : fx.perfRuns)],
+  ['GET',  r(`${ORG}\\/perf\\/runs`),             (m, _b, q) => perfDe(m[1]!).slice(0, Math.min(30, Number(q.get('limit')) || 30))],
   ['GET',  r(`${ORG}\\/mcp-tokens`),              (m) => structuredClone(tokensMcpDe(m[1]!))],
   ['POST', r(`${ORG}\\/mcp-tokens`),              (m, b) => crearTokenMcp(m[1]!, b)],
   ['DELETE', r(`${ORG}\\/mcp-tokens\\/([^/]+)`), (m) => revocarTokenMcp(m[1]!, m[2]!)],

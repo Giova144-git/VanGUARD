@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite",
     "dev:fixtures": "vite --mode fixtures",
-    "build": "node scripts/lint-seguridad.mjs && node ../../scripts/lint-imports.mjs && tsc --noEmit -p . && vite build",
+    "build": "node scripts/lint-seguridad.mjs && node scripts/lint-imports.mjs && tsc --noEmit -p . && vite build",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "lint:seguridad": "node scripts/lint-seguridad.mjs",

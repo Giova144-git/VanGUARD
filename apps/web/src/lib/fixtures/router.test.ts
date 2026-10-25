@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixtures as fx, AlertPrefs, CodeReviewSaved, CodeReviewState, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
+import { fixtures as fx, AlertPrefs, AuditDelta, CodeReviewSaved, CodeReviewState, Evolution, Finding, MergeGateSaved, ScanRun, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type IncidentDetail, type WikiRun } from '@vanguard/contracts';
 import type { ApiError } from '../errores';
 import { fixtureFetch, simularAtaque } from './router';
 
@@ -38,6 +38,7 @@ describe('orgMember', () => {
     ['GET', 'overview'], ['GET', 'findings'], ['GET', `findings/${fx.findings[0]!.id}`], ['GET', 'modules/supabase/state'],
     ['GET', 'traffic'], ['GET', `scans/${fx.scanDone.id}`], ['GET', `wiki/runs/${fx.wikiRunDone.id}/doc`], ['GET', 'export'],
     ['POST', 'connections'], ['POST', 'scans'], ['POST', `scans/${NADA}/zip-result`], ['GET', 'ruta-que-no-existe'],
+    ['GET', 'code-review'], ['PUT', 'code-review/gate'], ['POST', `code-review/reviews/${fx.codeReviewStateBloqueo.recent[0]!.id}/gate`],
   ])('una org ajena responde 404 a %s %s', async (method, resto) => {
     const e = await fallo(`/api/orgs/${AJENA}/${resto}`, method, {});
     expect(e).toMatchObject({ status: 404, code: 'not_found', message: 'Organización no encontrada' });
@@ -331,11 +332,23 @@ describe('ZIP analizado en el navegador (E11 zip y E23)', () => {
 });
 
 describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo.md §6.3)', () => {
-  it('la demo arranca conectada con sus dos revisiones y el hallazgo del push se abre con ?finding=', async () => {
+  it('la demo arranca conectada con sus revisiones (el PR #7 del bloqueo encima) y el hallazgo del push se abre con ?finding=', async () => {
     const s = CodeReviewState.parse(await pedir(`/api/orgs/${DEMO}/code-review`));
     expect(s).toMatchObject({ available: true, config: { state: 'connected' } });
-    expect(s.recent).toHaveLength(2);
+    expect(s.recent.map((r) => r.id)).toEqual(fx.codeReviewStateBloqueo.recent.map((r) => r.id));
     expect(await pedir<Finding>(`/api/orgs/${DEMO}/findings/${fx.hallazgoRevision.id}`)).toMatchObject({ rule_id: 'CB_SECRET_STRIPE_LIVE' });
+  });
+
+  it('E45 trae la foto de Codebase (delta) en los dos pushes del sábado, sobre codeReviewStateBloqueo; el PR #7, null', async () => {
+    for (const tipo of ['correo', 'anonima'] as const) {
+      sesion.tipo = tipo;
+      const s = CodeReviewState.parse(await pedir(`/api/orgs/${DEMO}/code-review`));
+      const [pr, secreto, limpia] = s.recent;
+      expect(pr).toMatchObject({ id: fx.codeReviewStateBloqueo.recent[0]!.id, event: 'pull_request', delta: null });
+      expect(secreto).toMatchObject({ id: fx.codeReviewState.recent[0]!.id, delta: fx.deltasRevision[secreto!.id] });
+      expect(limpia).toMatchObject({ id: fx.codeReviewState.recent[1]!.id, delta: fx.deltasRevision[limpia!.id] });
+      expect(secreto!.delta).toMatchObject({ first: false, kept: 7, fixed: 0 });
+    }
   });
 
   it('el alta da el secreto vgw_ UNA vez; E45 nunca lo trae; la 3.ª consulta simula el ping; rotar da otro y espera el ping', async () => {
@@ -378,5 +391,352 @@ describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo
     expect(despues).toMatchObject({ review_whatsapp_min: 'medium', review_voice_min: 'off' });
     expect(despues.updated_at).not.toBeNull();
     expect(await fallo(`/api/orgs/${DEMO}/alert-prefs`, 'PUT', { review_whatsapp_min: 'altisima', review_voice_min: 'off' })).toMatchObject({ status: 422 });
+  });
+});
+
+describe('modo bajo ataque (E55, E56, E21 y E22; asignaciones/modo-bajo-ataque.md §9)', () => {
+  const INC = fx.incidentDetail.id;
+  const E55 = (org = DEMO, id = INC) => `/api/orgs/${org}/incidents/${id}/under-attack`;
+  type Oferta = { ofrece: boolean; motivo: string | null; activo: { action_id: string; expires_at: string; created_at: string } | null };
+
+  it('una org ajena o un incidente de otra org responden 404 a E55 y E56', async () => {
+    expect(await fallo(E55(AJENA))).toMatchObject({ status: 404, message: 'Organización no encontrada' });
+    expect(await fallo(`${E55(AJENA)}/propose`, 'POST', {})).toMatchObject({ status: 404, message: 'Organización no encontrada' });
+    expect(await fallo(E55(nueva))).toMatchObject({ status: 404, message: 'Este incidente no existe' });
+    expect(await fallo(`${E55(nueva)}/propose`, 'POST', {})).toMatchObject({ status: 404 });
+  });
+
+  it('la demo ofrece el modo en la inundación; el ensayo (sin CF_IP_FLOOD) no aplica; el anónimo no puede proponer', async () => {
+    expect(await pedir(E55())).toEqual(fx.underAttackOffer);
+    expect(await pedir(E55(DEMO, fx.incidents[1]!.id))).toMatchObject({ ofrece: false, motivo: 'no_aplica', ips: 0, scopes: [] });
+    expect(await fallo(`${E55(DEMO, fx.incidents[1]!.id)}/propose`, 'POST', {})).toMatchObject({ status: 422, details: { reason: 'no_aplica' } });
+    sesion.tipo = 'anonima';
+    expect(await pedir(E55())).toEqual(fx.underAttackOffer);                 // E55 es de lectura: el viewer también la ve
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 403 });
+  });
+
+  it('propose → confirm (activo 30 min, id ACTION_BAJO_ATAQUE) → E55 con activo → 409 al proponer otra vez → undo', async () => {
+    const p = await pedir<{ approval_id: string; expires_at: string }>(`${E55()}/propose`, 'POST', { scope: 'host' });
+    const { expires_at: _fija, ...resto } = fx.underAttackProposal;
+    expect(p).toMatchObject(resto);
+    expect(Date.parse(p.expires_at) - Date.now()).toBeGreaterThan(599_000);   // reescrita con el reloj, no la fija del fixture
+    expect(p.approval_id).toBe(fx.underAttackProposal.approval_id);
+    expect(await fallo(`/api/orgs/${nueva}/actions/${p.approval_id}/confirm`, 'POST', { code: '123456' })).toMatchObject({ status: 404 });
+    const r = await pedir<{ ok: boolean; action_id: string }>(`/api/orgs/${DEMO}/actions/${p.approval_id}/confirm`, 'POST', { code: '123456' });
+    expect(r).toMatchObject({ ok: true, action_id: 'ac000000-0000-4000-8000-000000000001' });
+    const o = await pedir<Oferta>(E55());
+    expect(o.activo).toMatchObject({ action_id: r.action_id, scope: 'host', target: 'demo.officialvanguard.com', retirada_fallida: false });
+    expect(Date.parse(o.activo!.expires_at) - Date.parse(o.activo!.created_at)).toBe(30 * 60_000);
+    const i = await pedir<IncidentDetail>(`/api/orgs/${DEMO}/incidents/${INC}`);
+    expect(i.status).toBe('mitigated');
+    expect(i.actions).toContainEqual(expect.objectContaining({ id: r.action_id, kind: 'under_attack_on', status: 'executed' }));
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 409, details: { reason: 'already_active', action_id: r.action_id } });
+    expect(await pedir(`/api/orgs/${DEMO}/actions/${r.action_id}/undo`, 'POST', {})).toMatchObject({ ok: true, resultado: 'Modo bajo ataque desactivado' });
+    expect((await pedir<Oferta>(E55())).activo).toBeNull();
+    expect((await pedir<IncidentDetail>(`/api/orgs/${DEMO}/incidents/${INC}`)).status).toBe('open');
+    expect(await fallo(`/api/orgs/${DEMO}/actions/${r.action_id}/undo`, 'POST', {})).toMatchObject({ status: 409 });
+  });
+
+  // Los tres casos de la vista previa con la forma de leerOfertaBajoAtaque: la regla sigue ofreciéndolo (ofrece: true) y
+  // lo que falta es el token o su permiso, con los pasos para hacerlo a mano en `copiar`; con permiso, la oferta de siempre.
+  const blindaje = async () => (await pedir<ConnectionPublic[]>(`/api/orgs/${DEMO}/connections`)).find((c) => c.provider === 'cloudflare' && c.kind === 'action');
+  const conectar = (action_token: string) => pedir<ConnectionCreated>(`/api/orgs/${DEMO}/connections`, 'POST',
+    { provider: 'cloudflare', zone_id: '14d12778b0249e6d6854a67876c37e72', read_token: 'cf_lectura_prueba', action_token });
+  const PASOS_SIN_ZONA = fx.underAttackOfferSinPermiso.copiar.replace(/^.*\n/, 'Para activarlo a mano en Cloudflare:\n');
+
+  it('el token de Modo blindaje de la demo trae Config Rules · Edit: permiso ok, y «Probar conexión» lo dice', async () => {
+    const accion = (await blindaje())!;
+    expect(accion.capabilities).toMatchObject({ firewall_read: true, config_rules_edit: true });
+    expect(await pedir(E55())).toMatchObject({ motivo: null, permiso: 'ok', scopes: ['host'], copiar: null, connection_id: accion.id });
+    expect((await pedir<{ checks: unknown[] }>(`/api/orgs/${DEMO}/connections/${accion.id}/test`, 'POST', {})).checks)
+      .toContainEqual({ permission: 'config_rules_edit', ok: true, required: false });
+  });
+
+  it('sin Modo blindaje: E55 dice sin_conexion (ofrece sigue true, sin zona ni permiso, con los pasos) y E56 da 409 no_action_connection', async () => {
+    await pedir(`/api/orgs/${DEMO}/connections/${(await blindaje())!.id}`, 'DELETE');
+    const o = await pedir<Record<string, unknown>>(E55());
+    expect(o).toEqual({ ...fx.underAttackOffer, motivo: 'sin_conexion', scopes: [], zone_name: null, connection_id: null, permiso: null, copiar: PASOS_SIN_ZONA });
+    expect(o.copiar).toMatch(/^Para activarlo a mano en Cloudflare:\n1\. Rules → Configuration Rules → Create rule\.\n2\. If incoming requests match: Hostname · equals · demo\.officialvanguard\.com\./);
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 409, details: { reason: 'no_action_connection' } });
+    expect(await pedir(E55(DEMO, fx.incidents[1]!.id))).toMatchObject({ motivo: 'no_aplica', copiar: null });   // sin inundación, nada que copiar
+  });
+
+  it('con un token de Modo blindaje sin Config Rules · Edit: sin_permiso con los pasos de fx.underAttackOfferSinPermiso y E56 da 409 sin_permiso', async () => {
+    const creada = await conectar('cf_acciones_sin-config_prueba');
+    const accion = creada.action_connection!;
+    expect(accion.capabilities).toMatchObject({ config_rules_edit: false });
+    expect(await pedir(E55())).toEqual({ ...fx.underAttackOfferSinPermiso, connection_id: accion.id });
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 409,
+      details: { reason: 'sin_permiso', copiar: fx.underAttackOfferSinPermiso.copiar } });
+    expect((await pedir<{ ok: boolean; checks: unknown[] }>(`/api/orgs/${DEMO}/connections/${accion.id}/test`, 'POST', {})))
+      .toMatchObject({ ok: true, checks: expect.arrayContaining([{ permission: 'config_rules_edit', ok: false, required: false, error_code: 'forbidden' }]) });
+    sesion.tipo = 'anonima';
+    expect(await pedir(E55())).toMatchObject({ motivo: 'sin_permiso' });              // el viewer también ve la vista previa
+  });
+
+  it('al volver a conectarlo con el permiso, la oferta de siempre (permiso ok, botón y E56 con su código)', async () => {
+    await pedir(`/api/orgs/${DEMO}/connections/${(await blindaje())!.id}`, 'DELETE');
+    const accion = (await conectar('cf_acciones_prueba')).action_connection!;
+    expect(await pedir(E55())).toEqual({ ...fx.underAttackOffer, connection_id: accion.id });
+    expect(await pedir(`${E55()}/propose`, 'POST', {})).toMatchObject({ approval_id: fx.underAttackProposal.approval_id, validado: true });
+  });
+});
+
+// Al final a propósito: estos casos dejan un 2.º repo en la org de demo (el tope de 3 orgs por dueño ya está gastado).
+describe('varias codebases (asignaciones/varias-codebases.md §6.5)', () => {
+  const REPO = fx.wikiRunDone.repo_full_name;
+  const REPO_2 = fx.conexionGithub2.meta.repo_full_name;
+  const CONN_GITHUB = fx.connections.find((c) => c.provider === 'github')!.id;
+
+  it('wiki: E43 filtra por ?repo= sin distinguir mayúsculas (422 si no es owner/repo) y E40/E41 exigen el repo de la conexión', async () => {
+    expect((await pedir<WikiRun[]>(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO.toUpperCase()}`)).map((r) => r.id)).toEqual(fx.wikiRuns.map((r) => r.id));
+    expect(await pedir(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO_2}`)).toEqual([]);
+    expect(await fallo(`/api/orgs/${DEMO}/wiki/runs?repo=foo`)).toMatchObject({ status: 422 });
+    const otroRepo = { repo_full_name: REPO_2, connection_id: CONN_GITHUB };
+    expect(await fallo(`/api/orgs/${DEMO}/wiki/estimate`, 'POST', otroRepo)).toMatchObject({ status: 404, message: 'Conexión no encontrada' });
+    expect(await fallo(`/api/orgs/${DEMO}/wiki/runs`, 'POST', otroRepo)).toMatchObject({ status: 404, message: 'Conexión no encontrada' });
+    expect(await pedir(`/api/orgs/${DEMO}/wiki/estimate`, 'POST', { repo_full_name: REPO_2 })).toMatchObject({ repo_full_name: REPO_2 });
+    // La wiki de otro repo de la demo es una corrida nueva, de ese repo, con su documento.
+    const { wiki_run_id: id } = await pedir<{ wiki_run_id: string }>(`/api/orgs/${DEMO}/wiki/runs`, 'POST', { repo_full_name: REPO_2 });
+    expect(id).not.toBe(fx.wikiRunDone.id);
+    expect((await pedir<WikiRun[]>(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO_2}`)).map((r) => r.id)).toEqual([id]);
+    expect((await pedir<WikiRun[]>(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO}`)).map((r) => r.id)).toEqual(fx.wikiRuns.map((r) => r.id));
+    expect(await pedir(`/api/orgs/${DEMO}/wiki/runs/${id}/doc`)).toMatchObject({ run_id: id, repo_full_name: REPO_2 });
+  });
+});
+
+// Sigue en la org de demo y después del bloque de la wiki: el 2.º repo se queda conectado para los casos siguientes.
+describe('varias codebases · conexiones, revisión por repo y auditoría (§6.5)', () => {
+  const CONN_GITHUB = fx.connections.find((c) => c.provider === 'github')!.id;
+  const REPO = fx.connections.find((c) => c.provider === 'github')!.meta.repo_full_name;
+  const REPO_2 = fx.conexionGithub2.meta.repo_full_name;
+  const conectar = (repo: string, pat: string) => pedir<ConnectionCreated>(`/api/orgs/${DEMO}/connections`, 'POST', { provider: 'github', repo_full_name: repo, pat });
+  const fallaConectar = (repo: string, pat: string) => fallo(`/api/orgs/${DEMO}/connections`, 'POST', { provider: 'github', repo_full_name: repo, pat });
+
+  it('E8: el mismo repo activo (otras mayúsculas) da 409 repo_duplicado; REPO_2 devuelve conexionGithub2 con la marca', async () => {
+    expect(await fallaConectar(REPO.toUpperCase(), 'github_pat_token_del_repo_uno_000')).toMatchObject({ status: 409, details: { reason: 'repo_duplicado' } });
+    const r = await conectar(REPO_2, 'github_pat_token_del_repo_dos_0000');
+    expect(r.connection).toEqual(fx.conexionGithub2);
+    expect(r.connection.meta).toMatchObject({ hallazgos_por_repo: true });
+    expect((await pedir<{ id: string }[]>(`/api/orgs/${DEMO}/connections`)).map((c) => c.id)).toContain(fx.conexionGithub2.id);
+  });
+
+  it('E8: el mismo token que otra conexión da 409 sin reason; con 5 repos distintos, 409 tope_repos', async () => {
+    const e = await fallaConectar('equipo/otro', 'github_pat_token_del_repo_dos_0000');
+    expect(e).toMatchObject({ status: 409, message: 'Ese token ya está conectado en esta organización.' });
+    expect(e.details?.reason).toBeUndefined();
+    for (const n of [3, 4, 5]) await conectar(`equipo/repo-${n}`, `github_pat_token_del_repo_${n}_00000`);
+    expect(await fallaConectar('equipo/repo-6', 'github_pat_token_del_repo_6_00000')).toMatchObject({ status: 409, details: { reason: 'tope_repos' } });
+    // Quitar uno libera su token y un hueco.
+    const lista = await pedir<{ id: string; meta: { repo_full_name?: string } }[]>(`/api/orgs/${DEMO}/connections`);
+    await pedir(`/api/orgs/${DEMO}/connections/${lista.find((c) => c.meta.repo_full_name === 'equipo/repo-5')!.id}`, 'DELETE');
+    expect((await conectar('equipo/repo-6', 'github_pat_token_del_repo_5_00000')).connection.meta).toMatchObject({ repo_full_name: 'equipo/repo-6' });
+  });
+
+  it('E45 por conexión: ?connection_id= da el estado de ESE repo; sin él, el principal; malformado 422; ajeno sin_conexion', async () => {
+    expect(await pedir(`/api/orgs/${DEMO}/code-review?connection_id=${fx.conexionGithub2.id}`)).toEqual(fx.codeReviewStateRepo2);
+    const principal = CodeReviewState.parse(await pedir(`/api/orgs/${DEMO}/code-review`));
+    expect(principal.config?.connection_id).toBe(CONN_GITHUB);
+    expect((await pedir<CodeReviewState>(`/api/orgs/${DEMO}/code-review?connection_id=${CONN_GITHUB}`)).recent).toHaveLength(principal.recent.length);
+    expect(await fallo(`/api/orgs/${DEMO}/code-review?connection_id=no-es-un-id`)).toMatchObject({ status: 422 });
+    expect(await pedir(`/api/orgs/${DEMO}/code-review?connection_id=${NADA}`)).toMatchObject({ available: false, reason: 'sin_conexion', config: null, recent: [] });
+    // Activar el 2.º repo crea SU config (con su repo) y no toca la del primero.
+    const alta = CodeReviewSaved.parse(await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: fx.conexionGithub2.id, enabled: true }));
+    expect(alta.config).toMatchObject({ connection_id: fx.conexionGithub2.id, repo_full_name: REPO_2, state: 'waiting_ping' });
+    expect(alta.webhook_secret).toMatch(/^vgw_/);
+    expect((await pedir<CodeReviewState>(`/api/orgs/${DEMO}/code-review?connection_id=${CONN_GITHUB}`)).config?.id).toBe(principal.config?.id);
+  });
+
+  it('E12 con dos o más repos trae una línea por repo; E5 lleva el connection_id de cada hallazgo de «Ahora»', async () => {
+    const run = ScanRun.parse(await pedir(`/api/orgs/${DEMO}/scans/${fx.scanDone.id}`));
+    expect(run.repos?.slice(0, 2)).toEqual(fx.scanDoneDosRepos.repos);
+    const { scan_run_id: id } = await pedir<{ scan_run_id: string }>(`/api/orgs/${DEMO}/scans`, 'POST', { kind: 'full_audit' });
+    expect((await pedir<ScanRun>(`/api/orgs/${DEMO}/scans/${id}`)).repos).toBeUndefined();   // el paso repo aún no terminó
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect((await pedir<ScanRun>(`/api/orgs/${DEMO}/scans/${id}`)).repos?.map((r) => r.status)).toEqual(['done', 'done', 'done', 'done', 'done']);
+    const o = await pedir<{ ahora: { kind: string; connection_id?: string | null }[] }>(`/api/orgs/${DEMO}/overview`);
+    const hallazgos = o.ahora.filter((a) => a.kind === 'finding');
+    expect(hallazgos.length).toBeGreaterThan(0);
+    expect(hallazgos.every((a) => a.connection_id !== undefined)).toBe(true);
+    expect(o.ahora.filter((a) => a.kind === 'incident').every((a) => a.connection_id === undefined)).toBe(true);
+  });
+});
+
+// Bloqueo de merge con críticos (bloqueo-merge-criticos.md §6.5 y anexo de cierre de PR). Al final: cambia el estado
+// del bloqueo de la demo y da de alta su token de estados.
+describe('bloqueo de merge (E45 con gate, E53, E54)', () => {
+  const CONN_GITHUB = fx.connections.find((c) => c.provider === 'github')!.id;
+  const PR = fx.codeReviewStateBloqueo.recent[0]!.id;
+  const LIMPIA = fx.codeReviewState.recent[1]!.id;
+  const leer = (q = '') => pedir<CodeReviewState>(`/api/orgs/${DEMO}/code-review${q}`);
+  const bloqueo = (body: unknown) => pedir<MergeGateSaved>(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', body);
+  const accion = (id: string, body: unknown) => pedir(`/api/orgs/${DEMO}/code-review/reviews/${id}/gate`, 'POST', body);
+  const BASE = { enabled: true, min_severity: 'critical' };
+
+  it('la demo trae codeReviewStateBloqueo con el anexo (cerrar PR) y el PR #7 cerrado; el 2.º repo, sin gate', async () => {
+    const s = CodeReviewState.parse(await leer());
+    expect(s.config?.gate).toMatchObject({ ...fx.codeReviewStateBloqueo.config.gate, close_pr: true, can_close_pr: true });
+    expect(s.recent[0]!.gate).toMatchObject({ state: 'failure', blocking: 1, pr_action: 'closed' });
+    expect((await leer(`?connection_id=${fx.conexionGithub2.id}`)).config?.gate).toBeUndefined();
+  });
+
+  it('E53 y E54: el anónimo de la demo no puede escribir (403)', async () => {
+    sesion.tipo = 'anonima';
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', BASE)).toMatchObject({ status: 403 });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 403 });
+  });
+
+  it('E53 con token: token clásico y permisos de más dan 422; uno bueno publica la prueba ✗ y aparece en Conexiones', async () => {
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', { ...BASE, statuses_pat: 'ghp_tokenclasicodegithub0000' })).toMatchObject({ status: 422, code: 'key_rejected' });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', { ...BASE, statuses_pat: 'github_pat_con_contents_00000000' }))
+      .toMatchObject({ status: 422, details: { reason: 'excess_scope', excess_permissions: ['contents', 'administration'] } });
+    const r = MergeGateSaved.parse(await bloqueo({ ...BASE, statuses_pat: 'github_pat_estados_de_la_demo_k9Qz' }));
+    expect(r).toMatchObject({ probe_sha: fx.mergeGateSaved.probe_sha, probe_state: 'failure', gate: { state: 'unchecked', can_close_pr: true } });
+    expect(JSON.stringify(r)).not.toContain('github_pat_');
+    const cx = await pedir<{ id: string; provider: string; kind: string; meta: Record<string, unknown> }[]>(`/api/orgs/${DEMO}/connections`);
+    expect(cx.find((c) => c.provider === 'github' && c.kind === 'action')).toMatchObject({ id: fx.mergeGateSaved.gate.statuses_connection.id, meta: { branch: 'main' } });
+    // Otro token rota el de la MISMA conexión.
+    const otro = MergeGateSaved.parse(await bloqueo({ ...BASE, statuses_pat: 'github_pat_estados_nuevo_de_la_demo' }));
+    expect(otro.gate.statuses_connection).toMatchObject({ id: r.gate.statuses_connection!.id, last4: 'demo' });
+  });
+
+  it('E54: dar por bueno y deshacer el PR #7, reabrirlo una vez; lo limpio o ajeno no se toca', async () => {
+    expect(await accion(PR, { op: 'override', reason: 'Clave de prueba' })).toEqual({ ok: true, resultado: 'encolado' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ state: 'success', override_at: expect.any(String) });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'override', reason: 'Otra vez' })).toMatchObject({ status: 409, details: { reason: 'nada_que_aprobar' } });
+    await accion(PR, { op: 'revert' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ state: 'failure', override_at: null });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 409, details: { reason: 'sin_override' } });
+    await accion(PR, { op: 'reopen_pr' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ pr_action: 'reopened', state: 'failure' });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'reopen_pr' })).toMatchObject({ status: 409 });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${LIMPIA}/gate`, 'POST', { op: 'override', reason: 'Limpia' })).toMatchObject({ status: 409 });
+    // P1: «Publicar de nuevo» publica lo que ya se sabe de la más reciente del PR; una revisión de antes del bloqueo, 409.
+    expect(await accion(PR, { op: 'republish' })).toEqual({ ok: true, resultado: 'encolado' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ state: 'failure', error: null });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${fx.codeReviewState.recent[0]!.id}/gate`, 'POST', { op: 'republish' })).toMatchObject({ status: 409, details: { reason: 'sin_calculo' } });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${NADA}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 404 });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'override', reason: 'x' })).toMatchObject({ status: 422 });
+  });
+
+  it('apagado: E45 dice off y E54 da 409; con la revisión apagada, off y E53 da 409 sin_revision', async () => {
+    expect((await bloqueo({ ...BASE, enabled: false })).gate.state).toBe('off');
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 409, details: { reason: 'apagado' } });
+    // P1: encender sin token relee la protección («Comprobar de nuevo»): GitHub exige el check → active.
+    expect((await bloqueo(BASE)).gate).toMatchObject({ state: 'active', protection: { required: 'yes', admins: 'bypass', pr_required: 'unknown' } });
+    await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: CONN_GITHUB, enabled: false });
+    expect((await leer()).config?.gate?.state).toBe('off');
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', BASE)).toMatchObject({ status: 409, details: { reason: 'sin_revision' } });
+    await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: CONN_GITHUB, enabled: true });
+    expect((await leer()).config?.gate?.state).toBe('active');
+  });
+
+  it('quitar el token de estados en Conexiones deja el bloqueo pidiendo otro (needs_token)', async () => {
+    const cx = await pedir<{ id: string; provider: string; kind: string }[]>(`/api/orgs/${DEMO}/connections`);
+    const est = cx.find((c) => c.provider === 'github' && c.kind === 'action')!;
+    expect(await pedir<{ checks: { permission: string }[] }>(`/api/orgs/${DEMO}/connections/${est.id}/test`, 'POST', {})).toMatchObject({ checks: [{ permission: 'statuses:read' }] });
+    await pedir(`/api/orgs/${DEMO}/connections/${est.id}`, 'DELETE');
+    expect((await leer()).config?.gate).toMatchObject({ state: 'needs_token', statuses_connection: null });
+  });
+
+  it('una org nueva con su repo: gate apagado en E45; encender sin token → needs_token; con token, prueba «pendiente»', async () => {
+    const s = await pedir<CodeReviewState>(`/api/orgs/${nueva}/code-review`);
+    expect(s.config?.gate).toMatchObject({ enabled: false, state: 'off', statuses_connection: null });
+    const sin = MergeGateSaved.parse(await pedir(`/api/orgs/${nueva}/code-review/gate`, 'PUT', BASE));
+    expect(sin).toMatchObject({ gate: { state: 'needs_token' }, probe_sha: null, probe_state: null, checks: [] });
+    const con = MergeGateSaved.parse(await pedir(`/api/orgs/${nueva}/code-review/gate`, 'PUT', { ...BASE, statuses_pat: 'github_pat_estados_org_nueva_000000' }));
+    expect(con).toMatchObject({ gate: { state: 'unchecked', close_pr: true }, probe_state: 'pending' });
+    expect(con.probe_sha).toMatch(/^[0-9a-f]{40}$/);
+    // E54 desde otra org propia con el id de una revisión de la demo: 404, y la del PR #7 no cambia.
+    const antes = (await leer()).recent[0]!.gate;
+    expect(await fallo(`/api/orgs/${nueva}/code-review/reviews/${PR}/gate`, 'POST', { op: 'override', reason: 'Desde otra org' }))
+      .toMatchObject({ status: 404 });
+    expect((await leer()).recent[0]!.gate).toEqual(antes);
+  });
+});
+
+// Evolución (E51 y E52, asignaciones/evolucion-entre-revisiones.md §6.5). Módulo nuevo (resetModules): la cadena de fotos
+// no hereda los ZIP ni el hallazgo del push que dejaron los casos de arriba, y hay cupo para crear orgs.
+describe('evolución (E51 y E52)', () => {
+  let f: typeof fixtureFetch;
+  const pide = async <T = unknown>(ruta: string, method = 'GET', body?: unknown) => {
+    const p = f<T>(ruta, { method, body }); p.catch(() => {}); await vi.advanceTimersByTimeAsync(300); return p;
+  };
+  const falla = (ruta: string) => pide(ruta).then(() => { throw new Error(`${ruta} no falló`); }, (e: unknown) => e as ApiError);
+  const delta = (org: string, id: string) => pide<AuditDelta>(`/api/orgs/${org}/scans/${id}/delta`);
+  const auditar = async (org: string) => (await pide<{ scan_run_id: string }>(`/api/orgs/${org}/scans`, 'POST', { kind: 'full_audit' })).scan_run_id;
+  const conFoto = (d: AuditDelta) => { if (!d.available) throw new Error('sin foto'); return d; };
+  beforeAll(async () => { vi.resetModules(); f = (await import('./router')).fixtureFetch; });
+
+  it('la auditoría de la demo devuelve fx.auditDelta y sus dos corregidos entran en la lista de la org', async () => {
+    const [verificado, aMano] = fx.hallazgosCorregidos;
+    expect(await pide<Finding>(`/api/orgs/${DEMO}/findings/${aMano!.id}`)).toMatchObject({ status: 'fixed' });   // ?finding= antes que E51
+    expect(AuditDelta.parse(await delta(DEMO, fx.scanDone.id))).toEqual(fx.auditDelta);
+    const lista = await pide<Finding[]>(`/api/orgs/${DEMO}/findings`);
+    expect(lista.filter((x) => x.id === verificado!.id || x.id === aMano!.id).map((x) => x.status).sort()).toEqual(['fixed', 'verified']);
+    expect(lista).toHaveLength(fx.findings.length + 2);
+  });
+
+  it('otra org, un id desconocido o que no es uuid → 404 uniforme', async () => {
+    const otra = (await pide<{ id: string }>('/api/orgs', 'POST', { name: 'Tienda sin datos' })).id;
+    const deDemo = await auditar(DEMO);
+    for (const [org, id] of [[otra, fx.scanDone.id], [otra, deDemo], [DEMO, NADA], [DEMO, 'no-es-uuid']] as const)
+      expect(await falla(`/api/orgs/${org}/scans/${id}/delta`)).toMatchObject({ status: 404, message: 'Auditoría no encontrada' });
+    expect(await falla(`/api/orgs/${AJENA}/scans/${fx.scanDone.id}/delta`)).toMatchObject({ status: 404, message: 'Organización no encontrada' });
+    await vi.advanceTimersByTimeAsync(12_000);   // deja terminada la de la demo: es la anterior del caso siguiente
+  });
+
+  it('una auditoría simulada: en_curso mientras corre; al terminar se compara con la anterior y la cadena sigue', async () => {
+    const id = await auditar(DEMO);
+    expect(await delta(DEMO, id)).toEqual({ available: false, scan_run_id: id, reason: 'en_curso' });
+    await vi.advanceTimersByTimeAsync(12_000);
+    // Frente a la del caso anterior (que a su vez se comparó con la de la demo): nada cambió, los 12 abiertos se mantienen.
+    const d = conFoto(AuditDelta.parse(await delta(DEMO, id)));
+    expect(d).toMatchObject({ first: false, score: fx.scanDone.score, modules_seen: ['supabase', 'cloudflare', 'codebase'],
+      previous: { kind: 'full_audit', score: fx.scanDone.score }, fixed_checked: 0, moved: 0, gone: 0 });
+    expect(d.previous!.scan_run_id).not.toBe(fx.scanDone.id);
+    expect([d.new.total, d.kept.total, d.fixed.total, d.ignored.total]).toEqual([0, 12, 0, 0]);
+
+    // Se marca uno a mano y se audita otra vez: «corregido» frente a la anterior, con su estado de ahora.
+    const marcado = d.kept.items[0]!.finding_id;
+    await pide(`/api/orgs/${DEMO}/findings/${marcado}`, 'PATCH', { status: 'fixed' });
+    const otra = await auditar(DEMO);
+    await vi.advanceTimersByTimeAsync(12_000);
+    const d2 = conFoto(AuditDelta.parse(await delta(DEMO, otra)));
+    expect(d2.previous?.scan_run_id).toBe(id);
+    expect([d2.new.total, d2.kept.total, d2.fixed.total]).toEqual([0, 11, 1]);
+    expect(d2.fixed.items).toEqual([expect.objectContaining({ finding_id: marcado, status: 'fixed' })]);
+    expect(d2.fixed_checked).toBe(0);
+    // La foto de antes no se rehace: sus conteos siguen, y su lista trae el estado de ahora.
+    const otraVez = conFoto(await delta(DEMO, id));
+    expect(otraVez.counts).toEqual(d.counts);
+    expect(otraVez.kept.items.find((i) => i.finding_id === marcado)?.status).toBe('fixed');
+  });
+
+  it('una org sin datos: con una fuente conectada, la primera foto (first:true, todo en 0); sin ninguna, sin_foto', async () => {
+    const org = (await pide<{ id: string }>('/api/orgs', 'POST', { name: 'Tienda nueva' })).id;
+    const sinFuentes = await auditar(org);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(await delta(org, sinFuentes)).toEqual({ available: false, scan_run_id: sinFuentes, reason: 'sin_foto' });
+
+    await pide(`/api/orgs/${org}/connections`, 'POST', { provider: 'supabase', pat: 'sbp_prueba', project_ref: 'abcdefghijklmnopqrst' });
+    const id = await auditar(org);
+    await vi.advanceTimersByTimeAsync(12_000);
+    const d = conFoto(AuditDelta.parse(await delta(org, id)));
+    expect(d).toMatchObject({ first: true, previous: null, modules_seen: ['supabase'], fixed_checked: 0, moved: 0, gone: 0 });
+    for (const k of ['open', 'new', 'kept', 'fixed', 'ignored'] as const)
+      expect(Object.values(d.counts[k]).flatMap((s) => Object.values(s)).every((v) => v === 0)).toBe(true);
+    expect([d.new, d.kept, d.fixed, d.ignored]).toEqual(Array(4).fill({ total: 0, items: [] }));
+
+    expect(Evolution.parse(await pide(`/api/orgs/${org}/evolution?days=7`))).toMatchObject({ days: 7, points: [], reviews: [],
+      incidents: [], truncated: false, totals: { versions: 0, snapshots: 0, score_first: null }, mttr: { verified: 0, hours_avg: null } });
+  });
+
+  it('E52 en la demo es fx.evolution con los días pedidos; el anónimo también la lee', async () => {
+    expect(await pide(`/api/orgs/${DEMO}/evolution`)).toEqual(fx.evolution);
+    expect(Evolution.parse(await pide(`/api/orgs/${DEMO}/evolution?days=90&limit=30`))).toEqual({ ...fx.evolution, days: 90 });
+    sesion.tipo = 'anonima';
+    expect(await pide(`/api/orgs/${DEMO}/evolution?days=30`)).toEqual(fx.evolution);
+    expect(conFoto(await delta(DEMO, fx.scanDone.id)).scan_run_id).toBe(fx.scanDone.id);
   });
 });

@@ -19,7 +19,8 @@ import { Database } from 'lucide-react';
 import { z } from 'zod';
 import {
   fixtures as fx, CheckDato, ConnectionCreated, ConnectionPublic, Contact, EstadoModulo, Finding, FixPromptResponse, GrupoDato,
-  Incident, IncidentDetail, Me, Overview, PerfRunExt, ProposeResponse, ScanRun, Traffic, Ts, WikiDoc, WikiEstimate, WikiRun,
+  Incident, IncidentDetail, Me, Overview, PerfRunExt, ProposeResponse, ScanRun, Traffic, Ts, UnderAttackOffer, UnderAttackProposal,
+  WikiDoc, WikiEstimate, WikiRun,
   type AccionDato, type CifraDato, type PermCheck, type Severity,
 } from '@vanguard/contracts';
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
@@ -43,11 +44,13 @@ import type { Rol } from '@/lib/severidad';
 import PaginaAjustes, { Verificar } from '@/modulos/ajustes/PaginaAjustes';
 import PaginaAuditoria from '@/modulos/auditoria/PaginaAuditoria';
 import PaginaCloudflare from '@/modulos/cloudflare/PaginaCloudflare';
+import PaginaCodebase from '@/modulos/codebase/PaginaCodebase';
 import { Resultado } from '@/modulos/conexiones/Asistente';
 import { TarjetaConexion, TarjetaIngesta } from '@/modulos/conexiones/TarjetaConexion';
 import PaginaExportar from '@/modulos/exportar/PaginaExportar';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { DetalleHallazgo } from '@/modulos/hallazgos/DetalleHallazgo';
+import { BajoAtaque } from '@/modulos/incidentes/BajoAtaque';
 import { Propuesta } from '@/modulos/incidentes/BloquearIp';
 import { hitosDe, restoDe } from '@/modulos/incidentes/hitos';
 import PaginaIncidente from '@/modulos/incidentes/PaginaIncidente';
@@ -420,6 +423,15 @@ const verTopIps = (c: string, raiz: string) => rango(fx.traffic.top_ips.length).
 // «Ver ahora» del banner de AppShell: el href que se espera con cada carga (el id envenenado sale de idMalo() al pintar).
 const VER_AHORA = new Map<string, string>();
 
+// Varias codebases: la org con dos repos (el del fixture y conexionGithub2). Con `ruta`, cada nombre envenenado lleva su
+// camino en la marca: los dos repos son distintos y reposGithub no los junta en uno.
+const DOS_REPOS = [...CONEXIONES, ConnectionPublic.parse(fx.conexionGithub2)];
+const IDX_GH = DOS_REPOS.flatMap((x, i) => (x.provider === 'github' && x.kind === 'read' ? [i] : []));
+const REPO_FX = String(DOS_REPOS[IDX_GH[0]!]!.meta.repo_full_name);
+const repoEnv = (c: string, i: number) => marca(c, `cx[${i}].meta.repo_full_name`);
+const dosRepos = (c: string, cambio: (x: ConnectionPublic) => ConnectionPublic = (x) => x) =>
+  envenenar(z.array(ConnectionPublic), DOS_REPOS.map(cambio), c, { ruta: 'cx' });
+
 // ── Casos: un render por componente; cada uno se corre con todas las cargas ──
 type Caso = { nombre: string; pintar: (c: string) => string; ver: (c: string) => Ver[]; enlaces?: (c: string) => string[] };
 
@@ -691,6 +703,30 @@ const CASOS: Caso[] = [
     ver: (c) => [marca(c, 'propuesta.efecto'), ...fx.actionProposal.avisos.map((_, k) => marca(c, `propuesta.avisos[${k}]`)), marca(c, 'propuesta.code'), marca(c, 'error')],
   },
   {
+    // Sin rellenar: un `activo` inventado convertiría la oferta en «Hecho» y no se vería el reposo.
+    nombre: 'BajoAtaque (oferta, modo activo, retirada fallida, sin permiso y fuera de zona de E55) y su Propuesta (E56)',
+    pintar: (c) => {
+      const tarjeta = (o: UnderAttackOffer) => pintar(<BajoAtaque org={ORG} incidentId={fx.incidentDetail.id} puedeEscribir ejecutada={undefined} />,
+        { datos: [[['org', ORG, 'under-attack', fx.incidentDetail.id], o]] });
+      const activo = { action_id: UUID, scope: 'host' as const, target: 'demo.officialvanguard.com', created_at: FECHA,
+        expires_at: '2099-10-24T19:42:00.000Z', retirada_fallida: false };
+      const oferta = (v: UnderAttackOffer, ruta: string) => envenenar(UnderAttackOffer, v, c, { ruta, rellenar: false });
+      const p = envenenar(UnderAttackProposal, { ...fx.underAttackProposal, delivery: 'in_app', code: '482913' }, c, { ruta: 'propuesta' });
+      const resto = { codigo: '12', alCambiarCodigo: () => {}, alConfirmar: () => {}, alCancelar: () => {}, alVencer: () => {} };
+      return [
+        tarjeta(oferta(fx.underAttackOffer, 'oferta')),
+        tarjeta(oferta({ ...fx.underAttackOffer, activo }, 'activa')),
+        tarjeta(oferta({ ...fx.underAttackOfferSinPermiso, activo: { ...activo, retirada_fallida: true } }, 'fallida')),
+        tarjeta(oferta(fx.underAttackOfferSinPermiso, 'permiso')),
+        tarjeta(oferta({ ...fx.underAttackOffer, ofrece: false, motivo: 'fuera_de_zona', scopes: [] }, 'zona')),
+        renderToStaticMarkup(<Propuesta p={p} {...resto} escribiendo={false} error={marca(c, 'error')} verbo="Activar bajo ataque" conBotonWhatsapp={false} />),
+      ].join('');
+    },
+    ver: (c) => [ltr(marca(c, 'oferta.hostname')), ltr(marca(c, 'activa.activo.target')), ltr(marca(c, 'fallida.activo.target')),
+      ltr(marca(c, 'fallida.copiar')), ltr(marca(c, 'permiso.hostname')), ltr(marca(c, 'zona.zone_name')), marca(c, 'propuesta.efecto'),
+      ...fx.underAttackProposal.avisos.map((_, k) => marca(c, `propuesta.avisos[${k}]`)), marca(c, 'propuesta.code'), marca(c, 'error')],
+  },
+  {
     nombre: 'Resultado de Asistente (last4, permisos comprobados, secreto de ingesta e id de la conexión)',
     pintar: (c) => {
       const r = envenenar(ConnectionCreated, { connection: CONEXIONES[4]!, action_connection: CONEXIONES[2]!, checks: fx.permChecks, ingest_secret: 'vgi_secreto' },
@@ -701,6 +737,62 @@ const CASOS: Caso[] = [
       </>);
     },
     ver: (c) => [marca(c, 'creada.connection.last4'), marca(c, 'creada.ingest_secret'), ...fx.permChecks.map((_, k) => marca(c, `creada.checks[${k}].permission`))],
+  },
+  // ── Varias codebases (asignaciones/varias-codebases.md §6): la org con dos repos ──
+  {
+    nombre: 'Varias codebases: TarjetaConexion de GitHub con dos repos (el repo de título de cada línea y su rama)',
+    pintar: (c) => { const cx = dosRepos(c); return pintar(<TarjetaConexion proveedor="github" conexiones={cx} descripcion="d" icono={Database} />, { datos: [[['org', ORG, 'connections'], cx]] }); },
+    ver: (c) => IDX_GH.flatMap((i) => [repoEnv(c, i), ltr(marca(c, `cx[${i}].meta.default_branch`))]),
+  },
+  {
+    nombre: 'Varias codebases: PaginaCodebase con dos repos (pestañas, «Repositorio», rama y la revisión del elegido)',
+    pintar: (c) => {
+      const cx = dosRepos(c);
+      const [a, b] = IDX_GH.map((i) => cx[i]!);
+      return pintar(<PaginaCodebase />, { ruta: `/o/${ORG}/codebase?repo=${b!.id}`, patron: '/o/:orgId/codebase', datos: [
+        [['org', ORG, 'connections'], cx], [['org', ORG, 'module', 'codebase'], fx.moduleState.codebase], [['org', ORG, 'alert-prefs'], fx.alertPrefs],
+        [['org', ORG, 'revision', a!.id], fx.codeReviewState], [['org', ORG, 'revision', b!.id], fx.codeReviewStateRepo2]] });
+    },
+    ver: (c) => [...IDX_GH.map((i) => repoEnv(c, i)), marca(c, `cx[${IDX_GH[1]}].meta.default_branch`)],
+  },
+  {
+    nombre: 'Varias codebases: PaginaWiki con dos repos (lista, «Generar la wiki de», «Otro repo público» y la conexión caída)',
+    pintar: (c) => {
+      const o = { ruta: `/o/${ORG}/wiki`, patron: '/o/:orgId/wiki' };
+      const caidos = dosRepos(c, (x) => (x.provider === 'github' ? { ...x, status: 'revoked' as const } : x));
+      return pintar(<PaginaWiki />, { ...o, datos: [[['org', ORG, 'connections'], dosRepos(c)]] })
+        + pintar(<PaginaWiki />, { ...o, datos: [[['org', ORG, 'connections'], caidos]] });
+    },
+    ver: (c) => IDX_GH.map((i) => repoEnv(c, i)),
+  },
+  {
+    nombre: 'Varias codebases: PaginaWiki, estado de la wiki de cada repo (commit y rama de las corridas del servidor)',
+    pintar: (c) => {
+      const runs = envenenar(z.array(WikiRun), fx.wikiRuns, c, { ruta: 'runs' }).map((r) => ({ ...r, repo_full_name: REPO_FX, status: 'succeeded' as const }));
+      return pintar(<PaginaWiki />, { ruta: `/o/${ORG}/wiki`, patron: '/o/:orgId/wiki', datos: [[['org', ORG, 'connections'], DOS_REPOS],
+        [['org', ORG, 'wiki', 'runs', REPO_FX], runs], [['org', ORG, 'wiki', 'runs', String(DOS_REPOS.at(-1)!.meta.repo_full_name)], []]] });
+    },
+    ver: (c) => [marca(c, 'x').slice(0, 7), ...fx.wikiRuns.map((_, k) => ltr(marca(c, `runs[${k}].branch`)))],
+  },
+  {
+    nombre: 'Varias codebases: PaginaAuditoria con una línea por repo (ScanRun.repos)',
+    pintar: (c) => {
+      const run = { ...envenenar(ScanRun, fx.scanDoneDosRepos, c, { ruta: 'scan' }), id: fx.scanDone.id };
+      return pintar(<PaginaAuditoria />, { ruta: `/o/${ORG}/audit/${run.id}`, patron: '/o/:orgId/audit/:scanId', datos: [[['org', ORG, 'scan', run.id], run]] });
+    },
+    ver: (c) => fx.scanDoneDosRepos.repos.map((_, k) => marca(c, `scan.repos[${k}].repo_full_name`)),
+  },
+  {
+    nombre: 'Varias codebases: chip del repo en «Ahora» del Resumen y en el detalle del hallazgo',
+    pintar: (c) => {
+      const cx = dosRepos(c);
+      const gh = cx[IDX_GH[0]!]!;
+      const o = { ...fx.overview, ahora: fx.overview.ahora.map((a) => (a.kind === 'finding' ? { ...a, connection_id: gh.id } : a)) };
+      const f = { ...Finding.parse(fx.findings[0]), has_fix_prompt: false, connection_id: gh.id };
+      return pintar(<PaginaResumen />, { ruta: `/o/${ORG}/overview`, patron: '/o/:orgId/overview', datos: [[['org', ORG, 'overview'], o], [['org', ORG, 'connections'], cx]] })
+        + pintar(<DetalleHallazgo org={ORG} id={f.id} puedeEscribir />, { datos: [[['org', ORG, 'finding', f.id], f], [['org', ORG, 'connections'], cx]] });
+    },
+    ver: (c) => [repoEnv(c, IDX_GH[0]!)],
   },
 ];
 

@@ -8,7 +8,10 @@ import { esApiError, mensajeDe } from '@/lib/errores';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { BotonGrande } from './BotonGrande';
 
-export function BotonRevisar({ kind, titulo, descripcion }: { kind: Extract<ScanCreate['kind'], 'supabase' | 'cloudflare' | 'repo'>; titulo: string; descripcion: string }) {
+// `connectionId`: «Analizar este repo» de una pestaña de Codebase (varias-codebases §6.2). Sin él, E11 elige (principal).
+export function BotonRevisar({ kind, titulo, descripcion, connectionId }: {
+  kind: Extract<ScanCreate['kind'], 'supabase' | 'cloudflare' | 'repo'>; titulo: string; descripcion: string; connectionId?: string;
+}) {
   const org = useOrg();
   const navegar = useNavigate();
   const lanzar = useLanzarScan(org.id);
@@ -17,7 +20,7 @@ export function BotonRevisar({ kind, titulo, descripcion }: { kind: Extract<Scan
     <div className="flex flex-col gap-2">
       <BotonGrande icono={ShieldCheck} titulo={titulo} descripcion={descripcion} ocupado={lanzar.isPending}
         deshabilitado={org.puedeEscribir ? undefined : SOLO_LECTURA}
-        onClick={() => { setError(null); lanzar.mutate({ kind }, {
+        onClick={() => { setError(null); lanzar.mutate(connectionId ? { kind, connection_id: connectionId } : { kind }, {
           // Ids codificados, como useLanzarYNavegar: un id con «../», «?» o «#» no saca la navegación de /audit/.
           onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),
           onError: (e) => {

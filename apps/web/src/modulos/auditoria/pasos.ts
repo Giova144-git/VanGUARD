@@ -1,7 +1,7 @@
 // La lista de pasos y su estado los da el servidor (ScanRun.steps[], E12); aquí solo textos y traducción (S14 §14.14).
 // api() en producción deja pasar un cuerpo fuera de contrato: todo mapa se lee con deMapa, así un paso, un estado o un
 // «__proto__» desconocidos caen a un respaldo neutro (L3) en vez de lanzar TypeError y tumbar la auditoría.
-import type { Module, ScanRun, ScanStep } from '@vanguard/contracts';
+import type { Module, ScanRepo, ScanRun, ScanStep } from '@vanguard/contracts';
 import { sinBidi } from '@/lib/bidi';
 import { textoErrorZip } from '@/lib/errores-escaneo';
 import { deMapa, type Rol } from '@/lib/severidad';
@@ -19,10 +19,23 @@ export const TEXTO_PASO: Record<ScanStep['name'], TextoPaso> = {
 export const textoPaso = (name: unknown): TextoPaso =>
   deMapa(TEXTO_PASO, name, { nombre: typeof name === 'string' && name ? sinBidi(name) : '—', detalle: '', modulo: null });
 
+// «Medir ahora» (F-17) crea un scan kind 'lighthouse': la misma pantalla de auditoría, con sus textos y sin «Auditar todo».
+export const esMedicion = (kind: unknown) => kind === 'lighthouse';
+
 // ScanRun.step también vale 'waiting_result' entre E11 y E23 (ZIP): no es un paso de la lista, es la espera del navegador.
-const PASO_ACTUAL: Record<string, string> = { waiting_result: 'esperando el resultado de tu ZIP' };
-export const textoPasoActual = (step: unknown): string | null =>
-  typeof step === 'string' && step ? deMapa(PASO_ACTUAL, step, textoPaso(step).nombre) : null;
+// En una medición (kind 'lighthouse') steps[] lleva solo 'psi'. Los psi-<estrategia>, perf-compare y fin de S10 §10.2 se
+// leen por si llegan; el BACK de hoy no los escribe.
+const PASO_ACTUAL: Record<string, string> = {
+  waiting_result: 'esperando el resultado de tu ZIP',
+  'psi-mobile': 'midiendo móvil con PageSpeed Insights', 'psi-desktop': 'midiendo escritorio con PageSpeed Insights',
+  'perf-compare': 'comparando con la medición anterior', fin: 'guardando la medición',
+};
+// El BACK (vg_claim_step) deja step = 'psi' durante toda la medición: una sola pasada de Lighthouse (~10 s; PSI admite
+// hasta 2 min). Sin la estrategia, el texto no la nombra.
+export const textoPasoActual = (step: unknown, kind?: unknown): string | null =>
+  typeof step !== 'string' || !step ? null
+    : step === 'psi' && esMedicion(kind) ? 'midiendo con PageSpeed Insights (suele tardar menos de un minuto)'
+    : deMapa(PASO_ACTUAL, step, textoPaso(step).nombre);
 
 // error_code de un paso terminado (repo y zip, S09 §09.11): lo que no se llegó a mirar entero no sale en verde.
 const INCOMPLETO: Record<string, string> = {
@@ -30,6 +43,8 @@ const INCOMPLETO: Record<string, string> = {
   osv_unavailable: 'OSV no respondió: hay dependencias sin revisar',
   hallazgos_truncados: 'Había más hallazgos de los que guardamos',
   parcial: 'Una parte quedó sin revisar',
+  // psi (scans/psi.ts): Lighthouse devolvió runtimeError (NO_FCP…); la fila de perf_runs se guarda sin métricas.
+  runtime_error: 'Lighthouse no pudo cargar la página: esta medición quedó sin cifras',
 };
 // Nota bajo el paso: la del código conocido; los ZIP_* (ZIP_RESULT_MISSING) con el texto del ZIP; el resto, nada.
 export function notaPaso(s: Pick<ScanStep, 'error_code'>): string {
@@ -40,8 +55,8 @@ export function notaPaso(s: Pick<ScanStep, 'error_code'>): string {
 }
 
 // ScanRun.error: un mensaje del servidor en español, o un código (ZIP_RESULT_MISSING, que deja el vigilante de E24).
-export const textoFallo = (e: string | null | undefined): string =>
-  !e ? 'La auditoría falló' : /^ZIP_[A-Z_]+$/.test(e) ? textoErrorZip(e) : e;
+export const textoFallo = (e: string | null | undefined, kind?: unknown): string =>
+  !e ? (esMedicion(kind) ? 'La medición falló' : 'La auditoría falló') : /^ZIP_[A-Z_]+$/.test(e) ? textoErrorZip(e) : e;
 
 export type EstadoPaso = 'pendiente' | 'corriendo' | 'hecho' | 'en_parte' | 'sin_mirar' | 'error' | 'desconocido';
 const DE: Record<ScanStep['status'], EstadoPaso> = { pending: 'pendiente', running: 'corriendo', done: 'hecho', skipped: 'sin_mirar', failed: 'error' };
@@ -69,3 +84,18 @@ export const ESTADO_SCAN: Record<ScanRun['status'], { texto: string; rol: Rol }>
   succeeded: { texto: 'Terminada', rol: 'neutra' }, failed: { texto: 'Falló', rol: 'mal' },
 };
 export const estadoScan = (s: unknown) => deMapa(ESTADO_SCAN, s, { texto: '—', rol: 'neutra' });
+
+// Una línea por repo bajo el paso «Codebase» (varias-codebases §6.4, F4b), con ScanRun.repos de 2 o más. El código de
+// cada repo va solo en su entrada (B3): token revocado o conexión quitada se dicen; otro fallo, «No pudimos revisarlo».
+const MOTIVO_REPO: Record<string, string> = { unauthorized: 'Token revocado', no_connection: 'Conexión quitada' };
+export function lineaRepo(r: Pick<ScanRepo, 'status' | 'findings' | 'error_code'>, enCurso: boolean): { estado: string; motivo: string; hallazgos: number | null } {
+  if (r.status === 'done') {
+    const nota = deMapa(INCOMPLETO, r.error_code, '');
+    return { estado: nota ? 'Hecho en parte' : 'Hecho', motivo: nota, hallazgos: typeof r.findings === 'number' ? r.findings : null };
+  }
+  if (r.status === 'failed') return { estado: 'Falló', motivo: deMapa(MOTIVO_REPO, r.error_code, 'No pudimos revisarlo'), hallazgos: null };
+  if (r.status === 'skipped') return { estado: 'Sin mirar', motivo: deMapa(MOTIVO_REPO, r.error_code, ''), hallazgos: null };
+  if (r.status === 'running') return { estado: 'Revisando…', motivo: '', hallazgos: null };
+  // pending al terminar la auditoría: el mensaje de ese repo no llegó (DLQ) y se quedó sin revisar (§2.3).
+  return { estado: r.status === 'pending' ? (enCurso ? 'Pendiente' : 'Sin revisar') : '—', motivo: '', hallazgos: null };
+}

@@ -70,7 +70,7 @@ export function ActivarBlindaje({ forma = 'grande', titulo = 'Activar modo blind
   return (
     <div className="flex flex-col gap-3 rounded-xl border bg-card p-4" role="group" aria-label={titulo}>
       <p className="text-[15px]">{AVISO_BLINDAJE}</p>
-      <p className="text-sm text-muted-foreground">Ten a mano el token de lectura (puede ser el mismo) y uno nuevo con solo Firewall Services · Edit.</p>
+      <p className="text-sm text-muted-foreground">Ten a mano el token de lectura (puede ser el mismo) y uno nuevo con Firewall Services · Edit (y Config Rules · Edit para el modo bajo ataque).</p>
       <div className="flex flex-wrap gap-2">
         <Button variant="secundaria" size="grande" disabled={fase === 'ocupado'} onClick={() => setFase('reposo')}>Cancelar</Button>
         <Button ref={confirmar} variant="principal" size="grande" aria-busy={fase === 'ocupado' || undefined} onClick={seguir}>

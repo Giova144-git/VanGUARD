@@ -21,11 +21,12 @@ import type { RespuestaCola } from '../wiki/pasos.ts';
 // 'diff' (§2.2–2.5): claim CAS → config y conexión (el repo sale de connections.meta, nunca del payload) → compare
 // base...head con el PAT en formato diff → solo las líneas AÑADIDAS, en compacto → reglas (secretos y .env) →
 // aFila → ocultarRutas → vg_review_findings (decide «nuevo» y alert_state en una transacción; p_write solo en un
-// push, y un PR de fork va con sin_aviso) → si queda 'pending', encola el paso 'aviso' (notify/revision.ts). Como la
-// wiki, decide ack o retry: un transitorio (429, 403 con límite, 5xx, red, plazo) se reintenta 2 veces y después la
-// revisión queda failed con su código; lo que agota la CPU llega a la DLQ (failed/dlq).
+// push, y un PR de fork va con sin_aviso) → en un push, la foto de Codebase para la evolución (fotoPush, 0015) → si
+// queda 'pending', encola el paso 'aviso' (notify/revision.ts). Como la wiki, decide ack o retry: un transitorio (429,
+// 403 con límite, 5xx, red, plazo) se reintenta 2 veces y después la revisión queda failed con su código; lo que agota
+// la CPU llega a la DLQ (failed/dlq).
 // Subpeticiones (§2.7): claim 1 + config y conexión 2 + PAT y llaves ≤ 6 + compare ≤ 4 + last_error 'token' ≤ 1 +
-// vg_review_findings 1 (+1 de rescate si la base rechaza el lote, 23514) + encolar 1 ≤ 17 de 40.
+// vg_review_findings 1 (+1 de rescate si la base rechaza el lote, 23514) + foto del push 1 + encolar 1 ≤ 18 de 40.
 
 export const LIM_REVISION: Readonly<{ diffBytes: number; archivos: number; bytesAnadidos: number; filas: number }> =
   Object.freeze({ diffBytes: 1_000_000, archivos: LIM_DIFF.archivos, bytesAnadidos: LIM_DIFF.bytesAnadidos, filas: 200 });
@@ -110,13 +111,34 @@ async function reclamar(env: CloudflareBindings, m: MsgRevision, intento: number
 const encolarAviso = (env: CloudflareBindings, m: MsgRevision) =>
   env.JOBS_Q.send({ v: 1, kind: 'review', org_id: m.org_id, review_id: m.review_id, paso: 'aviso' });
 
-// No se pudo reclamar: ya la hizo otra entrega. Si quedó done con el aviso pendiente (vg_review_findings cerró pero falló
-// encolar el aviso), solo se reencola el aviso; si no, nada.
+// Foto de Codebase de un push (0015; asignaciones/evolucion-entre-revisiones.md §2.2): abiertos de toda la org, los que
+// siguen y los corregidos desde la foto del push anterior; E45 y E52 la leen de code_reviews.delta. Mejor esfuerzo: nunca
+// cambia el resultado del paso. Idempotente (la RPC devuelve la que ya hay), así que yaReclamada la puede volver a pedir.
+// TODO(M1, pendiente de Giovanni; D3: hoy el texto no cambia): el WhatsApp del push podría sumar «siguen abiertos ·
+// corregidos» leyendo code_reviews.delta desde notify/revision.ts (evolucion-entre-revisiones.md §9.4; los botones van en
+// avisos-whatsapp-botones.md). El enganche ya está: la foto queda escrita antes de encolar el paso 'aviso'.
+async function fotoPush(admin: ReturnType<typeof db>, m: MsgRevision) {
+  try {
+    const { data, error } = await admin.rpc('vg_review_snapshot', { p_org: m.org_id, p_review: m.review_id });
+    if (error) { log('warn', 'evolucion.foto_push_error', { review: m.review_id, code: error.code ?? null }); return; }
+    const f = obj(data);
+    const n = (k: string) => (typeof f[k] === 'number' ? f[k] : null);
+    log('info', 'evolucion.foto_push', { review: m.review_id, applied: f.applied === true, first: f.first === true,
+      repetida: f.repeated === true, abiertos: n('open'), siguen: n('kept'), corregidos: n('fixed') });
+  } catch {
+    log('warn', 'evolucion.foto_push_error', { review: m.review_id, code: 'red' });
+  }
+}
+
+// No se pudo reclamar: ya la hizo otra entrega. Un push done vuelve a pedir su foto (cubre la entrega que cayó entre
+// vg_review_findings y la foto; si ya está, la RPC la devuelve: +1 subpetición, solo en una reentrega). Si quedó done con
+// el aviso pendiente (vg_review_findings cerró pero falló encolar el aviso), se reencola el aviso; si no, nada más.
 async function yaReclamada(env: CloudflareBindings, m: MsgRevision, intento: number): Promise<RespuestaCola> {
-  const { data, error } = await db(env).from('code_reviews').select('status, alert_state')
+  const { data, error } = await db(env).from('code_reviews').select('status, alert_state, event')
     .eq('id', m.review_id).eq('org_id', m.org_id).maybeSingle();
   if (error) return { retry: escalonado(intento) };
   const f = obj(data);
+  if (f.status === 'done' && f.event === 'push') await fotoPush(db(env), m);
   if (f.status === 'done' && f.alert_state === 'pending') {
     try { await encolarAviso(env, m); } catch { return { retry: escalonado(intento) }; }
     log('info', 'revision.aviso_reencolado', { review: m.review_id, intento });
@@ -264,6 +286,9 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
     log('info', 'revision.cas_perdido', { review: m.review_id, intento });   // ya no estaba running: otra entrega la cerró
     return 'ack';
   }
+  // La foto va antes de encolar el aviso (y, con el bloqueo de merge, antes del paso 'estado'): el aviso y E45 ya la
+  // encuentran. Un PR no escribe hallazgos y no hace foto.
+  if (rev.event === 'push') await fotoPush(admin, m);
   // Tras cerrar: si encolar falla, la reentrega no puede reclamarla (está done) y yaReclamada reencola el aviso.
   if (res.alert_state === 'pending') {
     try { await encolarAviso(env, m); } catch {

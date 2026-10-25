@@ -4,6 +4,7 @@ import { actions } from './actions.ts';
 import { connections } from './connections.ts';
 import { contacts } from './contacts.ts';
 import { demo } from './demo.ts';
+import { evolucion } from './evolucion.ts';
 import { exportRuta } from './export.ts';
 import { findings } from './findings.ts';
 import { incidents } from './incidents.ts';
@@ -30,6 +31,7 @@ rutas.route('/', orgs);
 rutas.route('/', demo);
 rutas.route('/', connections);
 rutas.route('/', scans);
+rutas.route('/', evolucion);   // E51 (scans/:id/delta) y E52 (evolution)
 rutas.route('/', findings);
 rutas.route('/', overview);
 rutas.route('/', modules);

@@ -4,6 +4,7 @@ import { pedirResumen, type HallazgoResumen } from '../ia/claude.ts';
 import { registrarPaso, type FnPaso } from '../jobs.ts';
 import { db } from '../lib/db.ts';
 import { ProviderError } from '../lib/http.ts';
+import { log } from '../lib/log.ts';
 import { pasoCloudflare } from './cloudflare.ts';
 import { calcularCobertura } from './cobertura.ts';
 import { pasoRepo } from './repo-paso.ts';
@@ -13,7 +14,8 @@ import { pasoZip } from './zip-paso.ts';
 // Registro de los pasos de la cola vg-jobs (S15 15.8). worker.ts y dev-node.ts importan este archivo por su efecto.
 
 // puntaje: score y coverage ANTES de la IA (la demo ve el rojo aunque IA-2 siga escribiendo). Fusiona coverage para no
-// borrar coverage.detail.codebase. Con seen = 0, score null (nunca un número sin haber mirado nada).
+// borrar coverage.detail.codebase. Con seen = 0, score null (nunca un número sin haber mirado nada). Después, la foto de
+// la evolución (fotoAuditoria).
 export const pasoPuntaje: FnPaso = async (env, m) => {
   const admin = db(env);
   const [{ data: fs, error }, cov, { data: prev }] = await Promise.all([
@@ -27,8 +29,28 @@ export const pasoPuntaje: FnPaso = async (env, m) => {
   const { error: eu } = await admin.from('scan_runs').update({ score: p?.score ?? null, coverage })
     .eq('id', m.scan_run_id).eq('org_id', m.org_id);
   if (eu) throw new ProviderError('unavailable');
+  await fotoAuditoria(admin, m);
   return { status: 'done' };
 };
+
+// Foto para la evolución (0015; asignaciones/evolucion-entre-revisiones.md §2.1), DESPUÉS de escribir score: E51 y E52
+// leen el puntaje de scan_runs. Mejor esfuerzo: si falla, la auditoría sigue y la siguiente foto compara con la última
+// que exista. Una subpetición; las cuentas las hace la base. Si puntaje se repite (reintento o finalizar), la RPC
+// devuelve la foto que ya hay (repeated): no se rehace. Los logs solo llevan conteos y códigos.
+async function fotoAuditoria(admin: ReturnType<typeof db>, m: { org_id: string; scan_run_id: string }) {
+  try {
+    const { data: foto, error: ef } = await admin.rpc('vg_snapshot_audit', { p_org: m.org_id, p_scan: m.scan_run_id });
+    if (ef) { log('warn', 'evolucion.foto_error', { scan: m.scan_run_id, code: ef.code ?? null }); return; }
+    const f = (foto && typeof foto === 'object' && !Array.isArray(foto) ? foto : {}) as Record<string, unknown>;
+    const n = (k: string) => (typeof f[k] === 'number' ? f[k] : null);
+    log('info', 'evolucion.foto', { scan: m.scan_run_id, applied: f.applied === true, first: f.first === true,
+      repetida: f.repeated === true, reason: typeof f.reason === 'string' ? f.reason.slice(0, 40) : null, open: n('open'),
+      nuevos: n('new'), se_mantienen: n('kept'), corregidos: n('fixed'), ignorados: n('ignored'), movidos: n('moved'),
+      ya_no_existen: n('gone') });
+  } catch {
+    log('warn', 'evolucion.foto_error', { scan: m.scan_run_id, code: 'red' });
+  }
+}
 
 // resumen_ia (IA-2): solo llama al modelo si scan_runs.summary es nulo (idempotente, sin doble gasto). Si la IA está
 // apagada, sin presupuesto o su salida no pasa el filtro, va la plantilla determinista (recorte #4 de §15.14).

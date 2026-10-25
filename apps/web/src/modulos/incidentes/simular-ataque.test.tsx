@@ -27,8 +27,9 @@ function pintar(org: OrgActual, nodo: ReactNode, qc = new QueryClient(), entrada
 describe('SimularAtaque', () => {
   it('owner o admin en la demo: los tres tipos, el botón y la nota de la IP reservada', () => {
     const html = pintar(ADMIN_DEMO, <SimularAtaque org={ADMIN_DEMO} />);
-    for (const t of ['Escaneo de rutas', 'Inundación', 'Herramienta de ataque', 'Simular ataque', '203.0.113.x', 'te llama Guardia']) expect(html).toContain(t);
-    expect(html).toContain('aria-pressed="true"');
+    for (const t of ['Escaneo de rutas', 'Inundación', 'Herramienta de ataque', 'Simular ataque', '203.0.113.x', 'el botón para llamar a Guardia', 'solo el WhatsApp']) expect(html).toContain(t);
+    // La inundación (la única crítica con el motor real) va primera y elegida.
+    expect(html).toMatch(/aria-label="Tipo de ataque"><button[^>]*aria-pressed="true"[^>]*>Inundación</);
   });
 
   it('no se pinta para el viewer, fuera de la demo ni con E57 ausente (404/403)', () => {

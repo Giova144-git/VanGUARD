@@ -525,7 +525,7 @@ function volcarMedicion(m: CorridaPerf) {
 
 // ── Incidentes (S14 §14.19) ──────────────────────────────────────────────────────────────────────────────────
 // Cada incidente vive como IncidentDetail. Los simulados guardan su inicio y sus hitos se van llenando con el reloj.
-type Simulado = { inicio: number };
+type Simulado = { inicio: number; critico?: boolean };
 const incidentes = new Map<string, IncidentDetail[]>();
 const simulados = new Map<string, Simulado>();
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -549,7 +549,9 @@ function avanzar(i: IncidentDetail) {
   if (!s) return i;
   const ms = Date.now() - s.inicio;
   const vistos = new Set(i.timeline.map((t) => t.kind));
-  for (const g of GUION) if (ms >= g.ms && !vistos.has(g.kind)) {
+  // Como el motor real (E57 por afb471e): solo la inundación es crítica y trae la llamada; el escaneo y la herramienta se
+  // quedan en alta, sin subir de severidad ni llamada.
+  for (const g of GUION) if (ms >= g.ms && !vistos.has(g.kind) && (s.critico !== false || (g.kind !== 'severity_up' && g.kind !== 'call_started'))) {
     i.timeline.push({ t: iso(s.inicio + g.ms), ms: g.ms, kind: g.kind, label: g.label });
     if (g.kind === 'whatsapp_sent' || g.kind === 'call_started') {
       i.notifications.push({ id: crypto.randomUUID(), channel: g.kind === 'call_started' ? 'voice' : 'whatsapp', recipient_masked: '+58 ••• ••43',
@@ -733,7 +735,7 @@ const SIMULADO: Record<SimulateAttackKind, { rule_ids: string[]; title: string }
   attack_tool: { rule_ids: ['CF_UA_TOOL'], title: 'Herramienta de ataque contra tu sitio desde 203.0.x.x' },
 };
 const SIMULADO_KIND = z.enum(['path_scan', 'ip_flood', 'attack_tool']);
-export function simularAtaque(org: string, kind: SimulateAttackKind = 'path_scan'): string {
+export function simularAtaque(org: string, kind: SimulateAttackKind = 'ip_flood'): string {
   const inicio = Date.now();
   const id = crypto.randomUUID();
   const code = Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, 'X');
@@ -748,7 +750,7 @@ export function simularAtaque(org: string, kind: SimulateAttackKind = 'path_scan
     timeline: [{ t: iso(inicio), ms: 0, kind: 'attack_start', label: 'Primera petición del atacante' }],
   };
   incidentesDe(org).unshift(i);
-  simulados.set(id, { inicio });
+  simulados.set(id, { inicio, critico: kind === 'ip_flood' });
   return id;
 }
 // E57: solo en la org de demo y con permiso de escritura; una simulación cada 2 min por org.
@@ -756,11 +758,11 @@ function simularFalso(org: string, body: unknown): SimulateAttackOut {
   if (!esDemo(org) || tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Solo los administradores de la org de demo pueden simular un ataque');
   const reciente = incidentesDe(org).some((i) => simulados.has(i.id) && Date.now() - simulados.get(i.id)!.inicio < 120_000);
   if (reciente) falla(429, 'rate_limited', 'Espera 2 minutos entre simulaciones');
-  const kind = SIMULADO_KIND.safeParse((body as { kind?: unknown } | null)?.kind ?? 'path_scan');
+  const kind = SIMULADO_KIND.safeParse((body as { kind?: unknown } | null)?.kind ?? 'ip_flood');
   if (!kind.success) falla(400, 'validation', 'Tipo de ataque desconocido');
   const id = simularAtaque(org, kind.data!);
   const voz = contactosDe(org).some((c) => c.voice && c.verified_at);
-  return { incident_id: id, code: incidente(org, id).code, whatsapp: 'queued', voice: voz ? 'queued' : 'skipped' };
+  return { incident_id: id, code: incidente(org, id).code, whatsapp: 'queued', voice: voz && kind.data === 'ip_flood' ? 'queued' : 'skipped' };
 }
 export function simularAprobacionWhatsApp(org: string, incidentId: string) {
   const i = incidente(org, incidentId);

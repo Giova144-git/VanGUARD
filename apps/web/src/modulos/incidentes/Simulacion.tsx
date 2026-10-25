@@ -18,9 +18,10 @@ import { useRutaAusente, useSimularAtaque } from '@/lib/mutaciones';
 import { deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 
+// La inundación primero y por defecto: con el motor real es la única crítica, la que trae «Llamar a Guardia» (1bbfa42).
 const TIPOS: { kind: SimulateAttackKind; texto: string }[] = [
-  { kind: 'path_scan', texto: 'Escaneo de rutas' },
   { kind: 'ip_flood', texto: 'Inundación' },
+  { kind: 'path_scan', texto: 'Escaneo de rutas' },
   { kind: 'attack_tool', texto: 'Herramienta de ataque' },
 ];
 const CANAL: Record<SimulateAttackOut['whatsapp'], string> = { queued: 'en camino', skipped: 'no aplica', failed: 'falló' };
@@ -36,7 +37,7 @@ export function SimularAtaque({ org }: { org: OrgActual }) {
   const navegar = useNavigate();
   const ausente = useRutaAusente(org.id, 'E57');
   const sim = useSimularAtaque(org.id);
-  const [kind, setKind] = useState<SimulateAttackKind>('path_scan');
+  const [kind, setKind] = useState<SimulateAttackKind>('ip_flood');
   if (!org.puedeEscribir || !org.is_demo || ausente) return null;
   const simular = () => sim.mutate({ kind }, {
     onSuccess: (r) => navegar(`/o/${org.id}/incidents/${encodeURIComponent(r.incident_id)}`,
@@ -54,7 +55,7 @@ export function SimularAtaque({ org }: { org: OrgActual }) {
       </div>
       <BotonAccion variante="secundaria" tam="grande" icono={FlaskConical} ocupado={sim.isPending} onClick={simular}>Simular ataque</BotonAccion>
       <p className="text-[12.5px] text-muted-foreground">
-        Crea un incidente de prueba con una IP reservada (203.0.113.x). Te llega el WhatsApp y, si tu contacto tiene la llamada activada, te llama Guardia.
+        Crea un incidente de prueba con una IP reservada (203.0.113.x). La inundación es crítica: llega el WhatsApp y el botón para llamar a Guardia. El escaneo y la herramienta son altos: solo el WhatsApp.
       </p>
       {sim.isError && !ausente ? <p role="alert" className="text-sm text-mal">{errorSimulacion(sim.error)}</p> : null}
     </section>

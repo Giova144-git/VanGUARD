@@ -759,3 +759,11 @@ describe('E57 · simular ataque', () => {
     expect(await fallo(`/api/orgs/${DEMO}/incidents/simulate`, 'POST', {})).toMatchObject({ status: 429 });
   });
 });
+
+describe('E57 · tipo por defecto', () => {
+  it('sin kind simula la inundación (la única crítica con el motor real); pasados 2 min se puede repetir', async () => {
+    await vi.advanceTimersByTimeAsync(121_000);
+    const r = await pedir<{ incident_id: string }>(`/api/orgs/${DEMO}/incidents/simulate`, 'POST', {});
+    expect(await pedir<IncidentDetail>(`/api/orgs/${DEMO}/incidents/${r.incident_id}`)).toMatchObject({ rule_ids: ['CF_IP_FLOOD'] });
+  });
+});

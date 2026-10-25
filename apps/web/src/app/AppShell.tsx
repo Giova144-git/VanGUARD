@@ -17,7 +17,7 @@ import { GuiaProvider, useGuia } from '@/componentes/vigia/contexto';
 import { MenuContextual } from '@/componentes/vigia/MenuContextual';
 import { ESPERA_G_MS, leerTecla } from '@/lib/atajos';
 import { useConexiones, useEstadoModulo, useOverview, useUsoIA } from '@/lib/consultas';
-import { cuando } from '@/lib/formato';
+import { cuando, horaCompleta } from '@/lib/formato';
 import { MARCA } from '@/lib/marca';
 import { NAV, entradaNav, type EntradaNav, type IdNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
@@ -128,7 +128,7 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
       <div className={cn('mt-2 flex flex-col gap-1 border-t pt-3', compacto && 'items-center')}>
         <span className={cn('flex items-center gap-1.5 px-1 text-[12.5px] tabular-nums', overview.isError ? 'text-mal' : 'text-texto-3')}
           title="Hora del último resumen bueno">
-          <Clock className="size-3.5" />{cuando(overview.dataUpdatedAt || null)}
+          <Clock className="size-3.5" /><span title={horaCompleta(overview.dataUpdatedAt || null)}>{cuando(overview.dataUpdatedAt || null)}</span>
         </span>
         {compacto ? null : <div className="flex items-center gap-2 px-1">
           <span className="flex-1 truncate text-sm">{org.me.user.email ? <bdi dir="ltr">{sinBidi(org.me.user.email)}</bdi> : 'Invitado · demo'}</span>

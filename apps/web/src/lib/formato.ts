@@ -27,13 +27,28 @@ export function cifra(c: { n: number | null; de?: number; unidad?: '%' | 'ms' | 
     : c.decimales != null ? decimal(c.n, c.decimales) : miles(c.n);
   return c.de != null ? `${v} de ${miles(c.de)}` : v;
 }
+// Un solo formato de hora en toda la app (UX P1-13), en hora de Caracas (UTC−4, sin horario de verano): «hoy 04:46»,
+// «ayer 23:32», «24-oct 23:32» y, de otro año, «24-oct-2025 23:32». La fecha completa con la zona, en horaCompleta().
 const hhmm = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', hour: '2-digit', minute: '2-digit', hour12: false });
-const ddmm = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', day: '2-digit', month: '2-digit' });
-export function cuando(t?: string | Date | number | null, ahora = new Date()) {                        // 21:14 hoy · 24-10 22:35
-  if (t == null || t === '' || t === 0) return SIN_DATO; const d = t instanceof Date ? t : new Date(t);
-  if (Number.isNaN(d.getTime())) return SIN_DATO;
-  return ddmm.format(d) === ddmm.format(ahora) ? hhmm.format(d) : `${ddmm.format(d).replace('/', '-')} ${hhmm.format(d)}`;
+const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Caracas', year: 'numeric', month: '2-digit', day: '2-digit' });
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const fecha = (t?: string | Date | number | null) => {
+  if (t == null || t === '' || t === 0) return null;
+  const d = t instanceof Date ? t : new Date(t);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+export function cuando(t?: string | Date | number | null, ahora = new Date()) {
+  const d = fecha(t);
+  if (!d) return SIN_DATO;
+  const dia = ymd.format(d), hora = hhmm.format(d);
+  if (dia === ymd.format(ahora)) return `hoy ${hora}`;
+  if (dia === ymd.format(new Date(ahora.getTime() - 86_400_000))) return `ayer ${hora}`;
+  const [y, m, dd] = dia.split('-');
+  return `${dd}-${MESES[Number(m) - 1] ?? m}${y === ymd.format(ahora).slice(0, 4) ? '' : `-${y}`} ${hora}`;
 }
+const larga = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+/** Para el tooltip de una hora: «domingo, 25 de octubre de 2026, 04:46 · hora de Caracas (UTC−4)». */
+export const horaCompleta = (t?: string | Date | number | null) => { const d = fecha(t); return d ? `${larga.format(d)} · hora de Caracas (UTC−4)` : undefined; };
 // «hace un momento» · «hace 5 min» · «hace 3 h» · «hace 2 d».
 export function hace(t?: string | Date | number | null, ahora = new Date()) {
   if (t == null) return SIN_DATO;

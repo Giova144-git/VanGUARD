@@ -24,7 +24,7 @@ import { DesdeAnterior } from '@/modulos/evolucion/DesdeAnterior';
 import { SIN_COLA, useConexiones, useEnvioIA, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { repoParaArreglar } from '@/lib/mcp';
 import { esApiError, mensajeDe } from '@/lib/errores';
-import { cuando } from '@/lib/formato';
+import { cuando, horaCompleta } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
@@ -130,7 +130,7 @@ export default function PaginaResumen() {
   return (
     <div className="flex flex-col gap-6">
       <BarraModulo titulo="Resumen" descripcion={e.descripcion}
-        extra={q.dataUpdatedAt ? <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`}>revisado {cuando(q.dataUpdatedAt)}</span> : null} />
+        extra={q.dataUpdatedAt ? <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`} title={horaCompleta(q.dataUpdatedAt)}>revisado {cuando(q.dataUpdatedAt)}</span> : null} />
       {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
 
       <section className="flex flex-wrap items-end justify-between gap-6 rounded-xl border bg-card p-5" aria-label="Puntaje">
@@ -143,11 +143,11 @@ export default function PaginaResumen() {
             disabled={!org.puedeEscribir || previa} ayuda={!org.puedeEscribir ? SOLO_LECTURA : SIN_COLA} data-info="auditar-todo">Auditar todo</BotonAccion>
           {errorAuditar ? <span role="alert" className="max-w-xs text-sm text-mal">{errorAuditar}</span> : null}
           {ok ? (
-            <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(ok.finished_at)} ·{' '}
+            <span className="text-[12.5px] text-texto-3" title={horaCompleta(ok.finished_at)}>Última auditoría {cuando(ok.finished_at)} ·{' '}
               <Link to={`/o/${org.id}/audit/${encodeURIComponent(ok.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver</Link></span>
           ) : null}
           {fallida ? (
-            <span className="text-[12.5px] text-texto-3">La de las {cuando(fallida.finished_at)} falló ·{' '}
+            <span className="text-[12.5px] text-texto-3">La de {cuando(fallida.finished_at)} falló ·{' '}
               <Link to={`/o/${org.id}/audit/${encodeURIComponent(fallida.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver qué pasó</Link></span>
           ) : null}
           <DesdeAnterior org={org.id} ultima={o?.last_scan ?? null} />

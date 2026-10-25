@@ -13,7 +13,7 @@ import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { rutaDe } from '@/lib/destino';
 import { reposGithub } from '@/lib/repos';
-import { cuando } from '@/lib/formato';
+import { cuando, horaCompleta } from '@/lib/formato';
 import { deMapa } from '@/lib/severidad';
 import { entradaNav, type IdNav } from '@/lib/nav';
 import { BarraModulo } from './BarraModulo';
@@ -73,7 +73,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
           className="inline-flex h-11 items-center gap-1 rounded-full border border-mal-borde bg-mal-relleno px-4 font-mono text-[13px] uppercase tracking-[0.06em] font-medium text-mal outline-none hover:bg-mal/15 focus-visible:ring-2 focus-visible:ring-ring">
           {arreglo}<ChevronRight className="size-4" /></Link>
       ) : null}
-      <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`}>{est ? cuando(est.hora) : '—'}</span>
+      <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`} title={est ? horaCompleta(est.hora) : undefined}>{est ? cuando(est.hora) : '—'}</span>
       <Button variant={q.isError ? 'peligro' : 'secundaria'} size="fila" onClick={() => q.refetch()} aria-busy={q.isFetching || undefined}>
         {q.isFetching ? <Spinner /> : <RotateCw />}{q.isError ? 'Reintentar' : 'Actualizar'}</Button>
     </>} />
@@ -102,7 +102,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
     <div className="flex flex-col gap-6">
       {barra}
       {arriba}
-      {q.isError && est ? <p role="status" className="text-sm text-mal">Sin conexión · mostramos los datos de las {cuando(est.hora)}</p> : null}
+      {q.isError && est ? <p role="status" className="text-sm text-mal">Sin conexión · mostramos los datos de {cuando(est.hora)}</p> : null}
       <FilaCifras>
         {(est?.cifras ?? Array<null>(HUECOS[modulo]).fill(null)).map((x, i) => x
           ? <Cifra key={`${x.tipo}-${i}`} etiqueta={x.etiqueta} n={x.n} de={x.de} unidad={x.unidad} decimales={x.decimales} sub={x.sub} rol={x.rol}

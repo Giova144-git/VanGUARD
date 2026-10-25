@@ -37,10 +37,15 @@ export const COLUMNAS_GATE_REVISION = 'gate_blocking, gate_findings, gate_state,
   + 'gate_override_at, gate_pr_action, gate_pr_error';
 export const COLUMNAS_ESTADOS = 'id, status, last4, expires_at, meta, capabilities';
 
-/** ¿Es esta conexión de lectura la del bloqueo? Con token de acciones, la de su mismo repo (varias-codebases.md §2.6,
- *  punto 4); sin él, la principal. En los demás repos E45 no trae `gate` y el FRONT no pinta la sección. */
-export const esRepoDelBloqueo = (lecturaMeta: Fila, estados: Fila | null, principal: boolean): boolean =>
-  (estados ? mismoRepoGh(obj(estados.meta), lecturaMeta) : principal);
+/** La conexión de lectura del bloqueo, la MISMA para E53 (paso 1) y E45 (solo ella trae `gate`; en las demás el FRONT
+ *  no pinta la sección): varias-codebases.md §2.6, puntos 3 y 4. `lecturas`, por created_at e id ascendentes. Con token
+ *  de acciones, entre las de su mismo repo; sin él, entre todas (la principal, B0). De ellas, la activa más antigua y, si
+ *  ninguna lo está, la más antigua: con parejas viejas de «Reconectar» del mismo repo es la pestaña que pinta el FRONT,
+ *  y una revocada más antigua no le quita el bloqueo a la activa. undefined: ninguna del repo del token. */
+export function lecturaDelBloqueo(lecturas: Fila[], estados: Fila | null): Fila | undefined {
+  const candidatas = estados ? lecturas.filter((l) => mismoRepoGh(obj(estados.meta), obj(l.meta))) : lecturas;
+  return candidatas.find((l) => l.status === 'active') ?? candidatas[0];
+}
 
 /** MergeGateConfig (E45 y E53). state: off (revisión o bloqueo apagados) · needs_token (sin conexión de acciones activa)
  *  · error (gate_last_error: 401, 403 o 404 del token) · unchecked (publica; P0 no lee la protección). close_pr = el
@@ -104,8 +109,8 @@ bloqueo.put('/orgs/:org/code-review/gate', requireAdmin, async (c) => {
   const env = c.env, orgId = c.get('orgId'), rid = c.get('rid');
   const admin = db(env);
 
-  // 1) Conexiones GitHub de la org (lectura y acciones) en una consulta. La de lectura del bloqueo: la del repo del token
-  //    de acciones si lo hay; si no, la principal (activa más antigua, B0).
+  // 1) Conexiones GitHub de la org (lectura y acciones) en una consulta. La de lectura del bloqueo (lecturaDelBloqueo,
+  //    como E45): la activa más antigua del repo del token de acciones si lo hay; si no, la principal (B0).
   const { data: conns, error: ecn } = await admin.from('connections')
     .select('id, kind, status, meta, capabilities, last4, expires_at').eq('org_id', orgId).eq('provider', 'github')
     .in('kind', ['read', 'action']).order('created_at', { ascending: true }).order('id', { ascending: true }).limit(20);
@@ -115,9 +120,7 @@ bloqueo.put('/orgs/:org/code-review/gate', requireAdmin, async (c) => {
   }
   const filas = ((Array.isArray(conns) ? conns : []) as Fila[]);
   const estados = filas.find((f) => f.kind === 'action') ?? null;
-  const lecturas = filas.filter((f) => f.kind === 'read');
-  const lectura = estados ? lecturas.find((l) => mismoRepoGh(obj(estados.meta), obj(l.meta)))
-    : lecturas.find((l) => l.status === 'active') ?? lecturas[0];
+  const lectura = lecturaDelBloqueo(filas.filter((f) => f.kind === 'read'), estados);
   if (!lectura) {
     if (estados) throw conflicto('El token de estados es de otro repo: quítalo en Conexiones', 'otro_repo');
     throw new ApiError('not_found', 'Conecta primero tu repo de GitHub');

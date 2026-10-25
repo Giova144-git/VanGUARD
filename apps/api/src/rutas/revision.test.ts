@@ -292,6 +292,29 @@ describe('E45 · ?connection_id= (varias-codebases B6)', () => {
       expect(await gateDe('')).toBeUndefined();
       expect(await gateDe(`?connection_id=${CONN_2}`)).toBeUndefined();
     });
+
+  // Parejas viejas de «Reconectar» (dos conexiones del mismo repo, de antes de B1): gate solo en la que elegiría E53, la
+  // activa más antigua del repo del token (o, si ninguna lo está, la más antigua), no en todas las del repo.
+  it('parejas viejas del mismo repo: gate solo en la activa (la de E53), con token de acciones y sin él', async () => {
+    const tienda = { repo_full_name: 'acme/tienda', repo_id: 42, default_branch: 'main' };
+    conexiones = [{ ...conexiones[0], status: 'revoked', meta: tienda }, { ...conexiones[1], meta: tienda },
+      { org_id: ORG, provider: 'github', kind: 'action', id: 'c0000000-0000-4000-8000-000000000006', status: 'active',
+        last4: 'k9Qz', expires_at: null, capabilities: { statuses: true }, meta: { ...tienda, branch: 'main' } }];
+    const gateDe = async (q: string) => (await estadoDe(q)).config?.gate;
+    expect(await gateDe(`?connection_id=${CONN}`)).toBeUndefined();
+    expect(await gateDe(`?connection_id=${CONN_2}`)).toMatchObject({ statuses_connection: { last4: 'k9Qz' } });
+    expect(await gateDe('')).toMatchObject({ statuses_connection: { last4: 'k9Qz' } });
+
+    // Ninguna activa: la más antigua (la que muestra el FRONT; E53 respondería conexion_inactiva).
+    conexiones[1] = { ...conexiones[1], status: 'revoked' };
+    expect(await gateDe(`?connection_id=${CONN}`)).toMatchObject({ statuses_connection: { last4: 'k9Qz' } });
+    expect(await gateDe(`?connection_id=${CONN_2}`)).toBeUndefined();
+
+    // Sin token de acciones: la principal (activa más antigua, B0), aunque la revocada sea más antigua.
+    conexiones = [{ ...conexiones[0] }, { ...conexiones[1], status: 'active' }];
+    expect(await gateDe(`?connection_id=${CONN}`)).toBeUndefined();
+    expect(await gateDe(`?connection_id=${CONN_2}`)).toMatchObject({ statuses_connection: null });
+  });
 });
 
 // Bloqueo de merge (asignaciones/bloqueo-merge-criticos.md §4.1 E45 y pruebas B4 de §10.5; anexo de cierre de PR).

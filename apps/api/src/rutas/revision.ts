@@ -10,7 +10,7 @@ import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
-import { aGateConfig, aGateRevision, COLUMNAS_ESTADOS, COLUMNAS_GATE_CONFIG, COLUMNAS_GATE_REVISION, esRepoDelBloqueo }
+import { aGateConfig, aGateRevision, COLUMNAS_ESTADOS, COLUMNAS_GATE_CONFIG, COLUMNAS_GATE_REVISION, lecturaDelBloqueo }
   from './bloqueo.ts';
 
 // Revisión de código en cada push (docs/plan_maestro_trabajo/asignaciones/revision-codigo.md §4.1). E45 y E48 los lee
@@ -108,8 +108,8 @@ function aRevision(f: Fila, avisos: Fila[], ahora: number): CodeReview | null {
 // §3). Sin parámetro, la conexión principal (B0); malformado → 422; ajena, inexistente o no GitHub → sin_conexion, sin
 // distinguir. ≤ 5 subpeticiones, ninguna a GitHub: conexión → su config y, en paralelo, las GitHub de la org (lectura y
 // la de acciones del bloqueo de merge) → las 10 últimas revisiones de ESA config (sin config, ninguna) → los WhatsApp de
-// esas revisiones. config.gate solo en el repo del bloqueo (bloqueo-merge-criticos.md §4.1; varias-codebases.md §2.6,
-// punto 4): el del token de acciones o, sin él, la principal; es la conexión que elegiría E53.
+// esas revisiones. config.gate solo en la conexión del bloqueo (bloqueo-merge-criticos.md §4.1; varias-codebases.md
+// §2.6, punto 4): la que elige E53 (lecturaDelBloqueo), no cualquiera de su repo (parejas viejas de «Reconectar»).
 revision.get('/orgs/:org/code-review', async (c) => {
   const q = CodeReviewQuery.safeParse({ connection_id: c.req.query('connection_id') || undefined });
   if (!q.success) {
@@ -135,11 +135,11 @@ revision.get('/orgs/:org/code-review', async (c) => {
       code: ec?.code ?? gh.error?.code ?? revs.error?.code ?? null });
     throw new ApiError('internal', 'No pudimos leer la revisión de código');
   }
-  // El repo del bloqueo, como en E53: el del token de acciones si lo hay; si no, la principal (la de conexionGithub(c)).
+  // La conexión del bloqueo, con el mismo criterio que E53: la activa más antigua del repo del token de acciones si lo
+  // hay; si no, la principal (la de conexionGithub(c)). Se comparan ids: una pareja vieja del mismo repo no trae gate.
   const deGithub = (Array.isArray(gh.data) ? gh.data : []) as Fila[];
   const estados = deGithub.find((f) => f.kind === 'action') ?? null;
-  const lecturas = deGithub.filter((f) => f.kind === 'read');
-  const principal = String((lecturas.find((f) => f.status === 'active') ?? lecturas[0])?.id ?? '') === conn.id;
+  const delBloqueo = lecturaDelBloqueo(deGithub.filter((f) => f.kind === 'read'), estados);
   const filas = (revs.data ?? []) as unknown as Fila[];
   const porRevision = new Map<string, Fila[]>();
   if (filas.length) {
@@ -159,7 +159,7 @@ revision.get('/orgs/:org/code-review', async (c) => {
     else log('warn', 'revision.fila_fuera_de_contrato', { rid: c.get('rid') });
   }
   const repo = typeof conn.meta.repo_full_name === 'string' ? conn.meta.repo_full_name : '';
-  const gate = filaCfg && esRepoDelBloqueo(conn.meta, estados, principal) ? aGateConfig(filaCfg, estados) : undefined;
+  const gate = filaCfg && delBloqueo && String(delBloqueo.id) === conn.id ? aGateConfig(filaCfg, estados) : undefined;
   return c.json(CodeReviewState.parse({ available: conn.status === 'active',
     reason: conn.status === 'active' ? null : 'conexion_inactiva',
     config: filaCfg ? aConfig(c, filaCfg, repo, gate) : null, recent }));

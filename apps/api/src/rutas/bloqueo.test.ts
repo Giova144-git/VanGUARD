@@ -295,6 +295,23 @@ describe('E53 · guardar', () => {
     expect([r.status, (await error(r)).details]).toEqual([409, { reason: 'otro_repo' }]);
   });
 
+  // varias-codebases.md §2.6, puntos 3 y 4: con parejas viejas de «Reconectar» del mismo repo, E53 elige la activa más
+  // antigua (la pestaña que pinta el FRONT y la única con gate en E45), no la más antigua a secas.
+  it('parejas viejas del mismo repo: la activa aunque haya una revocada más antigua; si ninguna, 409 conexion_inactiva',
+    async () => {
+      const VIEJA = 'c0c00000-0000-4000-8000-000000000009';
+      conexiones = [lectura({ id: VIEJA, status: 'revoked' }), lectura(), accion()];
+      const r = await gate({ enabled: true, min_severity: 'critical' });
+      expect(r.status).toBe(200);
+      const leida = doble.ops.find((o) => o.table === 'code_review_configs' && o.action === 'select')!;
+      expect(eqDe(leida, 'connection_id')).toBe(CONN);
+      expect(config).toMatchObject({ gate_enabled: true });
+
+      conexiones = [lectura({ id: VIEJA, status: 'revoked' }), lectura({ status: 'error' }), accion()];
+      expect((await error(await gate({ enabled: true, min_severity: 'critical' }))).details)
+        .toEqual({ reason: 'conexion_inactiva' });
+    });
+
   it('sin token: cambia enabled, umbral y close_pr con ≤ 4 subpeticiones y sin GitHub; probe null', async () => {
     conexiones = [lectura(), accion()];
     const r = await gate({ enabled: true, min_severity: 'high', close_pr: false });

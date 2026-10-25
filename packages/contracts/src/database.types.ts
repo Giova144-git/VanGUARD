@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0016 (con 0014, 0014b, 0015 y 0019).
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0018 (todas las de la noche: 0014b, 0015, 0016, 0017, 0018 y 0019).
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -197,6 +197,7 @@ export type Database = {
           action_kind: string
           attempts: number
           channel: string
+          code_review_id: string | null
           created_at: string
           expires_at: string
           id: string
@@ -212,6 +213,7 @@ export type Database = {
           action_kind: string
           attempts?: number
           channel: string
+          code_review_id?: string | null
           created_at?: string
           expires_at?: string
           id?: string
@@ -227,6 +229,7 @@ export type Database = {
           action_kind?: string
           attempts?: number
           channel?: string
+          code_review_id?: string | null
           created_at?: string
           expires_at?: string
           id?: string
@@ -239,6 +242,13 @@ export type Database = {
           used_at?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "approvals_code_review_id_fkey"
+            columns: ["code_review_id"]
+            isOneToOne: false
+            referencedRelation: "code_reviews"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "approvals_incident_id_fkey"
             columns: ["incident_id"]
@@ -353,6 +363,7 @@ export type Database = {
           last_error_at: string | null
           last_event_at: string | null
           last_ping_at: string | null
+          muted_until: string | null
           org_id: string
           secret_kid: string
           secret_last4: string | null
@@ -380,6 +391,7 @@ export type Database = {
           last_error_at?: string | null
           last_event_at?: string | null
           last_ping_at?: string | null
+          muted_until?: string | null
           org_id: string
           secret_kid: string
           secret_last4?: string | null
@@ -407,6 +419,7 @@ export type Database = {
           last_error_at?: string | null
           last_event_at?: string | null
           last_ping_at?: string | null
+          muted_until?: string | null
           org_id?: string
           secret_kid?: string
           secret_last4?: string | null
@@ -472,6 +485,8 @@ export type Database = {
           started_at: string | null
           status: string
           voice_pending: boolean
+          whatsapp_action: string | null
+          whatsapp_action_at: string | null
         }
         Insert: {
           alert_reason?: string | null
@@ -514,6 +529,8 @@ export type Database = {
           started_at?: string | null
           status?: string
           voice_pending?: boolean
+          whatsapp_action?: string | null
+          whatsapp_action_at?: string | null
         }
         Update: {
           alert_reason?: string | null
@@ -556,6 +573,8 @@ export type Database = {
           started_at?: string | null
           status?: string
           voice_pending?: boolean
+          whatsapp_action?: string | null
+          whatsapp_action_at?: string | null
         }
         Relationships: [
           {
@@ -1604,6 +1623,7 @@ export type Database = {
           action_kind: string
           attempts: number
           channel: string
+          code_review_id: string | null
           created_at: string
           expires_at: string
           id: string

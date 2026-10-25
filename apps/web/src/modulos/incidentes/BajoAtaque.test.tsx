@@ -104,7 +104,7 @@ describe('BajoAtaque · bandera del servidor y motivos de E55', () => {
 
   it('activo: «Bajo ataque · host · hasta hora» y «Desactivar ahora»; vencido: «lo estamos retirando»', () => {
     const html = tarjeta(ADMIN, { ...OFERTA, activo: ACTIVO });
-    expect(html).toContain('Bajo ataque · <span class="font-mono normal-case"><bdi dir="ltr">demo.officialvanguard.com</bdi></span> · hasta');
+    expect(html).toContain('Bajo ataque · <span class="font-mono normal-case wrap-anywhere"><bdi dir="ltr">demo.officialvanguard.com</bdi></span> · hasta');
     expect(html).toContain('Desactivar ahora');
     const vencido = tarjeta(ADMIN, { ...OFERTA, activo: { ...ACTIVO, expires_at: '2026-10-24T19:42:00.000Z' } });
     expect(vencido).toContain('lo estamos retirando');

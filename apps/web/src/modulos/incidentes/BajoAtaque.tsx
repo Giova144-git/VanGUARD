@@ -41,12 +41,12 @@ const RAZON: Record<string, string> = {
   resolved: 'El incidente ya se cerró',
 };
 // El resultado ocupa el sitio del botón de 56 px que sustituye, como en BloquearIp; en móvil parte línea.
-const RESULTADO = 'h-auto min-h-14 shrink flex-wrap gap-x-2 gap-y-0.5 px-4 py-2 text-base font-semibold [&_svg]:size-5';
+const RESULTADO = 'h-auto min-h-14 min-w-0 shrink flex-wrap gap-x-2 gap-y-0.5 px-4 py-2 text-base font-semibold [&_svg]:size-5';
 const NOTA = 'text-[12.5px] text-muted-foreground';
 
 // error o aviso de RespuestaEscritura: llega como dato, no como ApiError (que ya sanea su message).
 const motivo = (m: unknown, respaldo: string) => (typeof m === 'string' ? sinBidi(m) : respaldo);
-const host = (h: string) => <span className="font-mono normal-case"><bdi dir="ltr">{sinBidi(h)}</bdi></span>;
+const host = (h: string) => <span className="font-mono normal-case wrap-anywhere"><bdi dir="ltr">{sinBidi(h)}</bdi></span>;
 
 function errorPropuesta(e: unknown): { error: string; copiar?: string } {
   if (esApiError(e) && e.status === 403) return { error: SOLO_PRODUCCION };

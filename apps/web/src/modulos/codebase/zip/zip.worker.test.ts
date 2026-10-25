@@ -58,8 +58,7 @@ describe('zip.worker', () => {
     expect(r.findings.find((f) => f.rule_id === 'CB_SECRET_PRIVATE_KEY')?.evidence.preview).toBeUndefined();
     expect(ambito.close).toHaveBeenCalledOnce();
     expect(ambito.onmessage).toBeNull();            // un archivo por worker
-  });
-
+  }, 30_000);   // ~0,6 s solo, pero pasó de 5 s con todos los paquetes del gate corriendo a la vez
   it('un ZipError sale con su código y se cierra igual', async () => {
     const gif = new File([new Uint8Array([0x47, 0x49, 0x46, 0x38, ...Array(40).fill(0)])], 'x.zip');
     const { enviado, ambito } = await correr(gif);

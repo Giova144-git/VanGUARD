@@ -1,11 +1,12 @@
 import { Hono, type Context } from 'hono';
-import { ConnectionCreate, ConnectionCreated, ConnectionPublic, ConnectionTest, Id, type PermCheck } from '@vanguard/contracts';
+import { ConnectionCreate, ConnectionCreated, ConnectionPublic, ConnectionTest, Id, MAX_REPOS_GITHUB,
+  type PermCheck } from '@vanguard/contracts';
 import { guardKey, type KeyRejection } from '@vanguard/core';
 import { newIngestSecret, type SecretCtx } from '@vanguard/core/crypto';
 import { deshacerBloqueos, EN_CURSO_MS } from '../actions/block-ip.ts';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
-import { createConnectionWithSecret, withSecret } from '../lib/credentials.ts';
+import { createConnectionWithSecret, rotarSecretoConexion, withSecret } from '../lib/credentials.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
@@ -81,6 +82,9 @@ function exigirSondeo(s: Sondeo) {
   if (s.estado === 'caido') throw new ApiError('provider_unavailable', s.mensaje ?? 'El proveedor no respondió');
 }
 
+// Conexión GitHub de lectura que ya tiene la org (varias-codebases.md §2.1): para el tope, los duplicados y «Reconectar».
+type Previa = { id: string; status: string; meta: Record<string, unknown> | null };
+
 async function leer(c: Context<AppEnv>, ids: string[]): Promise<ConnectionPublic[]> {
   const { data, error } = await db(c.env).from('connections').select(COLUMNAS).eq('org_id', c.get('orgId')).in('id', ids);
   if (error) {
@@ -123,6 +127,8 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
   let sondeo: Sondeo;
   let token: string;
   let accion: { token: string; sondeo: Sondeo } | null = null;
+  let reconectar: Previa | null = null;   // GitHub: el mismo repo ya conectado y no activo (varias-codebases.md §2.1)
+  let hallazgosPorRepo = false;           // GitHub: la org ya tiene otro repo → clave de hallazgos por repo (§2.2)
   if (body.provider === 'supabase') {
     guardar('supabase', body.pat);
     const ref = normalizarRef(body.project_ref);
@@ -151,18 +157,50 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
       throw new ApiError('invalid_body', 'Revisa los campos marcados',
         { field_errors: { pat: ['No parece un token fine-grained de GitHub (empieza por github_pat_).'] } });
     }
-    const { count, error } = await admin.from('connections').select('id', { count: 'exact', head: true })
-      .eq('org_id', orgId).eq('provider', 'github').eq('status', 'active');
+    // Varios repos por org (varias-codebases.md §2.1): una lectura de las GitHub de LECTURA (la conexión de estados del
+    // bloqueo de merge, kind 'action', no cuenta), la más antigua primero. Mismo repo activo → 409 repo_duplicado; ya
+    // hay MAX_REPOS_GITHUB nombres distintos (las parejas viejas de «Reconectar» cuentan uno) → 409 tope_repos.
+    const { data, error } = await admin.from('connections').select('id, status, meta').eq('org_id', orgId)
+      .eq('provider', 'github').eq('kind', 'read').order('created_at').order('id').limit(50);
     if (error) throw new ApiError('internal', 'No pudimos comprobar tus conexiones');
-    if ((count ?? 0) > 0) throw new ApiError('conflict', 'Ya hay un repo conectado. Quítalo antes de conectar otro.');
+    const previas = (data ?? []) as Previa[];
+    const nombre = (f: Previa) => String(f.meta?.repo_full_name ?? '').toLowerCase();
+    const pedido = body.repo_full_name.toLowerCase();
+    const duplicado = () => new ApiError('conflict', 'Ese repo ya está conectado.', { reason: 'repo_duplicado' });
+    const porNombre = previas.filter((f) => nombre(f) === pedido);
+    if (porNombre.some((f) => f.status === 'active')) throw duplicado();
+    if (!porNombre.length && new Set(previas.map(nombre)).size >= MAX_REPOS_GITHUB) {
+      throw new ApiError('conflict', `Ya tienes ${MAX_REPOS_GITHUB} repos conectados: quita uno para conectar otro.`,
+        { reason: 'tope_repos' });
+    }
     sondeo = await probarGithub(token, body.repo_full_name);
+    if (sondeo.estado === 'ok') {
+      // Lo mismo por repo_id: un repo renombrado cambia de nombre, no de id.
+      const id = sondeo.meta.repo_id;
+      const porId = previas.filter((f) => id !== undefined && f.meta?.repo_id === id);
+      if (porId.some((f) => f.status === 'active')) throw duplicado();
+      reconectar = porNombre[0] ?? porId[0] ?? null;          // la más antigua: es la que tiene los hallazgos
+      hallazgosPorRepo = !reconectar && previas.length > 0;    // ya hay otro repo: clave por repo (§2.2)
+    }
   }
   exigirSondeo(sondeo);
   if (accion) exigirSondeo(accion.sondeo);
 
+  if (reconectar) {
+    // «Reconectar» sin perder historial: el token nuevo en la MISMA conexión (id, hallazgos, config de revisión, secreto
+    // del webhook, label y meta con su marca o sin ella). vg_rotate_secret la deja active.
+    await rotarSecretoConexion(env, admin, { orgId, connectionId: reconectar.id, provider: 'github', kind: 'read' }, token,
+      { scopes: sondeo.scopes, capabilities: sondeo.capabilities, expiresAt: sondeo.expiresAt });
+    const [fila] = await leer(c, [reconectar.id]);
+    log('info', 'connection.reconectada', { rid: c.get('rid'), provider: 'github' });
+    return c.json(ConnectionCreated.parse({ connection: fila, action_connection: null, checks: sondeo.checks,
+      ingest_secret: null }), 201);
+  }
+
   const ctx = (kind: 'read' | 'action'): SecretCtx => ({ orgId, connectionId: crypto.randomUUID(), provider: body.provider, kind });
   const lectura = ctx('read');
-  await createConnectionWithSecret(env, admin, { ...lectura, label: sondeo.label, meta: sondeo.meta, scopes: sondeo.scopes,
+  await createConnectionWithSecret(env, admin, { ...lectura, label: sondeo.label,
+    meta: hallazgosPorRepo ? { ...sondeo.meta, hallazgos_por_repo: true } : sondeo.meta, scopes: sondeo.scopes,
     capabilities: sondeo.capabilities, expiresAt: sondeo.expiresAt, createdBy }, token);
   let accionId: string | null = null;
   if (accion) {

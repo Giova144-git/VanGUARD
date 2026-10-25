@@ -32,6 +32,7 @@ let rpcs: Rpc[];
 let marcas: Record<string, unknown>[];   // p_patch de cada vg_mark_step (guarded)
 let coverage: Record<string, unknown>;
 let rechazo: (rows: Fila[]) => boolean;
+let metaConexion: Record<string, unknown>;   // meta de la conexión GitHub que devuelve conexionActiva
 let doble: ReturnType<typeof dbDoble>;
 const detalle = () => ((coverage.detail as Record<string, unknown> | undefined)?.codebase ?? {}) as Detalle;
 const autoVerifico = () => rpcs.some((r) => r.complete && r.ok);
@@ -90,6 +91,7 @@ beforeEach(() => {
   marcas = [];
   coverage = { seen: 2, detail: { supabase: { advisors: true } } };
   rechazo = () => false;
+  metaConexion = { repo_full_name: 'o/r' };
   repo = { arbol: [] };
   osv = { batch: null, query: null };
   doble = dbDoble({
@@ -100,7 +102,7 @@ beforeEach(() => {
       }
       if (op.table === 'scan_runs' && op.action === 'select') return { data: op.columns === 'params' ? { params: {} } : { coverage } };
       if (op.table === 'scan_runs' && op.action === 'update') { coverage = (op.payload as { coverage: Record<string, unknown> }).coverage; return {}; }
-      if (op.table === 'connections') return { data: { id: 'c1', meta: { repo_full_name: 'o/r' }, capabilities: {} } };
+      if (op.table === 'connections') return { data: { id: 'c1', meta: metaConexion, capabilities: {} } };
       if (op.table === 'findings') return { count: 7 };
       return undefined;
     },
@@ -364,6 +366,45 @@ describe('repo:osv', () => {
     expect(r).toMatchObject({ status: 'done', error_code: 'hallazgos_truncados' });
     expect(autoVerifico()).toBe(false);
     expect(detalle()).toMatchObject({ hallazgos_omitidos: 3, miradas: { osv: false } });
+  });
+});
+
+// Clave de los hallazgos por repo (asignaciones/varias-codebases.md §2.2, B2): con meta.hallazgos_por_repo, el repo entra
+// en dedupe_key de las filas de archivos y de las rondas de OSV; el resource visible no cambia.
+describe('repo · clave de los hallazgos por repo (varias-codebases B2)', () => {
+  type Escrita = Fila & { dedupe_key: string };
+  const correr = async () => {
+    rpcs = [];
+    repo = { arbol: ['.gitignore', 'package-lock.json', '.env'],
+      contenidos: { ...BASE, 'package-lock.json': LOCK, '.env': 'X=1\n' } };
+    const c = continuacion(await pasoRepo(env, msg()));   // repo:archivos
+    await pasoRepo(env, msg(c));                          // cierre de OSV
+    return rpcs.flatMap((r) => r.rows) as Escrita[];
+  };
+
+  it('con la marca, archivos y el cierre de OSV escriben la clave con el repo; sin ella, la de hoy', async () => {
+    const { dedupeKey } = await import('@vanguard/core/crypto');
+    const hoy = await correr();
+    metaConexion = { repo_full_name: 'o/r', hallazgos_por_repo: true };
+    const porRepo = await correr();
+    expect(new Set(hoy.map((f) => f.rule_id))).toEqual(new Set(['CB_ENV_COMMITTED', 'CB_DEP_VULN']));
+    expect(porRepo.map((f) => [f.rule_id, f.resource])).toEqual(hoy.map((f) => [f.rule_id, f.resource]));
+    for (const [i, f] of porRepo.entries()) expect(f.dedupe_key, f.rule_id).not.toBe(hoy[i]!.dedupe_key);
+    const lodash = (xs: Escrita[]) => xs.find((f) => f.rule_id === 'CB_DEP_VULN')!.dedupe_key;
+    expect(lodash(hoy)).toBe(await dedupeKey(ORG, 'CB_DEP_VULN', 'npm:lodash@4.17.15'));
+    expect(lodash(porRepo)).toBe(await dedupeKey(ORG, 'CB_DEP_VULN', 'o/r|npm:lodash@4.17.15'));
+  });
+
+  it('también en una ronda intermedia de OSV (más deps de las que caben en un mensaje)', async () => {
+    const { dedupeKey } = await import('@vanguard/core/crypto');
+    metaConexion = { repo_full_name: 'o/r', hallazgos_por_repo: true };
+    repo = { arbol: ['.gitignore', 'package-lock.json'], contenidos: { ...BASE, 'package-lock.json': lockCon(13) } };
+    const c = continuacion(await pasoRepo(env, msg()));
+    const r = await pasoRepo(env, msg(c));
+    expect(continuacion(r).cursor.startsWith('osv:2')).toBe(true);
+    const ronda = rpcs.at(-1)!.rows as Escrita[];
+    expect(ronda.length).toBeGreaterThan(0);
+    for (const f of ronda) expect(f.dedupe_key).toBe(await dedupeKey(ORG, f.rule_id, `o/r|${f.resource}`));
   });
 });
 

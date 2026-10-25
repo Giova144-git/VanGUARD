@@ -75,34 +75,46 @@ const COLUMNAS_HALLAZGO = 'rule_id, severity, title, module, connection_id, dedu
 // Hallazgos para el motor (LEEME, punto 7): rule_id, severity, title y path = evidence.path sin «:línea», nunca la
 // evidencia. Lo usan E40/E41 para la huella y la síntesis de la cola (wiki/pasos.ts) para el motor: así la llave
 // describe lo que de verdad recibe el motor. «La auditoría de ese repo» = la foto que dejaron las auditorías de la org
-// en las que el paso repo leyó ESE repo (una conexión GitHub de la org con meta.repo_full_name igual, sin distinguir
-// mayúsculas): los hallazgos abiertos de código de esas conexiones más los de Supabase y Cloudflare de la org, que son
-// la infraestructura del producto (activar RLS cambia la huella sin cambiar el commit, LEEME, punto 2). Una auditoría
-// sin params.connection_id usó la conexión GitHub activa más nueva y se da por de ese repo. Si el repo nunca se auditó:
-// {} (hallazgos undefined, el documento lo dice); auditado y limpio: []. auditoria_at = la más nueva de esas
-// auditorías. 2 subpeticiones (+ 2 si el repo se auditó).
+// en las que el paso repo leyó ESE repo (una conexión GitHub de lectura de la org con meta.repo_full_name igual, sin
+// distinguir mayúsculas): los hallazgos abiertos de código de esas conexiones más los de Supabase y Cloudflare de la
+// org, que son la infraestructura del producto (activar RLS cambia la huella sin cambiar el commit, LEEME, punto 2).
+// Qué repo leyó cada auditoría con el paso repo done (varias-codebases.md §2.4, B7): su entrada done en
+// coverage.detail.codebase.repos; sin repos, detail.codebase.connection_id (B0); sin ninguno (auditorías de antes de
+// B0), params.connection_id; sin nada, el de la conexión GitHub de lectura más antigua. Así, con varios repos, uno que
+// nunca se analizó queda «sin auditar» en vez de «auditado y limpio». La conexión de estados del bloqueo de merge
+// (kind 'action') no entra. Si el repo nunca se auditó: {} (hallazgos undefined, el documento lo dice); auditado y
+// limpio: []. auditoria_at = la más nueva de esas auditorías. 2 subpeticiones (+ 2 si el repo se auditó).
 export async function hallazgosDelRepo(admin: SupabaseClient, orgId: string, repo: string): Promise<HallazgosRepo> {
   const [cx, sc] = await Promise.all([
-    admin.from('connections').select('id, meta').eq('org_id', orgId).eq('provider', 'github').limit(50),
-    admin.from('scan_runs').select('steps, params, finished_at').eq('org_id', orgId).eq('status', 'succeeded')
+    admin.from('connections').select('id, meta, created_at').eq('org_id', orgId).eq('provider', 'github').eq('kind', 'read')
+      .order('created_at', { ascending: true }).order('id', { ascending: true }).limit(50),
+    admin.from('scan_runs').select('steps, params, coverage, finished_at').eq('org_id', orgId).eq('status', 'succeeded')
       .in('kind', ['full_audit', 'repo', 'supabase', 'cloudflare']).order('created_at', { ascending: false }).limit(20),
   ]);
   if (cx.error || sc.error) fallaBase('wiki.hallazgos_error', cx.error?.code ?? sc.error?.code, 'No pudimos leer la auditoría del repo');
   const nombre = repo.toLowerCase();
-  const ids = new Set(lista(cx.data).map(obj)
-    .filter((c) => typeof c?.id === 'string' && String(obj(c.meta)?.repo_full_name ?? '').toLowerCase() === nombre)
+  const conexiones = lista(cx.data).map(obj).filter((c) => typeof c?.id === 'string');
+  const ids = new Set(conexiones.filter((c) => String(obj(c?.meta)?.repo_full_name ?? '').toLowerCase() === nombre)
     .map((c) => String(c?.id)));
   if (!ids.size) return {};
+  const masAntigua = conexiones[0] ? String(conexiones[0].id) : null;
 
-  const deEseRepo = (params: unknown) => {
-    const pedida = obj(params)?.connection_id;
-    return typeof pedida === 'string' ? ids.has(pedida) : true;
+  const deEseRepo = (s: Record<string, unknown> | null) => {
+    const cb = obj(obj(obj(s?.coverage)?.detail)?.codebase);
+    const repos = lista(cb?.repos).map(obj);
+    if (repos.length) {
+      return repos.some((e) => typeof e?.connection_id === 'string' && ids.has(e.connection_id) && e.status === 'done');
+    }
+    if (typeof cb?.connection_id === 'string') return ids.has(cb.connection_id);
+    const pedida = obj(s?.params)?.connection_id;
+    if (typeof pedida === 'string') return ids.has(pedida);
+    return masAntigua !== null && ids.has(masAntigua);
   };
   let repoAuditado = false;
   let ultima: string | null = null;
   for (const s of lista(sc.data).map(obj)) {
     const hechos = lista(s?.steps).map(obj).filter((p) => p?.status === 'done').map((p) => p?.name);
-    const delRepo = hechos.includes('repo') && deEseRepo(s?.params);
+    const delRepo = hechos.includes('repo') && deEseRepo(s);
     if (delRepo) repoAuditado = true;
     const fin = typeof s?.finished_at === 'string' ? s.finished_at : null;
     if ((delRepo || hechos.includes('supabase') || hechos.includes('cloudflare')) && fin

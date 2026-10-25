@@ -12,7 +12,7 @@ import { pedir, ProviderError } from '../lib/http.ts';
 import { activeKid, getKeys } from '../lib/keyring.ts';
 import { log } from '../lib/log.ts';
 import { avisarRevision } from '../notify/revision.ts';
-import { aFila, PARECE_SECRETO, type Borrador, type Fila } from '../scans/comun.ts';
+import { aFila, claveDeRepo, PARECE_SECRETO, type Borrador, type Fila } from '../scans/comun.ts';
 import { recortar } from '../scans/repo-paso.ts';
 import { codigoGithub, ghHeaders, leerAcotado } from '../scans/repo.ts';
 import type { RespuestaCola } from '../wiki/pasos.ts';
@@ -261,7 +261,10 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
   const borradores: Borrador[] = [...secretos, ...envDelDiff(p.archivos, compactos)]
     .map((b) => ({ ...b, evidence: { ...b.evidence, fuente: 'github', sha: rev.head_sha } }));
   const { dentro, fuera } = recortar(borradores, LIM_REVISION.filas);
-  const oc = await ocultarRutas(await Promise.all(dentro.map((b) => aFila(m.org_id, b))));
+  // La misma clave que la auditoría (varias-codebases.md §2.2): un secreto visto en un push y luego en la auditoría de
+  // ese repo sigue siendo la misma fila.
+  const clave = claveDeRepo(obj(conn.meta));
+  const oc = await ocultarRutas(await Promise.all(dentro.map((b) => aFila(m.org_id, clave(b)))));
 
   const motivo = leido.tipo === 'grande' || leido.cortado ? 'diff_grande' : p.cortado ? motivoCorte(p.archivos, texto)
     : fuera.length ? 'hallazgos_truncados' : null;

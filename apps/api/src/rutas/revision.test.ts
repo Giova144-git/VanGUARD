@@ -177,6 +177,92 @@ describe('E45 · GET code-review', () => {
   });
 });
 
+// E45 por repo (asignaciones/varias-codebases.md §3, B6): ?connection_id= da el estado de ESE repo; sin él, la principal.
+describe('E45 · ?connection_id= (varias-codebases B6)', () => {
+  const CONN_2 = 'c0c00000-0000-4000-8000-000000000002';
+  const CFG_2 = 'c4000000-0000-4000-8000-000000000002';
+  const REV_2 = 'c4000000-0000-4000-8000-000000000012';
+  let conexiones: Record<string, unknown>[];
+  let configs: Record<string, unknown>[];
+  const rev = (id: string, config_id: string) => ({ id, config_id, event: 'push', branch: 'main', pr_number: null, base_sha: SHA,
+    head_sha: 'b'.repeat(40), status: 'done', error_code: null, partial: false, files_changed: 1, lines_added: 3, counts: {},
+    max_severity: null, new_findings: [], alert_state: 'none', alert_reason: null, voice_pending: false, notified_at: null,
+    created_at: '2026-10-24T19:20:11+00:00', finished_at: '2026-10-24T19:20:15+00:00' });
+  // Como Postgres: cada consulta solo ve lo que casa con sus .eq() (org, id de la conexión, connection_id, config_id).
+  beforeEach(() => {
+    conexiones = [{ id: CONN, status: 'active', meta: { repo_full_name: 'acme/tienda', default_branch: 'main' } },
+      { id: CONN_2, status: 'active', meta: { repo_full_name: 'acme/landing', default_branch: 'main' } }];
+    configs = [filaConfig(), filaConfig({ id: CFG_2, connection_id: CONN_2, enabled: false })];
+    revisiones = [rev(REV, CFG), rev(REV_2, CFG_2)];
+    tabla = (op) => {
+      const deOrg = eqDe(op, 'org_id') === ORG;
+      if (op.table === 'connections') {
+        const id = eqDe(op, 'id');
+        return { data: deOrg ? conexiones.filter((c) => id === undefined || c.id === id) : [] };
+      }
+      if (op.table === 'code_review_configs' && op.action === 'select') {
+        return { data: (deOrg && configs.find((f) => f.connection_id === eqDe(op, 'connection_id'))) || null };
+      }
+      if (op.table === 'code_reviews') return { data: deOrg ? revisiones.filter((r) => r.config_id === eqDe(op, 'config_id')) : [] };
+      return undefined;
+    };
+  });
+  const estadoDe = async (q: string) => {
+    const r = await pedir(`code-review${q}`);
+    expect(r.status).toBe(200);
+    return CodeReviewState.parse(await r.json());
+  };
+  const TABLAS = ['connections', 'code_review_configs', 'code_reviews', 'notifications'];
+  const propias = () => doble.ops.filter((o) => TABLAS.includes(o.table));
+
+  it('por conexión: la config y SOLO las revisiones de ese repo, en ≤ 4 subpeticiones (conexión → config → revisiones → avisos)',
+    async () => {
+      const s = await estadoDe(`?connection_id=${CONN_2}`);
+      expect(s).toMatchObject({ available: true, reason: null,
+        config: { id: CFG_2, connection_id: CONN_2, repo_full_name: 'acme/landing', state: 'off' } });
+      expect(s.recent.map((x) => x.id)).toEqual([REV_2]);
+      const ops = propias();
+      expect(ops.map((o) => o.table)).toEqual(TABLAS);
+      expect(ops[0]!.filters).toEqual(expect.arrayContaining([['id', 'eq', CONN_2], ['provider', 'eq', 'github'],
+        ['kind', 'eq', 'read']]));
+      expect([eqDe(ops[1]!, 'connection_id'), eqDe(ops[2]!, 'config_id')]).toEqual([CONN_2, CFG_2]);
+      for (const o of ops) expect(eqDe(o, 'org_id'), o.table).toBe(ORG);
+    });
+
+  it('sin parámetro (o vacío): la principal, la activa más antigua (B0), con su config y sus revisiones', async () => {
+    for (const q of ['', '?connection_id=']) {
+      const s = await estadoDe(q);
+      expect(s.config).toMatchObject({ id: CFG, connection_id: CONN, repo_full_name: 'acme/tienda' });
+      expect(s.recent.map((x) => x.id)).toEqual([REV]);
+    }
+  });
+
+  it('malformado → 422 invalid_body sin leer nada; ajena o inexistente → sin_conexion, sin distinguir', async () => {
+    const r = await pedir('code-review?connection_id=no-es-un-id');
+    expect(r.status).toBe(422);
+    const e = ((await r.json()) as { error: { code: string; details: unknown } }).error;
+    expect(e).toMatchObject({ code: 'invalid_body', details: { field_errors: { connection_id: ['Id no válido'] } } });
+    expect(propias()).toEqual([]);
+    for (const id of ['c0c00000-0000-4000-8000-0000000000ff', CONN_2]) {
+      if (id === CONN_2) conexiones = conexiones.slice(0, 1);   // la de otra org no sale en la consulta (.eq('org_id'))
+      expect(await estadoDe(`?connection_id=${id}`)).toEqual({ available: false, reason: 'sin_conexion', config: null, recent: [] });
+    }
+  });
+
+  it('repo sin config todavía: config null y recent vacío, sin leer revisiones ni avisos (no mezcla las de otro repo)', async () => {
+    configs = [filaConfig()];
+    const s = await estadoDe(`?connection_id=${CONN_2}`);
+    expect(s).toEqual({ available: true, reason: null, config: null, recent: [] });
+    expect(propias().map((o) => o.table)).toEqual(['connections', 'code_review_configs']);
+  });
+
+  it('una conexión no activa de ese repo → conexion_inactiva, con su config', async () => {
+    conexiones[1] = { ...conexiones[1], status: 'revoked' };
+    const s = await estadoDe(`?connection_id=${CONN_2}`);
+    expect(s).toMatchObject({ available: false, reason: 'conexion_inactiva', config: { id: CFG_2 } });
+  });
+});
+
 describe('E46 · PUT code-review', () => {
   it('el viewer y el anónimo reciben 403', async () => {
     rol = 'viewer';

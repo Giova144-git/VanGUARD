@@ -74,21 +74,31 @@ export function depsWiki(o: OpcionesDeps): Deps {
 }
 
 // connection_id del cuerpo → PAT descifrado solo mientras corre fn (withSecret de lib/credentials.ts). Tiene que ser
-// una conexión GitHub de lectura, activa y de ESTA org (anti-IDOR, §15.3); si no, 404 con el mismo texto para todo.
-// Sin connection_id: fn(undefined), repo público sin token. 2 subpeticiones (connections y connection_secrets) más
+// una conexión GitHub de lectura, activa y de ESTA org (anti-IDOR, §15.3), y su meta.repo_full_name tiene que ser el
+// repo pedido sin distinguir mayúsculas (varias-codebases.md §7, B8): con un PAT que ve varios repos, un admin no puede
+// documentar un repo privado no conectado (la wiki la ven todos los miembros, el anónimo de la demo incluido). Si no,
+// 404 con el mismo texto para todo. fn recibe además ese meta.repo_full_name tal como está guardado: con conexión, E40 y
+// E41 nombran la wiki con él (no con el canónico de GitHub) para que los pasos arbol y area, que comprueban
+// fila.repo_full_name, casen aunque el repo se haya renombrado (la conexión conserva el nombre de antes). Sin
+// connection_id: fn(undefined, null), repo público sin token. 2 subpeticiones (connections y connection_secrets) más
 // vg_crypto_material si el keyring no está en caché.
 export async function conTokenGithub<T>(env: CloudflareBindings, admin: SupabaseClient, orgId: string,
-  connectionId: string | undefined, fn: (token: string | undefined) => Promise<T>): Promise<T> {
-  if (connectionId === undefined) return fn(undefined);
-  const { data: fila, error } = await admin.from('connections').select('id, provider, kind, status')
+  connectionId: string | undefined, repo: string, fn: (token: string | undefined, repoConexion: string | null) => Promise<T>,
+): Promise<T> {
+  if (connectionId === undefined) return fn(undefined, null);
+  const { data: fila, error } = await admin.from('connections').select('id, provider, kind, status, meta')
     .eq('id', connectionId).eq('org_id', orgId).eq('provider', 'github').eq('kind', 'read').eq('status', 'active')
     .maybeSingle();
   if (error) throw new ApiError('internal', 'No pudimos leer la conexión');
-  if (!fila || typeof fila.id !== 'string' || fila.provider !== 'github' || fila.kind !== 'read' || fila.status !== 'active') {
+  const meta = fila?.meta && typeof fila.meta === 'object' ? fila.meta as Record<string, unknown> : {};
+  const repoConexion = meta.repo_full_name;
+  if (!fila || typeof fila.id !== 'string' || fila.provider !== 'github' || fila.kind !== 'read' || fila.status !== 'active'
+    || typeof repoConexion !== 'string' || repoConexion.toLowerCase() !== repo.toLowerCase()) {
     throw new ApiError('not_found', 'Conexión no encontrada');
   }
   // El id tal como está guardado (minúsculas): entra en el AAD del sellado (§05.7).
-  return withSecret(env, admin, { orgId, connectionId: fila.id, provider: 'github', kind: 'read' }, (token) => fn(token));
+  return withSecret(env, admin, { orgId, connectionId: fila.id, provider: 'github', kind: 'read' },
+    (token) => fn(token, repoConexion));
 }
 
 // Errores esperados de GitHub → código de lib/errors.ts (§15.3). Textos propios: nunca err.message ni nada que venga

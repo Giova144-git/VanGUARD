@@ -300,6 +300,22 @@ describe('E40 · POST /api/orgs/:org/wiki/estimate', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('B8: la conexión tiene que ser la del repo pedido: otro repo que vea el PAT → 404; otras mayúsculas → vale', async () => {
+    for (const repo of ['acme/privado', 'acme/viejo', 'otra/tienda']) {
+      const r = await estimarPost({ repo_full_name: repo, connection_id: CONN });
+      expect(r.status, repo).toBe(404);
+      expect((await error(r)).message).toBe('Conexión no encontrada');
+    }
+    expect(cred.withSecret).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // GitHub no distingue mayúsculas en el nombre del repo.
+    fetchMock.mockImplementation(async (u: string) => github(String(u).replace('/repos/ACME/Tienda', '/repos/acme/tienda')));
+    const r = await estimarPost({ repo_full_name: 'ACME/Tienda', connection_id: CONN });
+    expect(r.status).toBe(200);
+    expect(cred.withSecret).toHaveBeenCalledTimes(1);
+    expect(cabeceras(0).Authorization).toBe(`Bearer ${PAT}`);
+  });
+
   it('viewer y anónimo → 403 sin llamar a GitHub', async () => {
     rol = 'viewer';
     expect((await estimarPost({ repo_full_name: 'acme/tienda' })).status).toBe(403);
@@ -608,6 +624,16 @@ describe('E41 · POST /api/orgs/:org/wiki/runs', () => {
     for (const t of [texto, JSON.stringify(corridas), JSON.stringify(enviados), lineas.join('\n')]) expect(t).not.toContain(PAT);
   });
 
+  it('B8: connection_id de acme/tienda con otro repo → 404 sin descifrar, sin GitHub, sin fila ni mensaje', async () => {
+    const { r, enviados } = await correr({ repo_full_name: 'acme/privado', connection_id: CONN });
+    expect(r.status).toBe(404);
+    expect((await error(r)).message).toBe('Conexión no encontrada');
+    expect(cred.withSecret).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(corridas).toEqual([]);
+    expect(enviados).toEqual([]);
+  });
+
   it('GitHub: repo inexistente → 404 y límite → 429 con Retry-After, sin filas ni mensajes', async () => {
     fetchMock.mockImplementation(async () => new Response('Not Found', { status: 404 }));
     let x = await correr({ repo_full_name: 'acme/privado' });
@@ -647,6 +673,65 @@ describe('E41 · POST /api/orgs/:org/wiki/runs', () => {
     const ruta = 1 + doble.ops.length + doble.rpcs.length + 2;
     expect(ruta).toBeLessThanOrEqual(SUBPETICIONES_RUTA_E41);
     expect(fetchMock.mock.calls.length + SUBPETICIONES_RUTA_E41).toBeLessThanOrEqual(TOPE_SUBPETICIONES);
+  });
+});
+
+// B8 con un repo renombrado en GitHub: la conexión conserva en meta.repo_full_name el nombre de antes (ni E9 ni
+// vg_rotate_secret lo reescriben) y GitHub responde a ese nombre con un 301 hacia el repo, que ya se llama acme/nuevo.
+describe('B8 · repo renombrado en GitHub', () => {
+  const CONN_REN = 'c0aa0000-0000-4000-8000-000000000006';
+  function githubRenombrado(url: string): Response {
+    const u = url.replace(`${API}/repos/ACME/Antes`, `${API}/repos/acme/antes`);   // GitHub no distingue mayúsculas
+    if (u === `${API}/repos/acme/antes`) {
+      return new Response(null, { status: 301, headers: { location: `${API}/repositories/42` } });
+    }
+    if (u === `${API}/repositories/42`) {
+      return json({ full_name: 'acme/nuevo', description: null, language: null, private: true, default_branch: 'main' });
+    }
+    if (u === `${API}/repos/acme/nuevo/commits/main`) return new Response(SHA);
+    if (u === `${API}/repos/acme/nuevo/git/trees/${SHA}?recursive=1`) return json({ sha: SHA, truncated: false, tree: ARBOL });
+    return new Response('no encontrado', { status: 404 });
+  }
+  beforeEach(() => {
+    CONEXIONES.push({ id: CONN_REN, org_id: ORG, provider: 'github', kind: 'read', status: 'active',
+      meta: { repo_full_name: 'acme/antes' } });
+    fetchMock.mockImplementation(async (u: string) => githubRenombrado(String(u)));
+  });
+  afterEach(() => { CONEXIONES.splice(CONEXIONES.findIndex((c) => c.id === CONN_REN), 1); });
+  const post = (ruta: string, body: unknown) => app.request(`https://officialvanguard.com/api/orgs/${ORG}/wiki/${ruta}`, {
+    method: 'POST', headers: { authorization: 'Bearer ana', 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }, envDoble({ VG_ENV: 'local' }).env);
+
+  it('flujo del FRONT: E40 da el nombre de la conexión, E41 lo guarda en la fila y E43 ?repo= la encuentra', async () => {
+    const r = await post('estimate', { repo_full_name: 'acme/antes', connection_id: CONN_REN });
+    expect(r.status).toBe(200);
+    const est = WikiEstimate.parse(await r.json());
+    expect(est.repo_full_name).toBe('acme/antes');   // el FRONT manda este nombre a E41
+    // El 301 se siguió: el árbol se leyó con el nombre canónico, con el PAT.
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toContain(`${API}/repos/acme/nuevo/git/trees/${SHA}?recursive=1`);
+    expect(cabeceras(0).Authorization).toBe(`Bearer ${PAT}`);
+
+    const r2 = await post('runs', { repo_full_name: est.repo_full_name, connection_id: CONN_REN, max_usd: 1 });
+    expect(r2.status).toBe(202);
+    // El nombre que se comprobó: los pasos arbol y area lo vuelven a comprobar con fila.repo_full_name.
+    expect(corridas[0]).toMatchObject({ repo_full_name: 'acme/antes', connection_id: CONN_REN, commit_sha: SHA,
+      branch: 'main' });
+    const h = WikiRun.array().parse(await (await leer('runs?repo=acme/antes')).json());
+    expect(h.map((x) => x.id)).toEqual([corridas[0]?.id]);
+  });
+
+  it('con otras mayúsculas, la fila lleva el nombre tal como está en la conexión', async () => {
+    const r = await post('runs', { repo_full_name: 'ACME/Antes', connection_id: CONN_REN });
+    expect(r.status).toBe(202);
+    expect(corridas[0]).toMatchObject({ repo_full_name: 'acme/antes', connection_id: CONN_REN });
+  });
+
+  it('sin conexión (repo público), la fila y la estimación llevan el nombre canónico, como siempre', async () => {
+    const est = WikiEstimate.parse(await (await post('estimate', { repo_full_name: 'acme/antes' })).json());
+    expect(est.repo_full_name).toBe('acme/nuevo');
+    const r = await post('runs', { repo_full_name: 'acme/antes' });
+    expect(r.status).toBe(202);
+    expect(corridas[0]).toMatchObject({ repo_full_name: 'acme/nuevo', connection_id: null });
   });
 });
 

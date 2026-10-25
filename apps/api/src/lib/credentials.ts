@@ -18,6 +18,23 @@ export async function createConnectionWithSecret(env: CloudflareBindings, admin:
   if (error) throw new ApiError('internal', 'No se pudo guardar la conexión.');   // nunca error.message
 }
 
+/** «Reconectar» sin perder historial (asignaciones/varias-codebases.md §2.1): sella el token con el connection_id
+ *  EXISTENTE en el AAD y llama a vg_rotate_secret (0003), que deja la conexión active con last4, scopes, capabilities y
+ *  expires_at nuevos. Mismo id: se conservan hallazgos, config de revisión y meta. Lo usan E8 y E53
+ *  (bloqueo-merge-criticos.md): una sola función para los dos. El mismo PAT de otra conexión de la org choca con el
+ *  único (org_id, fingerprint) igual que en el alta. */
+export async function rotarSecretoConexion(env: CloudflareBindings, admin: SupabaseClient, ctx: SecretCtx, token: string,
+  c: { scopes: string[]; capabilities: Record<string, boolean>; expiresAt: string | null }) {
+  const keys = await getKeys(env, admin, await activeKid(admin));
+  const sealed = await seal(keys, token, ctx);
+  const { error } = await admin.rpc('vg_rotate_secret', { p_org: ctx.orgId, p_conn: ctx.connectionId,
+    p_secret: { sealed, kid: keys.kid, fingerprint: await fingerprint(keys, ctx.orgId, token) }, p_last4: last4(token),
+    p_scopes: c.scopes, p_capabilities: c.capabilities, p_expires_at: c.expiresAt });
+  if (error?.code === '23505') throw new ApiError('conflict', 'Ese token ya está conectado en esta organización.');
+  if (error?.code === 'P0002') throw new ApiError('not_found', 'Conexión no encontrada');
+  if (error) throw new ApiError('internal', 'No se pudo guardar la conexión.');   // nunca error.message
+}
+
 /** El token existe solo dentro de fn: prohibido devolverlo, registrarlo o meterlo en un error, un prompt o un MCP. */
 export async function withSecret<T>(env: CloudflareBindings, admin: SupabaseClient, ctx: SecretCtx,
                                     fn: (token: string) => Promise<T>): Promise<T> {

@@ -344,6 +344,148 @@ describe('E6 de un proveedor salta las mediciones de Rendimiento (kind lighthous
   });
 });
 
+// ── Varias codebases (asignaciones/varias-codebases.md §2.4, B5): lo que miró un repo no da por mirado a otro ─────────
+describe('B5 · Codebase con 2 o más repos activos', () => {
+  const TODAS = { secretos: true, env: true, lockfiles: true, osv: true };
+  const CB = ['CB_ENV_COMMITTED', 'CB_GITIGNORE_NO_ENV', 'CB_SECRET_*', 'CB_DEP_VULN'];
+  const gh = (repo: string, status = 'active') => conexion('github', status, { meta: { repo_full_name: repo } });
+  // Una auditoría con el paso repo terminado y su coverage.detail.codebase (extra: params u otros campos de la fila).
+  const auditoria = (codebase: Record<string, unknown>, status = 'done', extra: Record<string, unknown> = {}) =>
+    ({ ...scan([{ name: 'repo', status }], { codebase }), ...extra });
+  const comprobados = (e: EstadoModulo) => e.checks.filter((c) => c.comprobado).map((c) => c.codigo);
+  const LARGO = 'equipo22-demo/vanguard-demo-landing-con-un-nombre-bastante-largo';
+
+  it('con UN repo activo (y otro revocado), como siempre: sin «Repos revisados» ni chips de repo', async () => {
+    const tienda = gh('acme/tienda');
+    fijar({ findings: [hallazgo('CB_ENV_COMMITTED', 'high', { connection_id: tienda.id })],
+      scans: [auditoria({ connection_id: tienda.id, miradas: TODAS })], conns: [tienda, gh('acme/otro', 'revoked')] });
+    const e = await pedir('codebase');
+    expect(e.ok).toBe(true);
+    expect(comprobados(e)).toEqual(CB);
+    expect(cifra(e, 'codebase_repos')).toBeUndefined();
+    expect(e.ahora[0]?.filas[0]?.chips).toBeUndefined();
+  });
+
+  it('2 repos y uno analizado → ningún chequeo comprobado; «Repos revisados» 1 de 2; chips con el repo, sin recortar', async () => {
+    const tienda = gh('acme/tienda');
+    const landing = gh(LARGO);
+    const lodash = { resource: 'npm:lodash@4.17.15' };
+    fijar({
+      findings: [hallazgo('CB_DEP_VULN', 'high', { ...lodash, connection_id: tienda.id, confirmed: true }),
+        hallazgo('CB_DEP_VULN', 'high', { ...lodash, connection_id: landing.id }),
+        hallazgo('CB_ENV_COMMITTED', 'high', { connection_id: null })],
+      scans: [auditoria({ connection_id: landing.id, miradas: TODAS }, 'done', { params: { connection_id: landing.id } })],
+      conns: [tienda, landing],
+    });
+    const e = await pedir('codebase');
+    expect(e.ok).toBe(true);
+    expect(e.checks.every((c) => !c.comprobado && c.n === null)).toBe(true);   // «Analizar este repo» de uno no mira el otro
+    expect(cifra(e, 'codebase_repos')).toEqual({ tipo: 'codebase_repos', etiqueta: 'Repos revisados', n: 1, de: 2, rol: 'aviso' });
+    const filas = e.ahora.flatMap((g) => g.filas);
+    expect(filas.map((f) => f.chips)).toEqual([['confirmado', 'acme/tienda'], [LARGO], undefined]);
+    expect(cifra(e, 'codebase_abiertos')?.n).toBe(3);   // conteos agregados, como siempre
+  });
+
+  it('los dos con su último intento done → comprobados; si el último de uno falló o no miró OSV, ese chequeo no', async () => {
+    const tienda = gh('acme/tienda');
+    const landing = gh('acme/landing');
+    const deLanding = (miradas: Record<string, boolean>, status = 'done') =>
+      auditoria({ connection_id: landing.id, miradas }, status, { params: { connection_id: landing.id } });
+    const completa = auditoria({ connection_id: tienda.id, miradas: TODAS });   // full_audit: el repo principal (B0)
+    fijar({ findings: [hallazgo('CB_SECRET_AWS', 'critical', { connection_id: landing.id })], scans: [deLanding(TODAS), completa],
+      conns: [tienda, landing] });
+    let e = await pedir('codebase');
+    expect(comprobados(e)).toEqual(CB);
+    expect(check(e, 'CB_SECRET_*')).toMatchObject({ n: 1, comprobado: true });
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 2, de: 2, rol: 'bien' });
+
+    fijar({ scans: [deLanding({ ...TODAS, osv: false }), completa], conns: [tienda, landing] });
+    e = await pedir('codebase');
+    expect(comprobados(e)).toEqual(['CB_ENV_COMMITTED', 'CB_GITIGNORE_NO_ENV', 'CB_SECRET_*']);
+
+    fijar({ scans: [deLanding(TODAS, 'failed'), deLanding(TODAS), completa], conns: [tienda, landing] });   // el más nuevo manda
+    e = await pedir('codebase');
+    expect(comprobados(e)).toEqual([]);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 1, de: 2, rol: 'aviso' });
+  });
+
+  it('un ZIP no cuenta para ningún repo; una auditoría de antes de B0 (sin detalle ni params), la conexión más antigua', async () => {
+    const tienda = gh('acme/tienda');   // la más antigua (conns va en orden de created_at)
+    const landing = gh('acme/landing');
+    const zip = scan([{ name: 'zip', status: 'done' }], { codebase: { modo: 'zip', miradas: TODAS } });
+    const vieja = scan([{ name: 'repo', status: 'done' }], { codebase: { modo: 'riesgo', miradas: TODAS } });
+    fijar({ scans: [zip, vieja], conns: [tienda, landing] });
+    let e = await pedir('codebase');
+    expect(comprobados(e)).toEqual([]);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 1, de: 2 });
+
+    const deLanding = auditoria({ miradas: TODAS }, 'done', { params: { connection_id: landing.id } });
+    fijar({ scans: [zip, deLanding, vieja], conns: [tienda, landing] });
+    e = await pedir('codebase');
+    expect(comprobados(e)).toEqual(CB);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 2, de: 2, rol: 'bien' });
+    const op = doble.ops.find((o) => o.table === 'connections')!;
+    expect(op.columns).toContain('meta');
+    expect(op.orden).toEqual([['created_at', true], ['id', true]]);
+    expect(doble.ops.find((o) => o.table === 'scan_runs')?.columns).toContain('params');
+  });
+
+  it('un failed sin detalle ni params (GitHub cayó antes del detalle de B0) va a la ACTIVA más antigua', async () => {
+    const x = gh('acme/x', 'revoked');   // la más antigua en cualquier estado: ya no cuenta
+    const y = gh('acme/y');              // la activa más antigua: la que eligió conexionActiva para la auditoría completa
+    const z = gh('acme/z');
+    const fallida = { ...scan([{ name: 'repo', status: 'failed' }]), params: {} };
+    const deY = auditoria({ connection_id: y.id, miradas: TODAS });
+    const deZ = auditoria({ connection_id: z.id, miradas: TODAS }, 'done', { params: { connection_id: z.id } });
+    fijar({ scans: [fallida, deY, deZ], conns: [x, y, z] });
+    let e = await pedir('codebase');
+    expect(comprobados(e)).toEqual([]);   // el último intento de acme/y falló: nada sale comprobado
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 1, de: 2, rol: 'aviso' });
+
+    // Un done sin detalle ni params solo puede ser de antes de B0: sigue siendo de la más antigua (§2.4), aquí la revocada.
+    const vieja = { ...scan([{ name: 'repo', status: 'done' }], { codebase: { modo: 'riesgo', miradas: TODAS } }), params: {} };
+    fijar({ scans: [vieja, deY, deZ], conns: [x, y, z] });
+    e = await pedir('codebase');
+    expect(comprobados(e)).toEqual(CB);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 2, de: 2, rol: 'bien' });
+  });
+
+  it('con detail.codebase.repos manda cada entrada: pending = sin mirar; sin miradas propias, las de la corrida (el Y)', async () => {
+    const tienda = gh('acme/tienda');
+    const landing = gh('acme/landing');
+    const recorrido = (repos: Record<string, unknown>[], miradas = TODAS) =>
+      auditoria({ connection_id: landing.id, miradas, repos });
+    const primero = { connection_id: tienda.id, status: 'done', miradas: TODAS };
+    fijar({ scans: [recorrido([primero, { connection_id: landing.id, status: 'pending' }])], conns: [tienda, landing] });
+    let e = await pedir('codebase');
+    expect(comprobados(e)).toEqual([]);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 1, de: 2 });
+
+    fijar({ scans: [recorrido([primero, { connection_id: landing.id, status: 'done' }], { ...TODAS, osv: false })],
+      conns: [tienda, landing] });
+    e = await pedir('codebase');
+    expect(comprobados(e)).toEqual(['CB_ENV_COMMITTED', 'CB_GITIGNORE_NO_ENV', 'CB_SECRET_*']);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 2, de: 2, rol: 'bien' });
+  });
+
+  it('las parejas viejas de «Reconectar» son el mismo repo; sin ningún intento, «Repos revisados» sin dato', async () => {
+    const vieja = gh('Acme/Tienda', 'revoked');
+    const tienda = gh('acme/tienda');
+    const landing = gh('acme/landing');
+    fijar({ findings: [hallazgo('CB_ENV_COMMITTED', 'high', { connection_id: vieja.id })], conns: [vieja, tienda, landing] });
+    let e = await pedir('codebase');
+    expect(comprobados(e)).toEqual([]);
+    expect(cifra(e, 'codebase_repos')).toEqual({ tipo: 'codebase_repos', etiqueta: 'Repos revisados', n: null, de: 2 });
+    expect(e.ahora[0]?.filas[0]?.chips).toEqual(['Acme/Tienda']);
+
+    fijar({ scans: [auditoria({ connection_id: vieja.id, miradas: TODAS }), auditoria({ connection_id: landing.id, miradas: TODAS })],
+      conns: [vieja, tienda, landing] });
+    e = await pedir('codebase');
+    expect(comprobados(e)).toEqual(CB);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 2, de: 2 });
+  });
+});
+
 describe('E6 · ruta', () => {
   const app = new Hono<AppEnv>();
   app.use(async (c, next) => { c.set('rid', 'r1'); c.set('orgId', ORG); await next(); });

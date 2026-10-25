@@ -21,6 +21,14 @@ Referencias: `apps/api/src/mcp/*`, `apps/api/src/mw/mcp-auth.ts`, `apps/api/src/
 - **Prompt `resolver_hallazgo`.** `title`, `resource` y la ruta del archivo pasan por `bidiAVista` y
   `redactarParaExport`, y van dentro de `fenceMd`. La instrucción fija va fuera del cercado. La `description` del prompt
   ya no lleva el título.
+- **Corrección neutralizada (`resolver_hallazgo` y `get_fix_prompt`).** La plantilla volvía a meter esos campos fuera
+  del cercado: `generica()` pone el título en prosa y casi todas las reglas citan el recurso o la ruta en código en línea,
+  sin escapar `<` ni `>`. Un título o un recurso con `</datos_no_confiables>` cerraba un cercado falso. Ahora la
+  plantilla se arma sin título; `resource` y `evidence.path` entran tal cual solo si tienen forma de identificador (sin
+  espacios, comillas, acentos graves, `<` `>` ni controles o bidi), y si no se cambian por la referencia fija
+  `(nombre en los datos del hallazgo)`. En el resto de la evidencia, `<` y `>` van escapados como en `fenceMd`. Si la
+  corrección usa la referencia, o si hay texto con forma de instrucción, el prompt lo avisa con una línea fija. En el
+  prompt guardado de IA-1, una etiqueta `datos_no_confiables` sale escapada.
 - **Límite por IP antes del SELECT.** `mcpAuth` cobra `RL_API` con clave `mcp-ip:<cf-connecting-ip>` antes de buscar el
   token. Así, un `vgk_` inventado ya no consulta `mcp_tokens` sin freno.
 - **Cable trampa del `name`.** E29 rechaza con `422 invalid_body` un nombre con forma de secreto o con `vgk_`. La
@@ -120,3 +128,26 @@ grandes, la CPU se acerca a los 10 ms de Workers Free. El presupuesto de subpeti
 Con los 5 `head`, el presupuesto pasaría de 6 a 11 (conexiones, revisiones, las 3 de `estadoModulo`, 5 conteos y la
 lista), todavía lejos de 40. Tomando los conteos de `estadoModulo`, se queda en 6. Otra opción es que `estadoModulo`
 acepte las filas ya leídas.
+
+## 5. Nombres de la evidencia en código en línea y la misma fuga en E15
+
+**Qué pasa.**
+- **MCP.** En la corrección neutralizada, los demás nombres de la evidencia (tabla, esquema, política, función y sus
+  argumentos, manifiesto, paquete) siguen entrando en código en línea o en el SQL de la plantilla, ya sin `<` ni `>`. Una
+  tabla o una política con prosa (por ejemplo, la política por defecto de Supabase «Enable read access for all users»)
+  sale tal cual fuera del cercado. No se cambian por la referencia porque las plantillas los necesitan para el SQL: con
+  la referencia, el `drop policy` o el `revoke` saldrían rotos en el caso más común. Son nombres de la base del propio
+  cliente, no texto de un tercero.
+- **E15 («Copiar para mi IA») y el export.** `plantillaDe()` llama a la plantilla con el hallazgo tal cual. `generica()`
+  pone el título en prosa en «Qué pasa», y `nombreEnCodigo`/`unaLinea` no escapan `<` ni `>`.
+- **Prompt guardado de IA-1.** Se entrega tal cual (solo se escapa la etiqueta `datos_no_confiables`). Pasó el filtro de
+  salida de IA-1 (`checkFixPrompt`), pero puede citar el título en prosa.
+
+**Por qué no hoy.** El arreglo de fondo es de `packages/core` (fuera de la zona del MCP) y cambia los bytes que fija el
+fixture de contracts (`hallazgos.ts`).
+
+**Arreglo propuesto (para el ORQUESTADOR).**
+- `generica()` deja de interpolar `title`: usa siempre «VanGUARD detectó REGLA en RECURSO».
+- `nombreEnCodigo` (o `unaLinea`) escapa `<` y `>` como `fenceMd` (`<`, `>`).
+- Si se quiere el mismo nivel que el MCP, `plantillaCorreccion` recibe una opción `soloIdentificadores` que cambie por
+  una referencia fija los nombres que no lo son, y cada plantilla elige qué hace sin ellos (sin SQL, por ejemplo).

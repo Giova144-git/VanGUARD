@@ -1,7 +1,6 @@
 import type { PermCheck } from '@vanguard/contracts';
 import { parseIp } from '@vanguard/core';
 import { ProviderError, codigoHttp, pedir } from '../lib/http.ts';
-import type { MsgScan, ResultadoPaso } from '../jobs.ts';
 import { sondeoFallido, type Sondeo } from './sondeo.ts';
 
 // Cloudflare sin zona (asignaciones/cloudflare-por-url.md §BACK 1): un sitio de Pages, de Workers o su dominio propio.
@@ -48,13 +47,6 @@ export function clasificarSitio(url: string): Sitio | { error: string } {
     return { site_url, host, kind: 'workers', project: p[0]! };
   }
   return { site_url, host, kind: 'custom', project: null };
-}
-
-/** Paso cloudflare de la auditoría en modo sitio. Primera entrega: aún sin reglas del sitio (llegan en el siguiente
- *  commit); se salta con su código para no tocar la zona de nadie. */
-export async function pasoCloudflareSitio(_env: CloudflareBindings, _m: MsgScan, _conn: { id: string; meta: Record<string, unknown> })
-  : Promise<ResultadoPaso> {
-  return { status: 'skipped', error_code: 'modo_url_pendiente' };
 }
 
 async function cf<T>(token: string, path: string): Promise<T> {

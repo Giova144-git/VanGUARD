@@ -7,7 +7,7 @@ import { db } from '../lib/db.ts';
 import { ProviderError, check, codigoHttp, pedir, sondear } from '../lib/http.ts';
 import { escribirDetalleModulo } from './cobertura.ts';
 import { conexionActiva, guardarHallazgos } from './comun.ts';
-import { pasoCloudflareSitio } from './cloudflare-sitio.ts';
+import { pasoCloudflareSitio } from './cloudflare-sitio-paso.ts';
 import { sondeoFallido, veredicto, type Sondeo } from './sondeo.ts';
 
 // Sondeo de los tokens de Cloudflare (§08.2–08.3): lectura obligatoria con zone_read y analytics_read; acciones opcional.

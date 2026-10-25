@@ -15,6 +15,7 @@ import PaginaCodebase, { chipPestana } from './PaginaCodebase';
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
 const ORG = fx.me.orgs[0]!.id;
 const ADMIN: OrgActual = { ...fx.me.orgs[0]!, me: fx.me, puedeEscribir: true };
+const VIEWER: OrgActual = { ...ADMIN, role: 'viewer', puedeEscribir: false };
 const CX = z.array(ConnectionPublic).parse(fx.connections);
 const GH = CX.find((c) => c.provider === 'github')!;
 const GH2 = ConnectionPublic.parse(fx.conexionGithub2);
@@ -23,7 +24,7 @@ const ESTADO_1 = CodeReviewState.parse(fx.codeReviewState);
 const REV_2 = { ...ESTADO_1.recent[1]!, id: 'c4000000-0000-4000-8000-0000000000e2' };
 const ESTADO_2 = CodeReviewState.parse({ ...fx.codeReviewStateRepo2, recent: [REV_2] });
 
-function pagina(conexiones: ConnectionPublic[], ruta = `/o/${ORG}/codebase`, estado2: CodeReviewState | ApiError = ESTADO_2) {
+function pagina(conexiones: ConnectionPublic[], ruta = `/o/${ORG}/codebase`, estado2: CodeReviewState | ApiError = ESTADO_2, org: OrgActual = ADMIN) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(['org', ORG, 'module', 'codebase'], fx.moduleState.codebase);
   qc.setQueryData(['org', ORG, 'connections'], conexiones);
@@ -33,7 +34,7 @@ function pagina(conexiones: ConnectionPublic[], ruta = `/o/${ORG}/codebase`, est
   else qc.setQueryData(['org', ORG, 'revision', GH2.id], estado2);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[ruta]}><OrgDePrueba org={ADMIN}><PaginaCodebase /></OrgDePrueba></MemoryRouter>
+      <MemoryRouter initialEntries={[ruta]}><OrgDePrueba org={org}><PaginaCodebase /></OrgDePrueba></MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -73,6 +74,15 @@ describe('PaginaCodebase · varias codebases', () => {
     expect(pestanas(pagina([...CX, GH2], `/o/${ORG}/codebase?revision=${ESTADO_1.recent[0]!.id}`)).map((p) => p.elegida)).toEqual([true, false]);
   });
 
+  it('a 375 px una pestaña con un nombre largo no se sale: tope del ancho del renglón y el nombre parte', () => {
+    const largo = { ...GH2, meta: { ...GH2.meta, repo_full_name: `equipo22-demo/${'vanguard-demo-landing-'.repeat(4)}x` } };
+    const html = pagina([...CX, largo]);
+    const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map(([t]) => t.match(/class="([^"]*)"/)?.[1] ?? '');
+    expect(tabs).toHaveLength(2);
+    for (const c of tabs) expect(c.split(/\s+/)).toEqual(expect.arrayContaining(['max-w-full', 'flex-wrap', 'whitespace-normal']));
+    expect(html).toContain('<bdi dir="ltr" class="font-mono break-all">equipo22-demo/vanguard-demo-landing-');
+  });
+
   it('una pestaña cuyo E45 da 404 sale con «—» y sin tarjeta (bandera por 404)', () => {
     const html = pagina([...CX, GH2], `/o/${ORG}/codebase?repo=${GH2.id}`, new ApiError(404, 'not_found', 'Ruta inexistente'));
     expect(pestanas(html)[1]).toEqual({ elegida: true, texto: `${REPO_2} —` });
@@ -83,6 +93,16 @@ describe('PaginaCodebase · varias codebases', () => {
   it('las parejas viejas de «Reconectar» salen una vez, con la activa', () => {
     const vieja = { ...GH, id: 'c0000000-0000-4000-8000-0000000000a1', status: 'revoked' as const };
     expect(pagina([vieja, ...CX])).not.toContain('role="tablist"');
+  });
+
+  it('el viewer (y el anónimo de la demo) ve las pestañas sin analizar, activar ni la URL del webhook', () => {
+    const html = pagina([...CX, GH2], `/o/${ORG}/codebase`, ESTADO_2, VIEWER);
+    expect(html).toContain('role="tablist"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Analizar este repo/);
+    expect(html).toContain('Revisión automática de código');
+    expect(html).not.toContain('Revisar cada push');                       // el interruptor es solo de admin
+    expect(html).not.toContain(ESTADO_1.config!.webhook_url!);
+    expect(html).not.toContain('/settings');
   });
 });
 

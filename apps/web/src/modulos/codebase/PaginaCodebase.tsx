@@ -38,10 +38,11 @@ export function PestanasRepos({ repos }: { repos: ConnectionPublic[] }) {
   return (
     <Tabs value={elegida.id} onValueChange={cambiar} className="gap-6">
       <div className="flex flex-col gap-2">
-        {/* El nombre del repo no se recorta: parte en dos líneas. Las pestañas saltan de línea a 375 px. */}
+        {/* El nombre del repo no se recorta: parte en dos líneas. Las pestañas saltan de línea a 375 px. max-w-full: con
+            flex-none la pestaña mediría lo que su texto en una línea y un nombre largo se saldría por la derecha. */}
         <TabsList aria-label="Repos de GitHub" className="h-auto w-full flex-wrap justify-start gap-1">
           {repos.map((c, i) => (
-            <TabsTrigger key={c.id} value={c.id} className="h-auto min-h-11 flex-none flex-wrap gap-x-2 gap-y-1 py-2 text-left whitespace-normal">
+            <TabsTrigger key={c.id} value={c.id} className="h-auto min-h-11 max-w-full flex-none flex-wrap gap-x-2 gap-y-1 py-2 text-left whitespace-normal">
               <bdi dir="ltr" className="font-mono break-all">{sinBidi(nombreRepo(c) || c.label)}</bdi>
               <Etiqueta {...chipPestana(estados[i]?.data, c.id)} />
             </TabsTrigger>

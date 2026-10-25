@@ -38,6 +38,7 @@ describe('orgMember', () => {
     ['GET', 'overview'], ['GET', 'findings'], ['GET', `findings/${fx.findings[0]!.id}`], ['GET', 'modules/supabase/state'],
     ['GET', 'traffic'], ['GET', `scans/${fx.scanDone.id}`], ['GET', `wiki/runs/${fx.wikiRunDone.id}/doc`], ['GET', 'export'],
     ['POST', 'connections'], ['POST', 'scans'], ['POST', `scans/${NADA}/zip-result`], ['GET', 'ruta-que-no-existe'],
+    ['GET', 'code-review'], ['PUT', 'code-review/gate'], ['POST', `code-review/reviews/${fx.codeReviewStateBloqueo.recent[0]!.id}/gate`],
   ])('una org ajena responde 404 a %s %s', async (method, resto) => {
     const e = await fallo(`/api/orgs/${AJENA}/${resto}`, method, {});
     expect(e).toMatchObject({ status: 404, code: 'not_found', message: 'Organización no encontrada' });
@@ -558,6 +559,11 @@ describe('bloqueo de merge (E45 con gate, E53, E54)', () => {
     const con = MergeGateSaved.parse(await pedir(`/api/orgs/${nueva}/code-review/gate`, 'PUT', { ...BASE, statuses_pat: 'github_pat_estados_org_nueva_000000' }));
     expect(con).toMatchObject({ gate: { state: 'unchecked', close_pr: true }, probe_state: 'pending' });
     expect(con.probe_sha).toMatch(/^[0-9a-f]{40}$/);
+    // E54 desde otra org propia con el id de una revisión de la demo: 404, y la del PR #7 no cambia.
+    const antes = (await leer()).recent[0]!.gate;
+    expect(await fallo(`/api/orgs/${nueva}/code-review/reviews/${PR}/gate`, 'POST', { op: 'override', reason: 'Desde otra org' }))
+      .toMatchObject({ status: 404 });
+    expect((await leer()).recent[0]!.gate).toEqual(antes);
   });
 });
 

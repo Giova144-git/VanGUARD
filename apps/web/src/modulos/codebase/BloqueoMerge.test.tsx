@@ -221,6 +221,25 @@ describe('BloqueoMerge · fila del PR', () => {
     expect(tarjeta(ADMIN, BLOQUEO, { ruta: abierta, qc })).toContain('Dar por bueno este commit');   // el resto de E54 sigue
   });
 
+  it('sin nada que explicar ni ofrecer, la fila abierta no pinta un recuadro con solo el título (✓, revisando, E54 en 404)', async () => {
+    const limpio = { ...BLOQUEO, recent: [{ ...PR, gate: { ...PR.gate, state: 'success' as const, blocking: 0, findings: [], pr_action: null } }] };
+    expect(tarjeta(VIEWER, limpio, { ruta: abierta })).toContain('✓ GitHub');
+    expect(tarjeta(VIEWER, limpio, { ruta: abierta })).not.toContain('Check “VanGUARD” en GitHub');
+    expect(tarjeta(ADMIN, limpio, { ruta: abierta })).not.toContain('Check “VanGUARD” en GitHub');
+    const revisando = { ...limpio, recent: [{ ...limpio.recent[0]!, gate: { ...limpio.recent[0]!.gate, state: 'pending' as const } }] };
+    expect(tarjeta(VIEWER, revisando, { ruta: abierta })).not.toContain('Check “VanGUARD” en GitHub');
+    // Sin publicar: el admin tiene «Publicar de nuevo»; si E54 da 404, ya no hay nada que ofrecer.
+    const sinPublicar = { ...limpio, recent: [{ ...limpio.recent[0]!, gate: { ...limpio.recent[0]!.gate, state: null, error: 'red' } }] };
+    expect(tarjeta(ADMIN, sinPublicar, { ruta: abierta })).toContain('Check “VanGUARD” en GitHub');
+    const qc = nuevoQc();
+    api.mockRejectedValueOnce(new ApiError(404, 'not_found', 'Ruta inexistente'));
+    await new MutationObserver(qc, opcionesAccionBloqueo(ORG, qc)).mutate({ id: PR.id, accion: { op: 'republish' } }).catch(() => {});
+    const html = tarjeta(ADMIN, sinPublicar, { ruta: abierta, qc });
+    expect(html).toContain('No publicado: GitHub no respondió');
+    expect(html).not.toContain('Check “VanGUARD” en GitHub');
+    expect(tarjeta(VIEWER, BLOQUEO, { ruta: abierta })).toContain('Check “VanGUARD” en GitHub');   // con ✗, sí
+  });
+
   it('con el bloqueo apagado la fila no ofrece acciones (E54 daría 409 apagado)', () => {
     const html = tarjeta(ADMIN, conGate({ enabled: false, state: 'off' }), { ruta: abierta });
     expect(html).toContain('✗ Merge bloqueado');

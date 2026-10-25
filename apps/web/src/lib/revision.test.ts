@@ -63,7 +63,7 @@ describe('chips del bloqueo de merge (§6.2)', () => {
     expect(chipBloqueo(pr({ blocking: 1 }), 'critical')).toEqual({ texto: '✗ Merge bloqueado · 1 crítico', rol: 'mal' });
     expect(chipBloqueo(pr({ blocking: 3 }), 'high')).toEqual({ texto: '✗ Merge bloqueado · 3 críticos o altos', rol: 'mal' });
     expect(chipBloqueo(pr({ blocking: null }))?.texto).toBe('✗ Merge bloqueado');
-    expect(chipBloqueo(pr({}, { event: 'push' }))).toEqual({ texto: '✗ Ya está en main', rol: 'mal' });
+    expect(chipBloqueo(pr({}, { event: 'push' }))).toEqual({ texto: '✗ Ya está en', ltr: 'main', rol: 'mal' });   // la rama, en <bdi>
   });
 
   it('✓, aprobado a mano, error (incompleta o fallida), pendiente y sin publicar', () => {

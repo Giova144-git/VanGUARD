@@ -4,7 +4,7 @@ import type { AlertPrefs, CodeReview, CodeReviewConfig, CommitStatusState, Merge
 import { SIN_DATO, cuando, decimal } from './formato';
 import { deMapa, severidad, type Rol } from './severidad';
 
-export type Chip = { texto: string; rol: Rol };
+export type Chip = { texto: string; rol: Rol; ltr?: string };   // ltr: rama o repo que Etiqueta pinta en <bdi dir="ltr">
 
 // Ajustes (§6.2): las cinco opciones de cada selector, en este orden.
 export const UMBRALES: [UmbralAviso, string][] = [
@@ -198,7 +198,7 @@ export function chipBloqueo(r: Pick<CodeReview, 'gate' | 'event' | 'branch' | 's
   if (g.override_at && g.state !== 'success') return { texto: 'Aprobando a mano…', rol: 'info' };
   switch (g.state) {
     case 'failure': {
-      if (r.event !== 'pull_request') return { texto: `✗ Ya está en ${r.branch}`, rol: 'mal' };
+      if (r.event !== 'pull_request') return { texto: '✗ Ya está en', ltr: r.branch, rol: 'mal' };
       const n = typeof g.blocking === 'number' && Number.isFinite(g.blocking) ? g.blocking : 0;
       return { texto: n > 0 ? `✗ Merge bloqueado · ${cuentaBloqueo(n, min)}` : '✗ Merge bloqueado', rol: 'mal' };
     }

@@ -109,7 +109,8 @@ describe('lineaFoto (fila de cada push)', () => {
       .toBe('0 nuevos · 1 sigue abierto · 3 corregidos desde el push anterior (2 comprobados por una auditoría) · 1 ignorado');
   });
   it('primer push con foto (first:true): punto de partida', () => {
-    const jueves = EVO.reviews[0]!;
+    const r = EVO.reviews[0]!;                                  // E52 trae los nuevos en `new`
+    const jueves = { event: r.event, counts: r.new, delta: r.delta };
     expect(jueves.delta?.first).toBe(true);
     expect(lineaFoto(jueves)).toBe('3 siguen abiertos en Codebase · desde el próximo push verás los corregidos');
     expect(lineaFoto(jueves, true)).toBe('3 siguen abiertos en Codebase (todos los repos) · desde el próximo push verás los corregidos');

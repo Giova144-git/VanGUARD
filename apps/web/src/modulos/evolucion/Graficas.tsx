@@ -1,8 +1,8 @@
 // Gráficas de la página Evolución (asignaciones/evolucion-entre-revisiones.md §6.4), con el patrón de GraficaComparativa:
 // sin animación, sin la capa de accesibilidad de Recharts y un contenedor role="img" cuyo aria-label resume los datos.
 // Ejes y avisos solo con fechas y números: nunca títulos ni recursos de hallazgos.
-import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { PuntoPuntaje } from '@/lib/evolucion';
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import type { PuntoPuntaje, serieCambios } from '@/lib/evolucion';
 
 export const EJE = { fill: 'var(--texto-3)', fontSize: 12 };
 export const AVISO = { background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--foreground)' };
@@ -29,6 +29,37 @@ export function GraficaPuntaje({ serie }: { serie: PuntoPuntaje[] }) {
           <Line type="linear" dataKey="score" name="Puntaje" stroke="var(--info)" strokeWidth={2} dot={{ r: 3, fill: 'var(--info)' }}
             connectNulls isAnimationActive={false} />
         </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// Leyenda en texto: el color nunca es la única señal.
+export function Leyenda({ items }: { items: [string, string][] }) {
+  return (
+    <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-muted-foreground" aria-hidden="true">
+      {items.map(([t, c]) => <li key={t} className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{ background: c }} />{t}</li>)}
+    </ul>
+  );
+}
+const abs = (v: unknown) => String(Math.abs(Number(v) || 0));
+
+// Nuevos hacia arriba y corregidos hacia abajo de cero (llegan en negativo); el aviso y el eje dicen el valor absoluto.
+export function GraficaCambios({ serie }: { serie: ReturnType<typeof serieCambios> }) {
+  const fecha = porId(serie);
+  return (
+    <div className="h-56 w-full" role="img"
+      aria-label={`Nuevos y corregidos por auditoría: ${serie.map((p) => `${p.x} ${p.nuevos} nuevos y ${-p.corregidos} corregidos`).join(', ')}`}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={serie} stackOffset="sign" margin={{ top: 8, right: 12, bottom: 0, left: -16 }} accessibilityLayer={false}>
+          <CartesianGrid stroke="var(--border)" vertical={false} />
+          <XAxis dataKey="id" tickFormatter={fecha} tick={EJE} tickLine={false} axisLine={false} minTickGap={24} />
+          <YAxis tickFormatter={abs} allowDecimals={false} tick={EJE} tickLine={false} axisLine={false} width={44} />
+          <Tooltip contentStyle={AVISO} cursor={{ fill: 'var(--muted)' }} labelFormatter={fecha} formatter={(v, nombre) => [abs(v), String(nombre)]} />
+          <ReferenceLine y={0} stroke="var(--borde-fuerte)" />
+          <Bar dataKey="nuevos" name="Nuevos" stackId="c" fill="var(--mal)" fillOpacity={0.7} isAnimationActive={false} />
+          <Bar dataKey="corregidos" name="Corregidos" stackId="c" fill="var(--bien)" fillOpacity={0.7} isAnimationActive={false} />
+        </BarChart>
       </ResponsiveContainer>
     </div>
   );

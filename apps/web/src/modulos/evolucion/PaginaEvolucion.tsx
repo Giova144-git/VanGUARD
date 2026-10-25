@@ -1,7 +1,7 @@
 // /o/:orgId/evolution (asignaciones/evolucion-entre-revisiones.md §1.3 y §6.4). Cada versión es una auditoría terminada:
 // con foto trae nuevos, corregidos y abiertos; las de antes del historial, solo el puntaje. Las cifras del periodo salen de
 // `totals` (lib/evolucion.ts). Si E52 da 404 (aún sin desplegar): «La evolución llega pronto».
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ChevronRight, ShieldCheck, TrendingUp } from 'lucide-react';
 import type { Evolution, EvolutionPoint } from '@vanguard/contracts';
@@ -13,12 +13,12 @@ import { ErrorBloque, Vacio } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { useEvolucion } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
-import { cifras, comparables, etiquetaVersion, horas, porSeveridad, seriePuntaje, signo, tipoAuditoria, totalMatriz } from '@/lib/evolucion';
+import { cifras, etiquetaVersion, horas, porSeveridad, serieCambios, seriePuntaje, signo, tipoAuditoria, totalMatriz } from '@/lib/evolucion';
 import { miles } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { cn } from '@/lib/utils';
-import { GraficaPuntaje } from './Graficas';
+import { GraficaCambios, GraficaPuntaje, Leyenda } from './Graficas';
 
 type Dias = 7 | 30 | 90;
 const PERIODOS: [Dias, string][] = [[7, '7 días'], [30, '30 días'], [90, '90 días']];
@@ -132,18 +132,29 @@ function Versiones({ points }: { points: EvolutionPoint[] }) {
   );
 }
 
+function Seccion({ id, titulo, children }: { id: string; titulo: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby={id}>
+      <h3 id={id} className="text-[17px] font-semibold">{titulo}</h3>
+      {children}
+    </section>
+  );
+}
+
 function Contenido({ evo }: { evo: Evolution }) {
   const serie = seriePuntaje(evo.points);
-  const sinComparar = comparables(evo.points).length === 0;
+  const cambios = serieCambios(evo.points);
+  const recorte = evo.truncated ? ` · últimas ${evo.points.length} auditorías` : '';
   return (
     <>
       <Cifras evo={evo} />
-      {sinComparar ? <p className="rounded-xl border bg-card px-4 py-3 text-[15px] text-muted-foreground">Con la próxima auditoría verás qué cambió.</p> : null}
-      {serie.length > 1 ? (
-        <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-puntaje">
-          <h3 id="t-puntaje" className="text-[17px] font-semibold">Puntaje por auditoría{evo.truncated ? ` · últimas ${evo.points.length} auditorías` : ''}</h3>
-          <GraficaPuntaje serie={serie} />
-        </section>
+      {cambios.length === 0 ? <p className="rounded-xl border bg-card px-4 py-3 text-[15px] text-muted-foreground">Con la próxima auditoría verás qué cambió.</p> : null}
+      {serie.length > 1 ? <Seccion id="t-puntaje" titulo={`Puntaje por auditoría${recorte}`}><GraficaPuntaje serie={serie} /></Seccion> : null}
+      {cambios.length ? (
+        <Seccion id="t-cambios-evo" titulo={`Nuevos y corregidos${recorte}`}>
+          <GraficaCambios serie={cambios} />
+          <Leyenda items={[['Nuevos (hacia arriba)', 'var(--mal)'], ['Corregidos (hacia abajo)', 'var(--bien)']]} />
+        </Seccion>
       ) : null}
       <Versiones points={evo.points} />
     </>

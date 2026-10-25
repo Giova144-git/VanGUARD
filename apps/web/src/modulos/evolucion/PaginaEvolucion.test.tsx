@@ -68,6 +68,12 @@ describe('PaginaEvolucion', () => {
     expect(t).toContain('¿Cómo leer la evolución?');
   });
 
+  it('nuevos y corregidos: solo las versiones con anterior, en valores absolutos', () => {
+    const html = pintar(EVO);
+    expect(html).toMatch(/role="img" aria-label="Nuevos y corregidos por auditoría: jue\.? 22 · 14:02 0 nuevos y 2 corregidos, vie\.? 23 · 14:04 1 nuevos y 2 corregidos, [^"]+ 7 nuevos y 2 corregidos"/);
+    expect(texto(html)).toContain('Corregidos (hacia abajo)');
+  });
+
   it('con la gráfica recortada el título dice «últimas N auditorías»', () => {
     expect(texto(pintar({ ...EVO, points: EVO.points.slice(-3), truncated: true }))).toContain('Puntaje por auditoría · últimas 3 auditorías');
   });

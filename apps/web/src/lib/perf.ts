@@ -1,6 +1,6 @@
-// Histórico de Rendimiento de solo lectura (S14 §14.13, RND-15a de S10): E24 devuelve repeticiones crudas (3 por
-// medición); aquí se agrupan por run_group (o, si no viene, por tanda: misma URL y estrategia con < 5 min entre
-// corridas) y se toma la mediana de cada métrica. Umbrales de «bueno» y «malo» de S10 §10.3.
+// Histórico de Rendimiento de solo lectura (S14 §14.13, RND-15a de S10): E24 devuelve repeticiones crudas (1 por
+// medición de «Medir ahora»; 3 en las sembradas); aquí se agrupan por run_group (o, si no viene, por tanda: misma URL y
+// estrategia con < 5 min entre corridas) y se toma la mediana de cada métrica. Umbrales de «bueno» y «malo» de S10 §10.3.
 import type { PerfRunExt } from '@vanguard/contracts';
 
 export type Estrategia = 'mobile' | 'desktop';

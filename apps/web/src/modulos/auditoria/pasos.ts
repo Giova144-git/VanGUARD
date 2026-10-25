@@ -1,7 +1,7 @@
 // La lista de pasos y su estado los da el servidor (ScanRun.steps[], E12); aquí solo textos y traducción (S14 §14.14).
 // api() en producción deja pasar un cuerpo fuera de contrato: todo mapa se lee con deMapa, así un paso, un estado o un
 // «__proto__» desconocidos caen a un respaldo neutro (L3) en vez de lanzar TypeError y tumbar la auditoría.
-import type { Module, ScanRun, ScanStep } from '@vanguard/contracts';
+import type { Module, ScanRepo, ScanRun, ScanStep } from '@vanguard/contracts';
 import { sinBidi } from '@/lib/bidi';
 import { textoErrorZip } from '@/lib/errores-escaneo';
 import { deMapa, type Rol } from '@/lib/severidad';
@@ -69,3 +69,18 @@ export const ESTADO_SCAN: Record<ScanRun['status'], { texto: string; rol: Rol }>
   succeeded: { texto: 'Terminada', rol: 'neutra' }, failed: { texto: 'Falló', rol: 'mal' },
 };
 export const estadoScan = (s: unknown) => deMapa(ESTADO_SCAN, s, { texto: '—', rol: 'neutra' });
+
+// Una línea por repo bajo el paso «Codebase» (varias-codebases §6.4, F4b), con ScanRun.repos de 2 o más. El código de
+// cada repo va solo en su entrada (B3): token revocado o conexión quitada se dicen; otro fallo, «No pudimos revisarlo».
+const MOTIVO_REPO: Record<string, string> = { unauthorized: 'Token revocado', no_connection: 'Conexión quitada' };
+export function lineaRepo(r: Pick<ScanRepo, 'status' | 'findings' | 'error_code'>, enCurso: boolean): { estado: string; motivo: string; hallazgos: number | null } {
+  if (r.status === 'done') {
+    const nota = deMapa(INCOMPLETO, r.error_code, '');
+    return { estado: nota ? 'Hecho en parte' : 'Hecho', motivo: nota, hallazgos: typeof r.findings === 'number' ? r.findings : null };
+  }
+  if (r.status === 'failed') return { estado: 'Falló', motivo: deMapa(MOTIVO_REPO, r.error_code, 'No pudimos revisarlo'), hallazgos: null };
+  if (r.status === 'skipped') return { estado: 'Sin mirar', motivo: deMapa(MOTIVO_REPO, r.error_code, ''), hallazgos: null };
+  if (r.status === 'running') return { estado: 'Revisando…', motivo: '', hallazgos: null };
+  // pending al terminar la auditoría: el mensaje de ese repo no llegó (DLQ) y se quedó sin revisar (§2.3).
+  return { estado: r.status === 'pending' ? (enCurso ? 'Pendiente' : 'Sin revisar') : '—', motivo: '', hallazgos: null };
+}

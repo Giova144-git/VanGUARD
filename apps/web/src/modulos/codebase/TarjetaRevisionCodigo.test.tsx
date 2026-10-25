@@ -126,6 +126,42 @@ describe('TarjetaRevisionCodigo', () => {
   });
 });
 
+// Evolución (evolucion-entre-revisiones.md §6.2 y §9.3): la foto de Codebase de cada push, con los deltas del router.
+describe('TarjetaRevisionCodigo · foto de cada push (evolución F3)', () => {
+  const CON_FOTO: CodeReviewState = { ...ESPERANDO, recent: ESPERANDO.recent.map((r) => ({ ...r, delta: fx.deltasRevision[r.id] ?? null })) };
+  const NOTA = 'un push no ve lo que se quita';
+
+  it('la fila del push de las 19:20Z dice «1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior», con una sola nota', () => {
+    const html = tarjeta(ADMIN, CON_FOTO);
+    expect(html).toContain('1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior');
+    expect(html).toContain('0 nuevos · 7 siguen abiertos · 2 corregidos desde el push anterior (1 comprobado por una auditoría)');
+    expect(html.split(NOTA)).toHaveLength(2);
+    // Debajo de lo que ya hay en la fila: después de los chips, dentro del mismo botón.
+    const fila = html.slice(html.indexOf(`id="revision-${CON_FOTO.recent[0]!.id}"`));
+    expect(fila.indexOf('1 nuevo · 7 siguen abiertos')).toBeGreaterThan(fila.indexOf('WhatsApp en 6,4 s'));
+    expect(fila.indexOf('1 nuevo · 7 siguen abiertos')).toBeLessThan(fila.indexOf('</button>'));
+    expect(tarjeta(VIEWER, CON_FOTO)).toContain('1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior');
+  });
+
+  it('con dos o más repos la foto es de toda la org', () => {
+    expect(tarjeta(ADMIN, CON_FOTO, undefined, undefined, true)).toContain('1 nuevo · 7 siguen abiertos en Codebase (todos los repos) · 0 corregidos');
+  });
+
+  it('sin delta (null o ausente: BACK sin 0015 o foto fallida), nada; un PR, nada aunque traiga delta', () => {
+    for (const estado of [ESPERANDO, { ...ESPERANDO, recent: ESPERANDO.recent.map((r) => ({ ...r, delta: null })) }]) {
+      const html = tarjeta(ADMIN, estado);
+      expect(html).toContain('Revisiones recientes');
+      expect(html).not.toContain('siguen abiertos');
+      expect(html).not.toContain(NOTA);
+    }
+    const pr = { ...CON_FOTO.recent[0]!, event: 'pull_request' as const, pr_number: 7 };
+    const html = tarjeta(ADMIN, { ...CON_FOTO, recent: [pr] });
+    expect(html).toContain('PR #7 · ');
+    expect(html).not.toContain('siguen abiertos');
+    expect(html).not.toContain(NOTA);
+  });
+});
+
 describe('TarjetaRevisionCodigo · varias codebases (§6.2)', () => {
   const OTRA = 'c0000000-0000-4000-8000-000000000007';
 

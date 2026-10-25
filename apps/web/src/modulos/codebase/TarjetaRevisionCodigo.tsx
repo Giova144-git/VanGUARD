@@ -4,6 +4,7 @@
 // mutación va con gcTime 0 y reset() en cuanto llega (lib/mutaciones.ts), y nunca toca storage, la URL ni la caché de consultas.
 // Una tarjeta por repo (varias-codebases §6.2): todo va por `conexion.id` (E45 ?connection_id=, la clave de la consulta y
 // el contenedor del secreto). La monta PestanaRepo, con key `${org}:${conexion.id}`.
+// Cada push con `delta` (evolucion-entre-revisiones.md §6.2) suma en su fila una línea con la foto de Codebase.
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ChevronDown, ExternalLink, GitCommitHorizontal, GitPullRequest } from 'lucide-react';
@@ -17,6 +18,7 @@ import { useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
 import { usePrefsAvisos, useRevisionCodigo } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
+import { NOTA_FOTO_PUSH, lineaFoto } from '@/lib/evolucion';
 import { cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
 import { tomarSecreto, useGuardarRevision } from '@/lib/mutaciones';
@@ -152,7 +154,7 @@ export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: 
         </div>
       ) : null}
       <Recientes recientes={s.recent} abierta={abierta} alternar={alternar} conHallazgo={conHallazgo} gate={c?.gate} puedeEscribir={org.puedeEscribir}
-        alAccion={() => setRapidoHasta((h) => Math.max(h, Date.now() + 60_000))} />
+        varios={varios} alAccion={() => setRapidoHasta((h) => Math.max(h, Date.now() + 60_000))} />
     </section>
   );
 }
@@ -223,18 +225,22 @@ function PasosGithub({ c, secreto, rotado }: { c: CodeReviewConfig; secreto: str
 }
 
 // `gate`: la config del bloqueo (umbral para el chip y si «Dar por bueno» se puede ofrecer); `alAccion`: tras una acción
-// de E54 se sondea rápido un minuto, hasta que la cola publique el estado.
-function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscribir, alAccion }: {
+// de E54 se sondea rápido un minuto, hasta que la cola publique el estado. `varios`: con 2 o más repos la foto de cada
+// push es de toda la org («en Codebase (todos los repos)»).
+function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscribir, varios, alAccion }: {
   recientes: CodeReview[]; abierta: string | null; alternar: (id: string) => void; conHallazgo: (id: string) => string;
-  gate?: MergeGateConfig; puedeEscribir: boolean; alAccion: () => void;
+  gate?: MergeGateConfig; puedeEscribir: boolean; varios: boolean; alAccion: () => void;
 }) {
   if (!recientes.length) return <p className="text-[15px] text-muted-foreground">Aún no hay revisiones: llegan con el próximo push.</p>;
+  // Evolución (§6.2): la foto de Codebase de cada push con `delta`; un PR o un push sin foto, nada.
+  const fotos = new Map(recientes.map((r) => [r.id, lineaFoto(r, varios)]));
   return (
     <div className="flex flex-col gap-2">
       <h4 className="text-[15px] font-semibold">Revisiones recientes</h4>
       <ul className="overflow-hidden rounded-xl border" aria-label="Revisiones recientes">
         {recientes.map((r) => {
           const abiertaEsta = abierta === r.id;
+          const foto = fotos.get(r.id);
           const chips = [chipRevision(r), chipBloqueo(r, gate?.min_severity), chipPr(r), chipParcial(r), chipAviso(r.alert)].filter((x) => x !== null);
           return (
             <li key={r.id} id={`revision-${r.id}`} className="scroll-mt-20 border-b last:border-b-0">
@@ -250,6 +256,8 @@ function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscri
                 {/* Los chips largos parten línea en vez de desbordar a 375 px. */}
                 <span className="flex min-w-0 flex-1 flex-wrap justify-end gap-2">{chips.map((x) => <Etiqueta key={x.texto} {...x} className="h-auto min-h-6 max-w-full shrink py-0.5 text-left" />)}</span>
                 <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', abiertaEsta && 'rotate-180')} aria-hidden />
+                {/* Una línea propia debajo de lo que ya hay en la fila (chips del bloqueo incluidos). Solo números. */}
+                {foto ? <span className="basis-full text-sm text-muted-foreground">{foto}</span> : null}
               </button>
               {abiertaEsta ? <Detalle r={r} conHallazgo={conHallazgo}>
                 <DetalleBloqueo r={r} gate={gate} puedeEscribir={puedeEscribir} alAccion={alAccion} />
@@ -258,6 +266,7 @@ function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscri
           );
         })}
       </ul>
+      {[...fotos.values()].some(Boolean) ? <p className="text-sm text-muted-foreground">{NOTA_FOTO_PUSH}</p> : null}
     </div>
   );
 }

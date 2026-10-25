@@ -338,6 +338,18 @@ describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo
     expect(await pedir<Finding>(`/api/orgs/${DEMO}/findings/${fx.hallazgoRevision.id}`)).toMatchObject({ rule_id: 'CB_SECRET_STRIPE_LIVE' });
   });
 
+  it('E45 trae la foto de Codebase (delta) en los dos pushes del sábado, sobre codeReviewStateBloqueo; el PR #7, null', async () => {
+    for (const tipo of ['correo', 'anonima'] as const) {
+      sesion.tipo = tipo;
+      const s = CodeReviewState.parse(await pedir(`/api/orgs/${DEMO}/code-review`));
+      const [pr, secreto, limpia] = s.recent;
+      expect(pr).toMatchObject({ id: fx.codeReviewStateBloqueo.recent[0]!.id, event: 'pull_request', delta: null });
+      expect(secreto).toMatchObject({ id: fx.codeReviewState.recent[0]!.id, delta: fx.deltasRevision[secreto!.id] });
+      expect(limpia).toMatchObject({ id: fx.codeReviewState.recent[1]!.id, delta: fx.deltasRevision[limpia!.id] });
+      expect(secreto!.delta).toMatchObject({ first: false, kept: 7, fixed: 0 });
+    }
+  });
+
   it('el alta da el secreto vgw_ UNA vez; E45 nunca lo trae; la 3.ª consulta simula el ping; rotar da otro y espera el ping', async () => {
     const org = nueva;   // el tope de 3 orgs por dueño ya lo gastan los otros casos
     expect(await pedir(`/api/orgs/${org}/code-review`)).toMatchObject({ available: false, reason: 'sin_conexion', config: null });

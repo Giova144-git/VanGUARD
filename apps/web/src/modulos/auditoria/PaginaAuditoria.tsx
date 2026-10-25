@@ -172,7 +172,7 @@ function Corrida({ id }: { id: string }) {
   if (!run) return <p className="text-texto-3" aria-busy="true">—</p>;
   const est = estadoScan(run.status);
   // `in` también da true con «__proto__» o «constructor»: textoPaso usa Object.hasOwn y, si no, el texto crudo.
-  const actual = textoPasoActual(run.step);
+  const actual = textoPasoActual(run.step, run.kind);
   const terminada = run.status === 'succeeded';
   const medicion = esMedicion(run.kind);
   const nombre = medicion ? 'medición' : 'auditoría';

@@ -360,7 +360,7 @@ function iniciarMedicion(org: string, body: unknown) {
   if (!r.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(r.error));
   const b = r.data as Extract<ScanCreate, { kind: 'lighthouse' }>;
   const enCurso = [...mediciones.values()].find((m) => m.org === org && Date.now() - m.inicio < DURACION_PERF);
-  if (enCurso) falla(409, 'conflict', 'Ya hay una auditoría de este tipo en curso', { scan_run_id: enCurso.id });
+  if (enCurso) falla(409, 'conflict', 'Ya hay una medición de rendimiento en curso: espera a que termine', { scan_run_id: enCurso.id });
   // assertMeasurableUrl de S10 §10.9: el PerfUrlError sale como 422 invalid_body con su mensaje.
   const zonas = zonasDe(org);
   const u = new URL(b.url);
@@ -370,7 +370,7 @@ function iniciarMedicion(org: string, body: unknown) {
   if (!zonas.some((z) => host === z || host.endsWith(`.${z}`))) falla(422, 'invalid_body', `Solo dominios de tus zonas: ${zonas.join(', ')}`);
   const clave = `${org}|${diaCaracas()}`;
   const tope = esDemo(org) ? 20 : 10;
-  if ((perfHoy.get(clave) ?? 0) >= tope) falla(429, 'budget_exceeded', `Ya hiciste ${tope} mediciones hoy. Vuelve mañana.`);
+  if ((perfHoy.get(clave) ?? 0) >= tope) falla(429, 'budget_exceeded', `Ya hiciste ${tope} mediciones de rendimiento hoy, el máximo diario. Vuelve mañana.`);
   perfHoy.set(clave, (perfHoy.get(clave) ?? 0) + 1);
   const id = crypto.randomUUID();
   mediciones.set(id, { id, org, inicio: Date.now(), url: `${u.origin}${u.pathname || '/'}`, strategy: b.strategy,

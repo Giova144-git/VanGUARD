@@ -76,7 +76,10 @@ describe('estadoPaso', () => {
     expect(textoPasoActual('psi-mobile')).toBe('midiendo móvil (3 repeticiones)… ~1 min');
     expect(textoPasoActual('psi-desktop')).toBe('midiendo escritorio (3 repeticiones)… ~1 min');
     expect(textoPasoActual('perf-compare')).toBe('comparando con la medición anterior');
-    expect(textoPasoActual('psi')).toBe('Rendimiento');
+    expect(textoPasoActual('psi')).toBe('Rendimiento');                                   // un full_audit con psi (P1-b)
+    expect(textoPasoActual('psi', 'lighthouse')).toBe('midiendo con PageSpeed Insights… ~1 min');   // el BACK de hoy
+    expect(notaPaso({ error_code: 'runtime_error' })).toBe('Lighthouse no pudo cargar la página: esta medición quedó sin cifras');
+    expect(estadoPaso({ coverage: null }, { name: 'psi', status: 'done', error_code: 'runtime_error' })).toBe('en_parte');
     expect(textoFallo(null, 'lighthouse')).toBe('La medición falló');
     expect(textoFallo(null, 'full_audit')).toBe('La auditoría falló');
   });

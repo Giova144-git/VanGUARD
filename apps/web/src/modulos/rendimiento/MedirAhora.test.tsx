@@ -7,6 +7,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider, type Query, type QueryKey } from '@tanstack/react-query';
 import { fixtures as fx, ScanAccepted, type PerfRunExt, type ScanRun } from '@vanguard/contracts';
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
+import { PantallaModulo } from '@/componentes/vg/PantallaModulo';
 import { useScan } from '@/lib/consultas';
 import { ApiError } from '@/lib/errores';
 import { TEXTO_ROL } from '@/lib/severidad';
@@ -248,5 +249,75 @@ describe('Auditoría de una medición · sondeo', () => {
     expect(intervalo({ kind: 'lighthouse', status: 'running' })).toBe(2_000);
     expect(intervalo({ kind: 'full_audit', status: 'running' })).toBe(10_000);
     expect(intervalo({ kind: 'lighthouse', status: 'succeeded' })).toBe(false);
+  });
+});
+
+// Verificación adversarial: lo que llega del servidor con controles bidi o «<script>» nunca sale crudo; el viewer no tiene
+// nada que escribir ni enlaces a Conexiones; con E24 en 404 la pantalla es la de antes; y la forma del BACK de hoy
+// (step = 'psi', error_code 'runtime_error') se lee en español.
+describe('Medir ahora · verificación', () => {
+  const RLO = String.fromCodePoint(0x202e);
+  const CONTROL = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
+  const SCRIPT = '<script>alert(1)</script>';
+  const limpio = (html: string) => {
+    expect(html).not.toMatch(CONTROL);
+    expect(html).not.toContain('<script');
+  };
+
+  it('URLs y etiquetas de E24 con bidi o <script>: la medible va escapada, la de controles ni sale, la etiqueta mala no se prellena', () => {
+    const conScript = { ...RUNS[0]!, id: RUNS[0]!.id.replace(/.$/, 'e'), url: `https://demo.officialvanguard.com/${SCRIPT}`,
+      version_label: `v9${RLO}`, created_at: '2026-10-25T01:00:00.000Z' };
+    const conBidi = { ...RUNS[0]!, id: RUNS[0]!.id.replace(/.$/, 'd'), url: `https://demo.officialvanguard.com/${RLO}gpj.x`,
+      created_at: '2026-10-25T02:00:00.000Z' };
+    const html = pintar(<PaginaRendimiento />, { datos: conRuns([conBidi, conScript, ...RUNS]) });
+    limpio(html);
+    expect(html).toContain('value="https://demo.officialvanguard.com/&lt;script&gt;alert(1)&lt;/script&gt;"');
+    expect(html).not.toContain('gpj.x"');
+    expect(html).toMatch(/placeholder="v3" value=""/);
+  });
+
+  it('mensajes y field_errors del servidor con bidi o <script>: se ven escapados, sin controles crudos', () => {
+    const m = `${SCRIPT} ${RLO}moc.live`;
+    for (const err of [new ApiError(409, 'conflict', m), new ApiError(429, 'budget_exceeded', m), new ApiError(403, 'forbidden', m)]) {
+      limpio(renderToStaticMarkup(<MemoryRouter><AvisoMedir org={ORG} aviso={avisoDe(errorMedir(err))} /></MemoryRouter>));
+    }
+    const campo = errorMedir(new ApiError(422, 'invalid_body', 'x', undefined, { field_errors: { url: [m] } }));
+    expect(campo.tipo === 'campo' && campo.errores.url).toBe(`${SCRIPT} ⟨U+202E⟩moc.live`);
+  });
+
+  it('auditoría de una medición con step y error del servidor con bidi o <script>: nada crudo', () => {
+    const run = { ...fx.scanRunning, id: SCAN, kind: 'lighthouse' as const, step: `psi${RLO}${SCRIPT}`, steps: [{ name: 'psi' as const, status: 'running' as const }],
+      score: null, coverage: null, summary: null };
+    const ver = (r: ScanRun) => pintar(<PaginaAuditoria />, { ruta: `/o/${ORG}/audit/${SCAN}`, patron: '/o/:orgId/audit/:scanId',
+      datos: [[['org', ORG, 'scan', SCAN], r], [['org', ORG, 'findings', { status: 'open' }], []]] });
+    limpio(ver(run));
+    limpio(ver({ ...run, status: 'failed', step: null, error: `${SCRIPT}${RLO}PCF_ON` }));
+    expect(ver({ ...run, status: 'failed', step: null, error: `${SCRIPT}${RLO}PCF_ON` })).toContain('⟨U+202E⟩PCF_ON');
+  });
+
+  it('viewer de la demo: todo deshabilitado, sin enlaces a Conexiones ni a Ajustes', () => {
+    const html = pintar(<MedirAhora />, { org: VIEWER, datos: conRuns([...RUNS, { ...RUNS[0]!, id: RUNS[0]!.id.replace(/.$/, 'c'), url: 'https://www.officialvanguard.com/precios' }], VIEWER) });
+    const controles = html.match(/<(input|button)\b[^>]*>/g) ?? [];
+    expect(controles.length).toBeGreaterThan(4);
+    for (const c of controles) expect(c).toContain('disabled=""');
+    expect(html).not.toMatch(/href="[^"]*\/(connections|settings)/);
+  });
+
+  it('E24 en 404: Rendimiento queda igual que la pantalla genérica, sin la sección ni un hueco', () => {
+    const o = { datos: conRuns(undefined).slice(0, 2), error: [['org', ORG, 'perf'], new ApiError(404, 'not_found', 'Ruta inexistente')] as [QueryKey, ApiError] };
+    expect(pintar(<PaginaRendimiento />, o)).toBe(pintar(<PantallaModulo modulo="performance" proveedor={null} />, o));
+  });
+
+  it('el BACK de hoy: step «psi» se lee como medición y un runtime_error no sale como «Hecho» en verde', () => {
+    const base = { ...fx.scanRunning, id: SCAN, kind: 'lighthouse' as const, score: null, coverage: null, summary: null };
+    const ver = (r: ScanRun) => pintar(<PaginaAuditoria />, { ruta: `/o/${ORG}/audit/${SCAN}`, patron: '/o/:orgId/audit/:scanId',
+      datos: [[['org', ORG, 'scan', SCAN], r], [['org', ORG, 'findings', { status: 'open' }], []]] });
+    const corriendo = ver({ ...base, status: 'running', step: 'psi', steps: [{ name: 'psi', status: 'running' }] });
+    expect(corriendo).toContain('Paso actual: midiendo con PageSpeed Insights… ~1 min');
+    const sinCifras = ver({ ...base, status: 'succeeded', progress: 100, step: null, finished_at: '2026-10-25T12:01:00.000Z',
+      steps: [{ name: 'psi', status: 'done', error_code: 'runtime_error' }] });
+    expect(sinCifras).toContain('Hecho en parte');
+    expect(sinCifras).toContain('Lighthouse no pudo cargar la página: esta medición quedó sin cifras');
+    expect(ver({ ...fx.scanRunning, id: SCAN, step: 'psi', status: 'running' })).toContain('Paso actual: Rendimiento');   // full_audit, igual que antes
   });
 });

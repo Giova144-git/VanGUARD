@@ -19,6 +19,17 @@ export const rolVisible = (rol: Rol, acciones: unknown[]): Rol =>
 // El color nunca es la única señal (S14 §14.6): el punto lleva nombre para el lector.
 const nombreRol = (rol: Rol) => (rol === 'mal' ? 'Urgente' : rol === 'aviso' ? 'Aviso' : undefined);
 
+// FilaDato.etiqueta llega cortada a 40 caracteres por el contrato: si el corte cae a media palabra, se recorta en la última
+// palabra entera con «…» (UX P1-11). El título entero, cuando lo hay (grupo de una fila), va en su lugar.
+const TOPE_ETIQUETA = 40;
+export const sinCorte = (t: string) => {
+  if (t.length < TOPE_ETIQUETA) return t;
+  const i = t.lastIndexOf(' ');
+  return i > 0 ? `${t.slice(0, i).replace(/[\s,.;:·-]+$/, '')}…` : t;
+};
+// Títulos de grupo que el servidor arma con su primera fila (UX P1-10).
+const TITULO_GRUPO: Record<string, (n: number) => string> = { CB_DEP_VULN: (n) => `Dependencias con avisos (${n})` };
+
 // Mismo lenguaje que button.tsx (brand/README.md): píldora, mono en mayúsculas y, el principal, en monocromo.
 const enlace = 'inline-flex h-11 items-center gap-1 rounded-full border px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -52,19 +63,21 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
   }
 }
 
-export function FilaProblema({ fila, puedeEscribir }: { fila: FilaDato; puedeEscribir: boolean }) {
+export function FilaProblema({ fila, puedeEscribir, titulo, chapas }: { fila: FilaDato; puedeEscribir: boolean; titulo?: string; chapas?: string[] }) {
   const rol = rolVisible(fila.rol, fila.acciones);
+  const etiqueta = titulo ?? sinCorte(fila.etiqueta);
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
       <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn('text-[15px] font-medium wrap-anywhere', rol === 'neutra' ? '' : TEXTO_ROL[rol])}>{sinBidi(fila.etiqueta)}</span>
+          <span className={cn('text-[15px] font-medium wrap-anywhere', rol === 'neutra' ? '' : TEXTO_ROL[rol])} title={sinBidi(fila.etiqueta)}>{sinBidi(etiqueta)}</span>
           {fila.severidad_cve ? <ChapaSeveridad severity={fila.severidad_cve} /> : null}
+          {chapas?.map((c) => <Etiqueta key={`g-${c}`} texto={c} />)}
           {fila.chips?.map((c) => <Etiqueta key={c} texto={c} />)}
         </div>
         {fila.objeto ? <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(fila.objeto)}</bdi></span> : null}
-        {fila.sub ? <span className="text-[12.5px] text-texto-3 wrap-anywhere">{sinBidi(fila.sub)}</span> : null}
+        {fila.sub && fila.sub !== fila.objeto ? <span className="text-[12.5px] text-texto-3 wrap-anywhere">{sinBidi(fila.sub)}</span> : null}
         {fila.fraccion != null ? (
           <span className="h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted" role="img" aria-label={`${Math.round(fila.fraccion * 100)} %`}>
             <span className={cn('block h-full', rol === 'mal' ? 'bg-mal/80' : rol === 'aviso' ? 'bg-aviso/70' : 'bg-borde-fuerte')} style={{ width: `${fila.fraccion * 100}%` }} />
@@ -100,11 +113,18 @@ export function Bandeja({ grupos, puedeEscribir, filtro, sinRevisar, enlaceRevis
     <div className="flex flex-col gap-4">
       {visibles.map((g) => {
         const rol = rolVisible(g.rol, g.filas.flatMap((x) => x.acciones));
+        // Un grupo de una fila es la fila sola, con el título entero del grupo (no repite cabecera y fila).
+        if (g.filas.length === 1 && g.n <= 1) return (
+          <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={sinBidi(g.etiqueta)}>
+            <ul><FilaProblema fila={g.filas[0]!} puedeEscribir={puedeEscribir} titulo={g.etiqueta} chapas={g.chapas} /></ul>
+          </section>
+        );
+        const titulo = Object.hasOwn(TITULO_GRUPO, g.grupo) ? TITULO_GRUPO[g.grupo]!(g.n) : g.etiqueta;
         return (
           <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={sinBidi(g.etiqueta)}>
             <header className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
               <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
-              <h4 className="flex-1 text-sm font-semibold wrap-anywhere">{sinBidi(g.etiqueta)}</h4>
+              <h4 className="flex-1 text-sm font-semibold wrap-anywhere">{sinBidi(titulo)}</h4>
               {g.chapas?.map((c) => <Etiqueta key={c} texto={c} />)}
               <span className={cn('text-sm font-semibold tabular-nums', rol === 'neutra' ? 'text-muted-foreground' : TEXTO_ROL[rol])}>{g.n}</span>
             </header>

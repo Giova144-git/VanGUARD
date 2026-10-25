@@ -2,8 +2,8 @@
 // alcances y meta: nunca el token. `capabilities` lleva solo booleanos (S15 E7).
 import type { ConnectionPublic, PermCheck } from '../api.ts';
 import {
-  CONN_CF_ACTION, CONN_CF_READ, CONN_GITHUB, CONN_INGEST, CONN_SUPABASE, EXPIRA_TOKENS, HOST_VICTIMA, PROJECT_REF, REPO,
-  T_CONEXIONES_PROBADAS, T_ULTIMO_EVENTO, ZONA,
+  CONN_CF_ACTION, CONN_CF_READ, CONN_GITHUB, CONN_GITHUB_2, CONN_INGEST, CONN_SUPABASE, EXPIRA_TOKENS, HOST_VICTIMA, PROJECT_REF, REPO,
+  REPO_2, T_CONEXION_REPO_2, T_CONEXIONES_PROBADAS, T_ULTIMO_EVENTO, ZONA,
 } from './ids.ts';
 
 const ZONE_ID = '023e105f4ecef8ad9ca31a8372d0c353'; // Zone ID de ejemplo de la documentación de Cloudflare
@@ -56,3 +56,14 @@ export const permChecks = [
   { permission: 'waf_read', ok: true, required: false },
   { permission: 'bot_read', ok: false, required: false, error_code: 'forbidden' },
 ] satisfies PermCheck[];
+
+// Segundo repo (varias-codebases): lo que devuelve E8 al conectar REPO_2 y lo que E7 añade al final de `connections`
+// (E7 ordena por created_at). meta.hallazgos_por_repo: la conexión nació con la clave de hallazgos por repo (la org ya
+// tenía otro repo conectado).
+export const conexionGithub2 = {
+  id: CONN_GITHUB_2, provider: 'github', kind: 'read', label: `GitHub · ${REPO_2}`, status: 'active', last4: '2b7d',
+  scopes: ['metadata:read', 'contents:read'],
+  meta: { repo_full_name: REPO_2, default_branch: 'main', private: false, repo_id: 870000002, hallazgos_por_repo: true },
+  capabilities: { metadata: true, contents: true, dependabot_alerts: false },
+  expires_at: EXPIRA_TOKENS, last_checked_at: T_CONEXION_REPO_2, last_error: null,
+} satisfies ConnectionPublic;

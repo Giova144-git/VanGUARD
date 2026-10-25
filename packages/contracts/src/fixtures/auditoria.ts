@@ -2,8 +2,8 @@
 // Puntaje con score.ts de S15 §15.9: Supabase y Codebase restan su máximo (40 cada uno) → 20, banda roja.
 import type { ScanRun } from '../api.ts';
 import {
-  F_CB_ENV, F_CB_POSTGRES, F_CB_SERVICE_ROLE, F_SB_POLICY, F_SB_RLS, F_SB_RPC, MODELO_RESUMEN, SCAN_AUDITORIA,
-  T_SCAN_CREADO, T_SCAN_FIN, T_SCAN_INICIO,
+  CONN_GITHUB, CONN_GITHUB_2, F_CB_ENV, F_CB_POSTGRES, F_CB_SERVICE_ROLE, F_SB_POLICY, F_SB_RLS, F_SB_RPC, MODELO_RESUMEN, REPO,
+  REPO_2, SCAN_AUDITORIA, T_SCAN_CREADO, T_SCAN_FIN, T_SCAN_INICIO,
 } from './ids.ts';
 
 export const scanRunning = {
@@ -51,4 +51,14 @@ export const scanDone = {
     model: MODELO_RESUMEN,
   },
   error: null, created_at: T_SCAN_CREADO, started_at: T_SCAN_INICIO, finished_at: T_SCAN_FIN,
+} satisfies ScanRun;
+
+// La misma auditoría con dos repos (varias-codebases): el paso repo los miró los dos; el segundo salió limpio, así que
+// puntaje, cobertura y resumen no cambian.
+export const scanDoneDosRepos = {
+  ...scanDone,
+  repos: [
+    { connection_id: CONN_GITHUB, repo_full_name: REPO, status: 'done', findings: 7 },
+    { connection_id: CONN_GITHUB_2, repo_full_name: REPO_2, status: 'done', findings: 0 },
+  ],
 } satisfies ScanRun;

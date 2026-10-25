@@ -74,11 +74,22 @@ export const AuditSummary = z.object({ resumen: z.string().max(2000),
   suspected_injection: z.boolean().optional(), // el filtro marcó la salida de IA-2
   model: z.string() });
 export type AuditSummary = z.infer<typeof AuditSummary>;
+// ── Varias codebases por org (asignaciones/varias-codebases.md) ───────────────────────────────────────────────────
+// Tope de repos GitHub por org: nombres de repo distintos entre las conexiones GitHub de LECTURA, en cualquier estado.
+// E8 responde 409 (details.reason 'tope_repos'). La conexión de estados del bloqueo de merge (kind 'action') no cuenta.
+export const MAX_REPOS_GITHUB = 5;
+// Cómo le fue a cada repo en una auditoría con paso repo (full_audit, o repo sin connection_id). Sale de
+// scan_runs.coverage.detail.codebase.repos, en el orden en que se revisan (la conexión más antigua primero).
+// findings: filas escritas para ESE repo; error_code: el del repo (unauthorized, no_connection, tripwire…).
+export const ScanRepo = z.object({ connection_id: Id, repo_full_name: z.string().max(140), status: ScanStep.shape.status,
+  findings: z.number().int().min(0).optional(), error_code: z.string().max(40).optional() });
+export type ScanRepo = z.infer<typeof ScanRepo>;
 export const ScanRun = z.object({ id: Id, kind: ScanKind, status: ScanStatus, progress: z.number().int().min(0).max(100),
   step: z.string().nullable(), steps: z.array(ScanStep), score: z.number().int().min(0).max(100).nullable(),
   coverage: Coverage.nullable(), summary: AuditSummary.nullable(), error: z.string().nullable(), created_at: Ts,
   started_at: Ts.nullable(), finished_at: Ts.nullable(),
-  band: z.enum(['red', 'amber', 'green']).nullable().optional() }); // opcional: color del puntaje en corridas viejas (§14.14)
+  band: z.enum(['red', 'amber', 'green']).nullable().optional(), // opcional: color del puntaje en corridas viejas (§14.14)
+  repos: z.array(ScanRepo).max(MAX_REPOS_GITHUB).optional() }); // solo si el paso repo miró conexiones (varias-codebases)
 export type ScanRun = z.infer<typeof ScanRun>;
 
 // ── Hallazgos ─────────────────────────────────────────────────────────────────
@@ -193,7 +204,8 @@ export type ZipResult = z.infer<typeof ZipResult>;
 
 // ── Resumen ───────────────────────────────────────────────────────────────────
 export const AhoraItem = z.object({ kind: z.enum(['finding', 'incident']), id: Id, module: Module, rule_id: RuleId, severity: Severity,
-  title: z.string(), resource: z.string() });
+  title: z.string(), resource: z.string(),
+  connection_id: Id.nullable().optional() }); // hallazgo: su conexión (el FRONT pinta el repo si la org tiene ≥ 2); incidente: sin campo
 export type AhoraItem = z.infer<typeof AhoraItem>;
 export const Overview = z.object({ score: z.number().int().min(0).max(100).nullable(), band: z.enum(['red', 'amber', 'green']).nullable(),
   coverage: Coverage,
@@ -225,13 +237,57 @@ export type CodeReviewHookState = z.infer<typeof CodeReviewHookState>;
 // «Pushes» · token: el PAT de la conexión dio 401 o 403 en la última revisión.
 export const CodeReviewHookError = z.enum(['firma', 'otro_repo', 'sin_push', 'token']);
 export type CodeReviewHookError = z.infer<typeof CodeReviewHookError>;
+// ── Bloqueo de merge con críticos (E53–E54; asignaciones/bloqueo-merge-criticos.md) ─────────────────────────────────
+// VanGUARD publica un estado de commit (Commit statuses API) con este contexto EXACTO en cada revisión de push y de PR.
+// Es el nombre que el dueño marca como obligatorio en la protección de rama de GitHub (GitHub no distingue mayúsculas).
+export const GATE_CONTEXT = 'VanGUARD';
+// Severidad mínima de lo AÑADIDO que bloquea. El pedido es «crítico»; 'high' es opcional.
+export const MergeGateMin = z.enum(['critical', 'high']);
+export type MergeGateMin = z.infer<typeof MergeGateMin>;
+// Estados de la Commit statuses API (POST /repos/{owner}/{repo}/statuses/{sha}).
+export const CommitStatusState = z.enum(['pending', 'success', 'failure', 'error']);
+export type CommitStatusState = z.infer<typeof CommitStatusState>;
+// P1. Protección de la rama vigilada, leída por E53 con el token de LECTURA (Get a branch + Get rules for a branch).
+// required: yes = GitHub exige «VanGUARD» de cualquier fuente · other_source = lo exige fijado a una GitHub App (nuestro
+//   estado no cuenta) · no = no lo exige · unknown = no se pudo leer.
+// admins: enforced = la regla clásica vale también para admins · bypass = los admins se la saltan · unknown = ruleset (su
+//   lista de excepciones no se ve con un token de lectura) o sin regla.
+// pr_required: yes = un ruleset exige PR · no = la rama no tiene protección · unknown = protección clásica (no se ve sin
+//   Administration: read).
+export const MergeGateProtection = z.object({ required: z.enum(['yes', 'no', 'other_source', 'unknown']),
+  admins: z.enum(['enforced', 'bypass', 'unknown']), pr_required: z.enum(['yes', 'no', 'unknown']), checked_at: Ts });
+export type MergeGateProtection = z.infer<typeof MergeGateProtection>;
+// off: apagado · needs_token: encendido sin token de estados activo · unchecked: publica, pero no sabemos si GitHub exige
+// el check (P0 no lee la protección; en P1, lectura fallida) · needs_protection (P1): publica y GitHub aún no exige el
+// check (no bloquea nada) · active (P1): publica y GitHub lo exige · error: el token falló al publicar (ver last_error).
+export const MergeGateState = z.enum(['off', 'needs_token', 'unchecked', 'needs_protection', 'active', 'error']);
+export type MergeGateState = z.infer<typeof MergeGateState>;
+// Problemas del TOKEN al publicar (un 422 es de un solo commit y va solo en CodeReview.gate.error):
+// token: 401 (caducado o revocado) · forbidden: 403 (sin Commit statuses: write, o pendiente de aprobar en la
+// organización) · not_found: 404 (el token no ve el repo).
+export const MergeGateError = z.enum(['token', 'forbidden', 'not_found']);
+export type MergeGateError = z.infer<typeof MergeGateError>;
+// La conexión GitHub kind 'action' (solo Commit statuses). Nunca el token.
+export const MergeGateConnection = z.object({ id: Id, status: ConnectionStatus, last4: z.string().max(4).nullable(),
+  expires_at: Ts.nullable() });
+export type MergeGateConnection = z.infer<typeof MergeGateConnection>;
+// protection: null en P0 (no se lee) o si nunca se comprobó.
+export const MergeGateConfig = z.object({ enabled: z.boolean(), min_severity: MergeGateMin, state: MergeGateState,
+  context: z.literal(GATE_CONTEXT), statuses_connection: MergeGateConnection.nullable(),
+  protection: MergeGateProtection.nullable(), last_error: MergeGateError.nullable(),
+  // Anexo bloqueo-merge-cierre-pr.md: close_pr = interruptor «Cerrar los PR con críticos»; can_close_pr = el token de
+  // escritura tiene «Pull requests: Read and write».
+  close_pr: z.boolean().optional(), can_close_pr: z.boolean().optional() });
+export type MergeGateConfig = z.infer<typeof MergeGateConfig>;
 export const CodeReviewConfig = z.object({ id: Id, connection_id: Id, repo_full_name: z.string(), branch: z.string(),
   enabled: z.boolean(), state: CodeReviewHookState,
   // null si el rol no es owner/admin o fuera de producción (en local APP_ORIGIN es la SPA en http://localhost:5173).
   webhook_url: z.url().refine((u) => u.startsWith('https://'), 'solo https').nullable(),
   secret_last4: z.string().max(4).nullable(),
   hook_events: z.array(z.string().max(40)).max(30), // los que GitHub declaró en el último ping
-  last_ping_at: Ts.nullable(), last_event_at: Ts.nullable(), last_error: CodeReviewHookError.nullable() });
+  last_ping_at: Ts.nullable(), last_event_at: Ts.nullable(), last_error: CodeReviewHookError.nullable(),
+  muted_until: Ts.nullable().optional(), // botón «Silenciar repo 1 h» (anexo de botones): sin avisos de revisión hasta entonces
+  gate: MergeGateConfig.optional() }); // E45 con 0016; falta en un BACK de antes y en los repos sin bloqueo (varias §2.6)
 export type CodeReviewConfig = z.infer<typeof CodeReviewConfig>;
 // finding_id null en un PR (P1: no se escribe en findings) o si el hallazgo ya se borró.
 export const CodeReviewFinding = z.object({ finding_id: Id.nullable(), rule_id: RuleId, severity: Severity,
@@ -247,8 +303,35 @@ export const CodeReviewAlert = z.object({
   delivery_error: z.string().regex(/^[A-Za-z0-9_.-]{1,40}$/).nullable(),
   voice_pending: z.boolean(),                // pasó el umbral de llamada; sin llamadas, el aviso salió por WhatsApp
   notified_at: Ts.nullable(),
-  seconds: z.number().min(0).nullable() });  // notified_at − created_at de la revisión
+  seconds: z.number().min(0).nullable(),     // notified_at − created_at de la revisión
+  // Anexo avisos-whatsapp-botones.md: lo último que se hizo con un botón del WhatsApp de esta revisión.
+  whatsapp_action: z.enum(['fix_sent', 'issue_created', 'muted', 'pr_reopened']).nullable().optional(),
+  whatsapp_action_at: Ts.nullable().optional() });
 export type CodeReviewAlert = z.infer<typeof CodeReviewAlert>;
+// Bloqueo por revisión (CodeReview.gate). blocking: hallazgos de lo AÑADIDO con severidad ≥ min_severity y sin «Ignorar»
+// (null = no se calculó: bloqueo apagado al revisar, o revisión fallida). NO es counts: counts son los NUEVOS y, en un
+// PR, excluyen lo ya visto en el push anterior al mismo PR; blocking cuenta todo lo que el cambio añade.
+// findings: hasta 20 de esos (finding_id siempre null). state: lo último que GitHub aceptó (null = nada todavía).
+// error: por qué no se publicó: sin_token | dry_run | sin_calculo | otro_repo | unauthorized | forbidden | not_found |
+// limite | red | dlq (la UI los traduce con un mapa cerrado y un texto por defecto). override_at: «Dar por bueno» (E54).
+export const MergeGateReview = z.object({ blocking: z.number().int().min(0).nullable(),
+  findings: z.array(CodeReviewFinding).max(20), state: CommitStatusState.nullable(),
+  error: z.string().regex(/^[a-z_]{2,40}$/).nullable(), published_at: Ts.nullable(), override_at: Ts.nullable(),
+  // Anexo de cierre de PR: closed (VanGUARD lo cerró) · reopened_by_human (alguien lo reabrió sin commits nuevos; no se
+  // vuelve a cerrar) · reopened (lo reabrió VanGUARD por «Reabrir el PR», E54 o WhatsApp) · close_failed (ver
+  // pr_close_error). null = no aplica (push, PR sin críticos o interruptor apagado).
+  pr_action: z.enum(['closed', 'reopened_by_human', 'reopened', 'close_failed']).nullable().optional(),
+  pr_close_error: z.string().regex(/^[a-z_]{2,40}$/).nullable().optional() });
+export type MergeGateReview = z.infer<typeof MergeGateReview>;
+// Foto de Codebase al cerrar una revisión de push (0015; asignaciones/evolucion-entre-revisiones.md §2.2). open =
+// abiertos de Codebase de TODA la org al cerrar; kept = open menos los nuevos de este push; fixed = abiertos en la foto
+// del push anterior de la org que ya no lo están (fixed o verified; ignored aparte); fixed_checked = de esos, los que
+// comprobó una auditoría, sin claves (que una clave ya no esté en el código no prueba que se rotó). first:true = primer
+// push con foto: no hay con qué comparar y fixed, fixed_checked e ignored van en 0.
+export const CodeReviewDelta = z.object({ first: z.boolean(), previous_review_id: Id.nullable(), previous_at: Ts.nullable(),
+  open: z.number().int().min(0), kept: z.number().int().min(0), fixed: z.number().int().min(0),
+  fixed_checked: z.number().int().min(0), ignored: z.number().int().min(0) });
+export type CodeReviewDelta = z.infer<typeof CodeReviewDelta>;
 export const CodeReview = z.object({ id: Id, event: CodeReviewEvent, branch: z.string(),
   pr_number: z.number().int().positive().nullable(), base_sha: Sha40, head_sha: Sha40,
   // failed con error_code 'interrumpida': E45 lo pone a una revisión queued/running de más de 15 min (sin escribir).
@@ -256,12 +339,18 @@ export const CodeReview = z.object({ id: Id, event: CodeReviewEvent, branch: z.s
   files_changed: z.number().int().min(0), lines_added: z.number().int().min(0),
   counts: z.record(Severity, z.number().int()), // de los hallazgos NUEVOS; zod 4 exige las 5 claves
   max_severity: Severity.nullable(), findings: z.array(CodeReviewFinding).max(50), alert: CodeReviewAlert,
-  created_at: Ts, finished_at: Ts.nullable() });
+  created_at: Ts, finished_at: Ts.nullable(),
+  gate: MergeGateReview.optional(), // falta en revisiones de antes de 0016
+  delta: CodeReviewDelta.nullable().optional() }); // E45 con 0015; null en un PR, en un push de antes de 0015 o sin foto
 export type CodeReview = z.infer<typeof CodeReview>;
 export const CodeReviewState = z.object({ available: z.boolean(),
   reason: z.enum(['sin_conexion', 'conexion_inactiva']).nullable(),
   config: CodeReviewConfig.nullable(), recent: z.array(CodeReview).max(10) });
 export type CodeReviewState = z.infer<typeof CodeReviewState>;
+// E45 · ?connection_id= (varias-codebases): el estado de ESE repo. Sin él, la conexión GitHub de lectura principal
+// (la activa más antigua).
+export const CodeReviewQuery = z.object({ connection_id: Id.optional() });
+export type CodeReviewQuery = z.infer<typeof CodeReviewQuery>;
 // rotate_secret: P1 (en P0, true → 400).
 export const CodeReviewPut = z.object({ connection_id: Id, enabled: z.boolean(), rotate_secret: z.boolean().optional() });
 export type CodeReviewPut = z.infer<typeof CodeReviewPut>;
@@ -271,3 +360,137 @@ export const CodeReviewSaved = z.object({ config: CodeReviewConfig,
 export type CodeReviewSaved = z.infer<typeof CodeReviewSaved>;
 export const CodeReviewRunBody = z.object({ connection_id: Id.optional() }); // E50, P1
 export type CodeReviewRunBody = z.infer<typeof CodeReviewRunBody>;
+
+// E53 · PUT /api/orgs/:org/code-review/gate. statuses_pat: token fine-grained NUEVO, de un solo repo, con solo «Commit
+// statuses: Read and write»; al guardarlo VanGUARD publica en el último commit de la rama vigilada el estado que ya
+// conoce de ese commit (✗ si una revisión vio un crítico; ✓ solo si una revisión con el bloqueo lo dio por bueno; si no,
+// pending «este commit no se revisó»). Sin statuses_pat: cambia enabled y min_severity.
+export const MergeGatePut = z.object({ enabled: z.boolean(), min_severity: MergeGateMin, statuses_pat: Token.optional(),
+  close_pr: z.boolean().optional() }); // anexo de cierre de PR
+export type MergeGatePut = z.infer<typeof MergeGatePut>;
+// probe_sha / probe_state: commit y estado de la prueba (solo al guardar un token; si no, null los dos).
+export const MergeGateSaved = z.object({ gate: MergeGateConfig, checks: z.array(PermCheck), probe_sha: Sha40.nullable(),
+  probe_state: CommitStatusState.nullable() });
+export type MergeGateSaved = z.infer<typeof MergeGateSaved>;
+// E54 · POST /api/orgs/:org/code-review/reviews/:id/gate → RespuestaEscritura. override: «Dar por bueno» (success
+// «Aprobado a mano en VanGUARD») · revert: «Deshacer» (vuelve el estado de la regla) · republish (P1): publica de nuevo.
+export const MergeGateAction = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('republish') }),
+  z.object({ op: z.literal('override'), reason: z.string().trim().min(3).max(200) }),
+  z.object({ op: z.literal('revert') }),
+  z.object({ op: z.literal('reopen_pr') }), // anexo de cierre de PR: «Reabrir el PR» (state: open; el ✗ se queda)
+]);
+export type MergeGateAction = z.infer<typeof MergeGateAction>;
+
+// ── Evolución entre revisiones (E51–E52; asignaciones/evolucion-entre-revisiones.md) ───────────────────────────────
+// Hallazgos por severidad (zod 4: las 5 claves) y por módulo × severidad (las 4 × 5 claves).
+export const PorSeveridad = z.record(Severity, z.number().int().min(0));
+export type PorSeveridad = z.infer<typeof PorSeveridad>;
+export const MatrizHallazgos = z.record(Module, PorSeveridad);
+export type MatrizHallazgos = z.infer<typeof MatrizHallazgos>;
+// Un hallazgo de una lista del delta con su estado de AHORA (los conteos son los de la foto): un corregido que volvió a
+// salir trae status 'open'; un nuevo que ya se arregló, 'fixed' o 'verified'.
+export const DeltaItem = z.object({ finding_id: Id, module: Module, rule_id: RuleId, severity: Severity,
+  title: z.string().max(200), resource: z.string().max(300), status: FindingStatus });
+export type DeltaItem = z.infer<typeof DeltaItem>;
+// total = cuántos hay; items = los 50 primeros en el orden de E13 (un hallazgo ya borrado cuenta en total y no sale).
+export const DeltaLista = z.object({ total: z.number().int().min(0), items: z.array(DeltaItem).max(50) });
+export type DeltaLista = z.infer<typeof DeltaLista>;
+// La auditoría con la que se compara. null si es la primera foto o si la anterior ya se borró (retención de 90 días).
+// finished_at null si la anterior aún no había cerrado (la foto se toma en el paso puntaje, antes de resumen_ia).
+export const DeltaAnterior = z.object({ scan_run_id: Id, kind: ScanKind, finished_at: Ts.nullable(),
+  score: z.number().int().min(0).max(100).nullable() });
+export type DeltaAnterior = z.infer<typeof DeltaAnterior>;
+// E51 · GET /api/orgs/:org/scans/:id/delta · user. available:false → 'en_curso' (aún sin foto) o 'sin_foto' (auditoría
+// anterior a 0015, o que no pudo revisar ningún módulo). first:true → primera foto de la org: no hay con qué comparar;
+// solo cuenta open y lo demás va en 0 y vacío. moved = claves (regla + huella) que solo cambiaron de línea: cuentan en
+// kept, nunca en new ni en fixed. gone = abiertos en la anterior cuya fila ya no existe (retención de 0008): no cuentan
+// como corregidos ni como ignorados. En total: open = open anterior + new − fixed − ignored − gone.
+export const AuditDelta = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(false), scan_run_id: Id, reason: z.enum(['en_curso', 'sin_foto']) }),
+  z.object({ available: z.literal(true), scan_run_id: Id, taken_at: Ts, first: z.boolean(),
+    score: z.number().int().min(0).max(100).nullable(),
+    modules_seen: z.array(Module).max(4),    // módulos cuyo paso terminó bien en ESTA auditoría
+    previous: DeltaAnterior.nullable(),
+    counts: z.object({ open: MatrizHallazgos, new: MatrizHallazgos, kept: MatrizHallazgos, fixed: MatrizHallazgos,
+      ignored: MatrizHallazgos }),
+    fixed_checked: z.number().int().min(0),  // corregidos que una auditoría comprobó (verified), sin contar claves
+    moved: z.number().int().min(0), gone: z.number().int().min(0),
+    new: DeltaLista, kept: DeltaLista, fixed: DeltaLista, ignored: DeltaLista }),
+]);
+export type AuditDelta = z.infer<typeof AuditDelta>;
+// Una versión = una auditoría con foto (sea cual sea su status) o una terminada con puntaje anterior a 0015
+// (snapshot:false: open, new y fixed van null y el punto solo entra en la gráfica del puntaje). at = cuándo se tomó la
+// foto (sin foto, cuándo terminó): es el orden de la cadena. score sale de scan_runs.
+export const EvolutionPoint = z.object({ scan_run_id: Id, kind: ScanKind, at: Ts,
+  score: z.number().int().min(0).max(100).nullable(), modules_seen: z.array(Module).max(4),
+  snapshot: z.boolean(), first: z.boolean(),
+  open: MatrizHallazgos.nullable(), new: MatrizHallazgos.nullable(), fixed: MatrizHallazgos.nullable(),
+  ignored: z.number().int().min(0), gone: z.number().int().min(0), fixed_checked: z.number().int().min(0) });
+export type EvolutionPoint = z.infer<typeof EvolutionPoint>;
+// Revisión de código terminada (push a la rama vigilada o pull request): new = sus hallazgos NUEVOS por severidad;
+// delta = la foto de Codebase del push (null en un PR, en un push anterior a 0015 o si la foto falló).
+export const EvolutionReview = z.object({ review_id: Id, event: z.enum(['push', 'pull_request']),
+  pr_number: z.number().int().positive().nullable(), at: Ts, head_sha7: z.string().regex(/^[0-9a-f]{7}$/),
+  new: PorSeveridad, partial: z.boolean(), delta: CodeReviewDelta.nullable() });
+export type EvolutionReview = z.infer<typeof EvolutionReview>;
+// Incidentes (ataques) por día de Caracas en que empezaron y por severidad. Solo los días con alguno.
+export const EvolutionIncidentDay = z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), counts: PorSeveridad });
+export type EvolutionIncidentDay = z.infer<typeof EvolutionIncidentDay>;
+// Totales de TODO el periodo, calculados en la base aunque points venga recortado: versions = versiones del periodo;
+// snapshots = de ellas, las que tienen foto; score_first = puntaje de la más vieja; new, fixed, fixed_checked, ignored y
+// gone = sumas de las fotos del periodo con first:false.
+export const EvolutionTotals = z.object({ versions: z.number().int().min(0), snapshots: z.number().int().min(0),
+  score_first: z.number().int().min(0).max(100).nullable(), new: MatrizHallazgos, fixed: MatrizHallazgos,
+  fixed_checked: z.number().int().min(0), ignored: z.number().int().min(0), gone: z.number().int().min(0) });
+export type EvolutionTotals = z.infer<typeof EvolutionTotals>;
+// E52 · GET /api/orgs/:org/evolution?days=30&limit=30 · user. points y reviews de la más vieja a la más nueva (las
+// `limit` versiones y las 50 revisiones más recientes del periodo); truncated: el periodo tiene más versiones que
+// `limit` (la UI usa totals y dice «últimas N auditorías» en las gráficas). mttr: hallazgos que una auditoría dio por
+// corregidos (verified) en el periodo, horas de first_seen_at a verified_at; no cuentan los marcados a mano (sin hora)
+// ni las claves (que ya no estén en el código no prueba que se rotaron).
+export const Evolution = z.object({ days: z.number().int().min(1).max(90),
+  points: z.array(EvolutionPoint).max(60), truncated: z.boolean(), totals: EvolutionTotals,
+  reviews: z.array(EvolutionReview).max(50), incidents: z.array(EvolutionIncidentDay).max(91),
+  mttr: z.object({ verified: z.number().int().min(0), hours_avg: z.number().min(0).nullable(),
+    hours_median: z.number().min(0).nullable() }) });
+export type Evolution = z.infer<typeof Evolution>;
+
+// ── Modo bajo ataque (E55–E56; asignaciones/modo-bajo-ataque.md) ───────────────────────────────────────────────────
+// host: una Configuration Rule (set_config, security_level under_attack) solo para el host del incidente, con la
+// caducidad dentro de la expresión. zone: el ajuste security_level de toda la zona (P1; nunca en la zona del producto).
+// Confirmar y deshacer: E21 y E22 de siempre.
+export const UnderAttackScope = z.enum(['host', 'zone']);
+export type UnderAttackScope = z.infer<typeof UnderAttackScope>;
+// Por qué no se puede activar ahora (null = se puede). no_aplica: el incidente no es de inundación (CF_IP_FLOOD) ·
+// una_ip: solo una IP inunda ese host (basta Bloquear IP) · cerrado: incidente resuelto · sin_host: el nombre de la
+// conexión de ingesta no es un host · host_protegido: es un host de VanGUARD · fuera_de_zona: el host no es de la zona
+// de la conexión · sin_conexion: falta el Modo blindaje · sin_permiso: la sonda vio un 403 de Config Rules · Edit ·
+// en_curso: otra activación de ese host se está aplicando.
+export const UnderAttackMotivo = z.enum(['no_aplica', 'una_ip', 'cerrado', 'sin_host', 'host_protegido', 'fuera_de_zona',
+  'sin_conexion', 'sin_permiso', 'en_curso']);
+export type UnderAttackMotivo = z.infer<typeof UnderAttackMotivo>;
+const HostOZona = z.string().min(3).max(120); // actions.target admite ≤ 120 (0005)
+// retirada_fallida: housekeeping no pudo borrar la regla (fila failed con previous.deshacer_error). Con la caducidad en
+// la expresión ya no actúa desde expires_at, pero sigue ocupando una regla del plan: la UI pide borrarla a mano.
+export const UnderAttackActivo = z.object({ action_id: Id, scope: UnderAttackScope, target: HostOZona, created_at: Ts,
+  expires_at: Ts.nullable(), retirada_fallida: z.boolean() });
+export type UnderAttackActivo = z.infer<typeof UnderAttackActivo>;
+// E55 (solo lee la base). ofrece: lo decide la regla (≥ 2 incidentes CF_IP_FLOOD no resueltos con el mismo host en la
+// org, es decir, varias IPs inundan ese host). ips: cuántos hay, este incluido. permiso: lo que vio la última sonda del
+// token de acciones (falta: un 403 del dry_run; sin_probar: sin sonda de este permiso, lo valida E56).
+// copiar: pasos para hacerlo a mano en el panel de Cloudflare (sin_conexion, sin_permiso o retirada_fallida), sin secretos.
+export const UnderAttackOffer = z.object({ ofrece: z.boolean(), motivo: UnderAttackMotivo.nullable(),
+  hostname: HostOZona.nullable(), zone_name: z.string().max(253).nullable(), connection_id: Id.nullable(),
+  ips: z.number().int().min(0).max(1000), scopes: z.array(UnderAttackScope).max(2),
+  permiso: z.enum(['ok', 'falta', 'sin_probar']).nullable(), ttl_s: z.number().int().min(300).max(3600),
+  activo: UnderAttackActivo.nullable(), copiar: z.string().max(1500).nullable() });
+export type UnderAttackOffer = z.infer<typeof UnderAttackOffer>;
+// E56. El host sale del incidente (details.host, que es el nombre de la conexión de ingesta), nunca del cuerpo.
+export const UnderAttackPropose = z.object({ scope: UnderAttackScope.default('host'), connection_id: Id.optional() });
+export type UnderAttackPropose = z.infer<typeof UnderAttackPropose>;
+// validado: Cloudflare respondió 2xx con result null a la regla enviada con dry_run=true (permiso, cupo y expresión) y
+// no publicó nada; false: no se pudo comprobar (red, o alcance zone, que no tiene dry_run) y se comprueba al confirmar.
+export const UnderAttackProposal = ProposeResponse.extend({ scope: UnderAttackScope, target: HostOZona,
+  zone_name: z.string().max(253), ttl_s: z.number().int().min(300).max(3600), validado: z.boolean() });
+export type UnderAttackProposal = z.infer<typeof UnderAttackProposal>;

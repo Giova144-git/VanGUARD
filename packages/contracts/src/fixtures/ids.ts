@@ -40,6 +40,8 @@ export const NOTIF_WA_UP_1 = 'a0000000-0000-4000-8000-000000000003';
 export const NOTIF_WA_UP_2 = 'a0000000-0000-4000-8000-000000000004';
 export const NOTIF_VOZ = 'a0000000-0000-4000-8000-000000000005';
 export const APPROVAL_BLOQUEO = 'ab000000-0000-4000-8000-000000000001';
+export const APPROVAL_BAJO_ATAQUE = 'ab000000-0000-4000-8000-000000000002';
+export const ACTION_BAJO_ATAQUE = 'ac000000-0000-4000-8000-000000000001';
 
 // ── Ajustes, rendimiento y MCP ─────────────────────────────────────────────────
 export const CONTACT_1 = 'cc000000-0000-4000-8000-000000000001';
@@ -90,3 +92,39 @@ export const CR_REV_LIMPIA = 'c4000000-0000-4000-8000-000000000012';
 export const F_CB_STRIPE_PUSH = 'f0000000-0000-4000-8000-00000000000e'; // lo crea la revisión; no está en `findings`
 export const T_CR_PING = '2026-10-24T18:20:03.000Z';
 export const T_CR_PUSH = '2026-10-24T19:20:11.000Z';
+
+// ── Varias codebases (asignaciones/varias-codebases.md) ─────────────────────────────────────────────────────────
+// Segundo repo de la org: pequeño, público y limpio (no mueve el puntaje ni el orden de «Ahora»). …0006 es
+// CONN_GITHUB_ESTADOS (bloqueo-merge-criticos.md).
+export const CONN_GITHUB_2 = 'c0000000-0000-4000-8000-000000000007';
+export const REPO_2 = 'equipo22-demo/vanguard-demo-landing';
+export const T_CONEXION_REPO_2 = '2026-10-24T18:00:52.000Z';
+
+// ── Bloqueo de merge con críticos (asignaciones/bloqueo-merge-criticos.md) ──────
+export const CONN_GITHUB_ESTADOS = 'c0000000-0000-4000-8000-000000000006'; // GitHub kind 'action' (solo Commit statuses)
+export const CR_REV_PR_BLOQUEADO = 'c4000000-0000-4000-8000-000000000022';
+export const T_GATE_GUARDADO = '2026-10-24T19:40:05.000Z';
+export const T_CR_PR = '2026-10-24T19:45:08.000Z';
+
+// ── Evolución entre revisiones ────────────────────────────────────────────────
+// Auditorías completas de martes a viernes (la del sábado es SCAN_AUDITORIA; la del martes es anterior a 0015 y solo
+// tiene puntaje), el push del jueves que subió un posible secreto y los dos hallazgos que el sábado ya no están
+// abiertos (uno comprobado por la auditoría y otro marcado a mano). CR_REV_JUEVES no es …022: ese id es
+// CR_REV_PR_BLOQUEADO (bloqueo-merge-criticos.md).
+export const SCAN_EV_MAR = '5a1c0000-0000-4000-8000-000000000005';
+export const SCAN_EV_MIE = '5a1c0000-0000-4000-8000-000000000002';
+export const SCAN_EV_JUE = '5a1c0000-0000-4000-8000-000000000003';
+export const SCAN_EV_VIE = '5a1c0000-0000-4000-8000-000000000004';
+export const CR_REV_JUEVES = 'c4000000-0000-4000-8000-000000000021';
+export const F_SB_INDICE = 'f0000000-0000-4000-8000-00000000000f';
+export const F_CB_GENERICO = 'f0000000-0000-4000-8000-000000000010';
+// Hora de cada versión = la de su foto (paso puntaje). En el fixture coincide con el cierre de la auditoría; en
+// producción va unos segundos antes (resumen_ia). La del martes, sin foto, es su cierre.
+export const T_EV_MAR = '2026-10-20T18:02:30.000Z';
+export const T_EV_MIE = '2026-10-21T18:03:20.000Z';
+export const T_EV_JUE = '2026-10-22T18:02:50.000Z';
+export const T_CR_JUEVES = '2026-10-22T19:10:00.000Z';
+export const T_EV_VIE = '2026-10-23T18:04:05.000Z';
+// Hora de la foto de Codebase de cada push (vg_review_snapshot, al cerrar el diff).
+export const T_SNAP_JUEVES = '2026-10-22T19:10:02.600Z';
+export const T_SNAP_LIMPIA = '2026-10-24T18:31:42.300Z';

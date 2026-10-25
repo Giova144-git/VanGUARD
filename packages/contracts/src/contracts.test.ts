@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import * as c from './index.ts';
+import * as ids from './fixtures/ids.ts';
 
 const fx = c.fixtures;
 
@@ -11,10 +12,18 @@ const CLAVES_ESPERADAS = [
   'findings', 'fixPrompt', 'incidents', 'incidentDetail', 'traffic', 'actionProposal', 'contacts', 'aiUsage', 'perfRuns',
   'exportMd', 'mcpTokens', 'wikiEstimate', 'wikiRunRunning', 'wikiRunDone', 'wikiRuns', 'wikiDoc',
   'codeReviewState', 'codeReviewSaved', 'alertPrefs', 'hallazgoRevision',
+  'conexionGithub2', 'scanDoneDosRepos', 'codeReviewStateRepo2',
+  'codeReviewStateBloqueo', 'mergeGateSaved',
+  'auditDelta', 'evolution', 'hallazgosCorregidos', 'deltasRevision',
+  'underAttackOffer', 'underAttackOfferUnaIp', 'underAttackOfferSinPermiso', 'underAttackProposal',
 ];
 
 const casos: [string, z.ZodType, unknown][] = [
   ['me', c.Me, fx.me],
+  ['underAttackOffer', c.UnderAttackOffer, fx.underAttackOffer],
+  ['underAttackOfferUnaIp', c.UnderAttackOffer, fx.underAttackOfferUnaIp],
+  ['underAttackOfferSinPermiso', c.UnderAttackOffer, fx.underAttackOfferSinPermiso],
+  ['underAttackProposal', c.UnderAttackProposal, fx.underAttackProposal],
   ['meViewer', c.Me, fx.meViewer],
   ['overview', c.Overview, fx.overview],
   ['overviewVacio', c.Overview, fx.overviewVacio],
@@ -43,9 +52,18 @@ const casos: [string, z.ZodType, unknown][] = [
   ['wikiRuns', z.array(c.WikiRun), fx.wikiRuns],
   ['wikiDoc', c.WikiDoc, fx.wikiDoc],
   ['codeReviewState', c.CodeReviewState, fx.codeReviewState],
+  ['codeReviewStateBloqueo', c.CodeReviewState, fx.codeReviewStateBloqueo],
+  ['mergeGateSaved', c.MergeGateSaved, fx.mergeGateSaved],
   ['codeReviewSaved', c.CodeReviewSaved, fx.codeReviewSaved],
   ['alertPrefs', c.AlertPrefs, fx.alertPrefs],
   ['hallazgoRevision', c.Finding, fx.hallazgoRevision],
+  ['conexionGithub2', c.ConnectionPublic, fx.conexionGithub2],
+  ['scanDoneDosRepos', c.ScanRun, fx.scanDoneDosRepos],
+  ['codeReviewStateRepo2', c.CodeReviewState, fx.codeReviewStateRepo2],
+  ['auditDelta', c.AuditDelta, fx.auditDelta],
+  ['evolution', c.Evolution, fx.evolution],
+  ['hallazgosCorregidos', z.array(c.Finding), fx.hallazgosCorregidos],
+  ['deltasRevision', z.record(c.Id, c.CodeReviewDelta), fx.deltasRevision],
 ];
 
 describe('revisión de código', () => {
@@ -61,6 +79,170 @@ describe('revisión de código', () => {
   it('la URL del webhook solo admite https', () => {
     const config = { ...base.config, webhook_url: 'http://officialvanguard.com/webhooks/github/x' };
     expect(c.CodeReviewConfig.safeParse(config).success).toBe(false);
+  });
+});
+
+describe('bloqueo de merge', () => {
+  const gate = fx.mergeGateSaved.gate;
+  it('el contexto es exactamente VanGUARD', () => {
+    expect(c.GATE_CONTEXT).toBe('VanGUARD');
+    expect(c.MergeGateConfig.safeParse({ ...gate, context: 'vanguard/revision' }).success).toBe(false);
+  });
+  it('P0 sin protección leída y P1 con ella cumplen MergeGateConfig', () => {
+    expect(c.MergeGateConfig.safeParse({ ...gate, state: 'unchecked', protection: null }).success).toBe(true);
+    const p1 = { ...gate, state: 'active', protection: { required: 'yes', admins: 'bypass', pr_required: 'unknown',
+      checked_at: '2026-10-24T19:41:00.000Z' } };
+    expect(c.MergeGateConfig.safeParse(p1).success).toBe(true);
+  });
+  it('last_error es solo del token: un 422 no pasa a la config', () => {
+    expect(c.MergeGateConfig.safeParse({ ...gate, state: 'error', last_error: 'forbidden' }).success).toBe(true);
+    expect(c.MergeGateConfig.safeParse({ ...gate, state: 'error', last_error: 'limite' }).success).toBe(false);
+  });
+  it('MergeGatePut admite el cambio sin token y rechaza un token corto', () => {
+    expect(c.MergeGatePut.safeParse({ enabled: true, min_severity: 'critical' }).success).toBe(true);
+    expect(c.MergeGatePut.safeParse({ enabled: true, min_severity: 'medium' }).success).toBe(false);
+    expect(c.MergeGatePut.safeParse({ enabled: true, min_severity: 'high', statuses_pat: 'corto' }).success).toBe(false);
+  });
+  it('MergeGateSaved: sin token, probe_sha y probe_state van null', () => {
+    expect(c.MergeGateSaved.safeParse({ ...fx.mergeGateSaved, probe_sha: null, probe_state: null }).success).toBe(true);
+    expect(c.MergeGateSaved.safeParse({ ...fx.mergeGateSaved, probe_state: 'aprobado' }).success).toBe(false);
+  });
+  it('MergeGateAction: override exige motivo; un op desconocido no pasa', () => {
+    expect(c.MergeGateAction.safeParse({ op: 'override', reason: 'ok' }).success).toBe(false);
+    expect(c.MergeGateAction.safeParse({ op: 'override', reason: 'clave de prueba documentada' }).success).toBe(true);
+    expect(c.MergeGateAction.safeParse({ op: 'revert' }).success).toBe(true);
+    expect(c.MergeGateAction.safeParse({ op: 'borrar' }).success).toBe(false);
+  });
+  it('una revisión sin gate (antes de 0016) sigue cumpliendo CodeReview', () => {
+    const [primera] = fx.codeReviewState.recent;
+    expect(c.CodeReview.safeParse(primera).success).toBe(true);
+    expect('gate' in (primera ?? {})).toBe(false);
+  });
+  it('blocking no es counts: un error de publicación es un código corto', () => {
+    const r = c.CodeReview.parse(fx.codeReviewStateBloqueo.recent[0]);
+    expect(c.CodeReview.safeParse({ ...r, gate: { ...r.gate!, error: 'Forbidden 403' } }).success).toBe(false);
+    expect(c.CodeReview.safeParse({ ...r, gate: { ...r.gate!, state: null, error: 'sin_token' } }).success).toBe(true);
+  });
+});
+
+// Evolución (E51, E52 y la foto de cada push en E45): los fixtures cuentan la misma historia que hallazgos.ts,
+// auditoria.ts, resumen.ts, revision.ts e incidentes.ts.
+describe('evolución', () => {
+  const SEV = c.Severity.options;
+  const MOD = c.Module.options;
+  const total = (m: c.MatrizHallazgos | null) => (m ? MOD.reduce((a, k) => a + SEV.reduce((b, s) => b + m[k][s], 0), 0) : NaN);
+  const suma = (r: Record<c.Severity, number>) => SEV.reduce((a, s) => a + r[s], 0);
+  const esClave = (rule: string) => rule.startsWith('CB_SECRET_') || rule === 'CB_ENV_COMMITTED';
+  const d = fx.auditDelta;
+  const evo = fx.evolution;
+  const todos: c.EvolutionPoint[] = evo.points;
+  const pts = todos.filter((p) => p.snapshot);
+  const ultimo = pts[pts.length - 1]!;
+
+  it('open del último punto = hallazgos open de hallazgos.ts; puntaje y conteos = Resumen', () => {
+    const abiertos = fx.findings.filter((f) => f.status === 'open');
+    for (const k of MOD) for (const s of SEV) {
+      expect(ultimo.open![k][s], `${k}.${s}`).toBe(abiertos.filter((f) => f.module === k && f.severity === s).length);
+    }
+    expect(ultimo.score).toBe(fx.overview.score);
+    expect(ultimo.scan_run_id).toBe(fx.scanDone.id);
+    expect(todos[todos.length - 1]).toBe(ultimo);
+    for (const s of SEV) expect(MOD.reduce((a, k) => a + ultimo.open![k][s], 0)).toBe(fx.overview.counts[s]);
+  });
+
+  it('cada punto con foto cuadra con el anterior: open = open anterior + new − fixed − ignored − gone', () => {
+    for (let i = 1; i < pts.length; i++) {
+      const [a, b] = [pts[i - 1]!, pts[i]!];
+      expect(total(b.open), b.scan_run_id).toBe(total(a.open) + total(b.new) - total(b.fixed) - b.ignored - b.gone);
+      expect(b.first).toBe(false);
+    }
+    expect(pts[0]!.first).toBe(true);
+    expect(total(pts[0]!.new) + total(pts[0]!.fixed)).toBe(0);
+    for (let i = 1; i < todos.length; i++) expect(Date.parse(todos[i]!.at)).toBeGreaterThan(Date.parse(todos[i - 1]!.at));
+    for (const p of todos.filter((x) => !x.snapshot)) {
+      expect([p.open, p.new, p.fixed, p.first, p.ignored, p.gone, p.fixed_checked]).toEqual([null, null, null, false, 0, 0, 0]);
+    }
+  });
+
+  it('el delta cuadra: listas = conteos, kept = open − new, comprobados sin claves y = último punto', () => {
+    if (!d.available) throw new Error('auditDelta debe estar disponible');
+    for (const k of ['new', 'kept', 'fixed', 'ignored'] as const) {
+      expect(d[k].total, k).toBe(total(d.counts[k]));
+      expect(d[k].items.length, k).toBe(d[k].total);
+    }
+    for (const k of MOD) for (const s of SEV) {
+      expect(d.counts.kept[k][s], `${k}.${s}`).toBe(d.counts.open[k][s] - d.counts.new[k][s]);
+    }
+    expect(d.counts.open).toEqual(ultimo.open);
+    expect([d.ignored.total, d.gone, d.fixed_checked]).toEqual([ultimo.ignored, ultimo.gone, ultimo.fixed_checked]);
+    expect(d.fixed_checked).toBe(d.fixed.items.filter((x) => x.status === 'verified' && !esClave(x.rule_id)).length);
+    expect(d.previous?.scan_run_id).toBe(pts[pts.length - 2]!.scan_run_id);
+    expect(d.previous?.score).toBe(pts[pts.length - 2]!.score);
+    for (const x of [...d.new.items, ...d.kept.items]) expect(x.status).toBe('open');
+  });
+
+  it('totals = sumas de las fotos del periodo (sin recorte); incidentes = los de incidentes.ts', () => {
+    expect(evo.truncated).toBe(false);
+    const comp = pts.filter((p) => !p.first);
+    expect([evo.totals.versions, evo.totals.snapshots, evo.totals.score_first]).toEqual([todos.length, pts.length, todos[0]!.score]);
+    expect(total(evo.totals.new)).toBe(comp.reduce((a, p) => a + total(p.new), 0));
+    expect(total(evo.totals.fixed)).toBe(comp.reduce((a, p) => a + total(p.fixed), 0));
+    expect(evo.totals.fixed_checked).toBe(comp.reduce((a, p) => a + p.fixed_checked, 0));
+    expect(evo.totals.ignored).toBe(comp.reduce((a, p) => a + p.ignored, 0));
+    for (let i = 1; i < evo.incidents.length; i++) expect(evo.incidents[i]!.day > evo.incidents[i - 1]!.day).toBe(true);
+    for (const s of SEV) {
+      expect(evo.incidents.reduce((a, x) => a + x.counts[s], 0), s).toBe(fx.incidents.filter((i) => i.severity === s).length);
+    }
+  });
+
+  it('revisiones de más vieja a más nueva; la foto de cada push encadena con la del push anterior', () => {
+    const r = evo.reviews;
+    for (let i = 1; i < r.length; i++) expect(Date.parse(r[i]!.at)).toBeGreaterThan(Date.parse(r[i - 1]!.at));
+    for (const x of fx.codeReviewState.recent) {
+      expect(r.find((y) => y.review_id === x.id)?.head_sha7).toBe(x.head_sha.slice(0, 7));
+      expect(r.find((y) => y.review_id === x.id)?.delta).toEqual(fx.deltasRevision[x.id]);
+    }
+    const pushes = r.filter((x) => x.event === 'push' && x.delta);
+    expect(pushes[0]!.delta!.first).toBe(true);
+    for (let i = 0; i < pushes.length; i++) {
+      const x = pushes[i]!.delta!;
+      expect(x.kept, pushes[i]!.review_id).toBe(x.open - suma(pushes[i]!.new));   // kept = open − nuevos de este push
+      if (x.first) expect([x.fixed, x.fixed_checked, x.ignored, x.previous_review_id]).toEqual([0, 0, 0, null]);
+      else expect(x.previous_review_id).toBe(pushes[i - 1]!.review_id);
+      expect(x.fixed_checked).toBeLessThanOrEqual(x.fixed);
+    }
+    const ultimaRev = pushes[pushes.length - 1]!.delta!;
+    expect(ultimaRev.open).toBe(fx.findings.filter((f) => f.status === 'open' && f.module === 'codebase').length + 1);
+  });
+
+  it('CodeReview acepta delta, delta null y sin delta (un BACK de antes de 0015)', () => {
+    const [primera] = fx.codeReviewState.recent;
+    expect(c.CodeReview.safeParse(primera).success).toBe(true);
+    expect(c.CodeReview.safeParse({ ...primera, delta: null }).success).toBe(true);
+    expect(c.CodeReview.safeParse({ ...primera, delta: fx.deltasRevision[primera!.id] }).success).toBe(true);
+    expect(c.CodeReview.safeParse({ ...primera, delta: { first: false } }).success).toBe(false);
+  });
+
+  it('AuditDelta acepta available:false con su motivo y rechaza un motivo desconocido', () => {
+    const base = { available: false, scan_run_id: fx.scanDone.id };
+    expect(c.AuditDelta.safeParse({ ...base, reason: 'en_curso' }).success).toBe(true);
+    expect(c.AuditDelta.safeParse({ ...base, reason: 'otro' }).success).toBe(false);
+  });
+
+  it('una matriz sin un módulo o sin una severidad no pasa (zod 4 exige todas las claves)', () => {
+    if (!d.available) throw new Error('auditDelta debe estar disponible');
+    const { performance: _, ...sinModulo } = d.counts.open;
+    expect(c.MatrizHallazgos.safeParse(sinModulo).success).toBe(false);
+    const { info: __, ...sinInfo } = d.counts.open.supabase;
+    expect(c.MatrizHallazgos.safeParse({ ...d.counts.open, supabase: sinInfo }).success).toBe(false);
+  });
+
+  it('las horas van con Z (la base las da con to_char) y un día de incidente es AAAA-MM-DD', () => {
+    const conZ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    for (const p of todos) expect(p.at).toMatch(conZ);
+    for (const x of evo.reviews) expect(x.at).toMatch(conZ);
+    if (d.available) expect(d.taken_at).toMatch(conZ);
+    expect(c.EvolutionIncidentDay.safeParse({ day: '24-10-2026', counts: evo.incidents[0]!.counts }).success).toBe(false);
   });
 });
 
@@ -200,5 +382,55 @@ describe('orden de los grupos en los estados de módulo', () => {
       const ordenes = (e.ahora ?? []).map((g) => g.orden ?? 0);
       for (let i = 1; i < ordenes.length; i++) expect(ordenes[i], JSON.stringify(ordenes)).toBeLessThanOrEqual(ordenes[i - 1]!);
     }
+  });
+});
+
+describe('modo bajo ataque', () => {
+  it('UnderAttackPropose: host por defecto y sin campo hostname', () => {
+    expect(c.UnderAttackPropose.parse({})).toEqual({ scope: 'host' });
+    expect(c.UnderAttackPropose.safeParse({ scope: 'zona' }).success).toBe(false);
+    expect('hostname' in c.UnderAttackPropose.parse({ hostname: 'evil.example.com' })).toBe(false);
+  });
+  it('UnderAttackProposal rechaza un target de más de 120 caracteres o un ttl fuera de 300..3600', () => {
+    const p = fx.underAttackProposal;
+    expect(c.UnderAttackProposal.safeParse({ ...p, target: 'a'.repeat(115) + '.test1' }).success).toBe(false);
+    expect(c.UnderAttackProposal.safeParse({ ...p, ttl_s: 7200 }).success).toBe(false);
+  });
+  it('la propuesta sigue siendo un ProposeResponse (la pinta <Propuesta/> de BloquearIp)', () => {
+    expect(c.ProposeResponse.safeParse(fx.underAttackProposal).success).toBe(true);
+  });
+  it('UnderAttackOffer: activo exige retirada_fallida e ips es obligatorio', () => {
+    const activo = { action_id: 'ac000000-0000-4000-8000-000000000001', scope: 'host', target: 'demo.officialvanguard.com',
+      created_at: '2026-10-24T19:12:00.000Z', expires_at: '2026-10-24T19:42:00.000Z', retirada_fallida: true };
+    expect(c.UnderAttackOffer.safeParse({ ...fx.underAttackOffer, activo }).success).toBe(true);
+    const { retirada_fallida: _, ...sinCampo } = activo;
+    expect(c.UnderAttackOffer.safeParse({ ...fx.underAttackOffer, activo: sinCampo }).success).toBe(false);
+    const { ips: __, ...sinIps } = fx.underAttackOffer;
+    expect(c.UnderAttackOffer.safeParse(sinIps).success).toBe(false);
+  });
+});
+
+// Las cuatro funciones de la noche juntas (asignaciones/RECONCILIACION-CONTRATO.md): ni tsc ni las pruebas de cada una
+// ven un id de fixture repetido (el router del FRONT vería dos entidades con el mismo id) ni una revisión con los dos
+// campos opcionales nuevos a la vez.
+describe('convivencia de las funciones nuevas', () => {
+  it('ningún id de fixture de ids.ts se repite', () => {
+    const uuids = Object.entries(ids).filter(([, v]) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(v));
+    const porValor = new Map<unknown, string[]>();
+    for (const [k, v] of uuids) porValor.set(v, [...(porValor.get(v) ?? []), k]);
+    expect([...porValor.values()].filter((ks) => ks.length > 1)).toEqual([]);
+  });
+  it('una revisión lleva gate y delta a la vez; el estado del bloqueo con la foto de cada push cumple E45', () => {
+    const [pr, ...pushes] = fx.codeReviewStateBloqueo.recent;
+    const conFoto = { ...fx.codeReviewStateBloqueo,
+      recent: [{ ...pr!, delta: null }, ...pushes.map((r) => ({ ...r, delta: fx.deltasRevision[r.id] ?? null }))] };
+    expect(c.CodeReviewState.safeParse(conFoto).success).toBe(true);
+    // Los dos campos a la vez solo en un push (en un PR, delta es null): el push de la clave con el bloqueo ya encendido.
+    const push = pushes[0]!;
+    const lo = push.findings.map((f) => ({ ...f, finding_id: null }));   // en gate.findings, finding_id siempre null
+    const ambos = { ...push, gate: { ...c.CodeReview.parse(pr).gate!, findings: lo }, delta: fx.deltasRevision[push.id] };
+    expect(push.event).toBe('push');
+    expect(c.CodeReview.parse(ambos)).toMatchObject({ gate: { state: 'failure' }, delta: { first: false } });
+    expect(c.CodeReviewQuery.parse({})).toEqual({});   // el FRONT de hoy llama a E45 sin ?connection_id
   });
 });

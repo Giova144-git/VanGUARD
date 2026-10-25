@@ -40,6 +40,16 @@ describe('assertAllowedUrl', () => {
     expect(() => assertAllowedUrl('https://-x.onrender.com/')).toThrow('EGRESS_BLOCKED');
     expect(() => assertAllowedUrl('https://x.up.railway.app/')).toThrow('EGRESS_BLOCKED');
   });
+  it('servidor de voz en Hugging Face Spaces: <usuario>-vanguard-voz.hf.space pasa; anidados, sufijos y http no', () => {
+    expect(assertAllowedUrl('https://giova-vanguard-voz.hf.space/healthz').hostname).toBe('giova-vanguard-voz.hf.space');
+    expect(() => assertAllowedUrl('https://a.b.hf.space/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://hf.space/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x.hf.space.evil.example/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x-hf.space/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('http://x.hf.space/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x.hf.space:8443/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://huggingface.co/')).toThrow('EGRESS_BLOCKED');
+  });
   it('el error no repite la URL (podría llevar un secreto en la query)', () => {
     expect(() => assertAllowedUrl('https://evil.example/?token=SECRETO123')).toThrow(/^EGRESS_BLOCKED:host$/);
   });

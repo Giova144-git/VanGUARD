@@ -51,7 +51,7 @@ export async function llamarVoz(env: CloudflareBindings, recipient: string, cont
     r = await pedir(url, { method: 'POST', headers: { Authorization: `Bearer ${env.VOZ_OPERATOR_TOKEN}`,
       'Content-Type': 'application/json' }, body: JSON.stringify({ recipient, context }) }, PLAZO_VOZ_MS);
   } catch (e) {
-    // Egress bloqueado (host fuera de *.onrender.com): la petición no salió, así que no sonó nada.
+    // Egress bloqueado (host fuera de *.hf.space y *.onrender.com): la petición no salió, así que no sonó nada.
     if (e instanceof ProviderError && e.code === 'invalid' && e.status === undefined) return { tipo: 'fallida', error: 'sin_config' };
     return { tipo: 'desconocida' };
   }

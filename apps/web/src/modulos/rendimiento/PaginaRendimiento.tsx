@@ -89,7 +89,11 @@ function Historico() {
   const todas = useMemo(() => agrupar(q.data ?? []), [q.data]);
   const urls = useMemo(() => [...new Set(todas.map((m) => m.url))], [todas]);
   const [url, setUrl] = useState<string | null>(null);
-  const actual = url ?? urls[0] ?? null;
+  // Sin tocar, la URL de la medición más reciente (la que «Medir ahora» trae y la que se acaba de medir); una elegida que
+  // ya no viene en E24 (solo trae las 30 últimas) vuelve a esa en vez de dejar el histórico vacío.
+  const actual = (url !== null && urls.includes(url) ? url : todas[todas.length - 1]?.url) ?? null;
+  // Otra URL: la estrategia vuelve a la que tenga con qué comparar (la elegida pudo no tener ninguna medición allí).
+  const cambiarUrl = (u: string) => { setUrl(u); setEstrategia(null); };
   const series = useMemo(() => Object.fromEntries(ESTRATEGIAS.map(([s]) =>
     [s, mismaSerie(todas.filter((m) => m.url === actual && m.strategy === s))])) as Record<Estrategia, Medicion[]>, [todas, actual]);
   const comparables = ESTRATEGIAS.filter(([s]) => series[s].length >= 2).map(([s]) => s);
@@ -119,7 +123,7 @@ function Historico() {
       </div>
       {/* La URL, la versión y la de Lighthouse llegan del servidor: los controles bidi se ven (lib/bidi.ts). La URL cruda
           sigue como clave y estado del grupo; solo se sanea lo que se pinta. */}
-      {urls.length > 1 ? <Grupo etiqueta="URL" valor={actual ?? ''} opciones={urls.map((u) => [u, sinBidi(u.replace(/^https?:\/\//, ''))])} onCambio={setUrl} />
+      {urls.length > 1 ? <Grupo etiqueta="URL" valor={actual ?? ''} opciones={urls.map((u) => [u, sinBidi(u.replace(/^https?:\/\//, ''))])} onCambio={cambiarUrl} />
         : <p className="break-all font-mono text-[13px] text-muted-foreground">{actual ? <bdi dir="ltr">{sinBidi(actual)}</bdi> : null}</p>}
       {comparables.length ? (
         <div className="flex flex-wrap gap-2">

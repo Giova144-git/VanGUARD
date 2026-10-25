@@ -62,6 +62,10 @@ export const urlsConocidas = (runs: unknown): string[] =>
 export const etiquetaPrevia = (runs: unknown, url: string): string =>
   recientes(runs).find((r) => r.url === url && Version.safeParse(r.version_label).success)?.version_label ?? '';
 
+// Al editar un campo su error se va; el del otro campo, no.
+export const sinErrorDe = (e: ErroresCampo, campo: Campo): ErroresCampo =>
+  Object.fromEntries(Object.entries(e).filter(([k]) => k !== campo)) as ErroresCampo;
+
 // Cuerpo de E11 validado con el contrato antes de salir; version_label solo si se escribió.
 export function cuerpoMedir(url: string, strategy: Estrategia, version: string): { body: CuerpoMedir } | { errores: ErroresCampo } {
   const u = url.trim();
@@ -69,6 +73,8 @@ export function cuerpoMedir(url: string, strategy: Estrategia, version: string):
   const errores: ErroresCampo = {};
   if (!u) errores.url = 'Escribe la URL que quieres medir';
   else if (!u.startsWith('https://')) errores.url = 'Solo medimos URLs que empiezan por https://';
+  else if (u.length > 2048) errores.url = 'La URL es demasiado larga (máximo 2048 caracteres)';    // el texto de urlMedible
+  else if (sinBidi(u) !== u) errores.url = 'La URL lleva caracteres invisibles de control de dirección: vuelve a escribirla';
   else if (!medible(u)) errores.url = 'Esa URL no es válida';
   if (v && !Version.safeParse(v).success) errores.version_label = 'Hasta 40 letras, números, «.», «_» o «-»';
   if (errores.url || errores.version_label) return { errores };

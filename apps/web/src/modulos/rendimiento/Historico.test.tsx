@@ -102,6 +102,23 @@ describe('Histórico con pocas mediciones', () => {
     expect(html).toMatch(/aria-label="Estrategia">(?:(?!<\/div>).)*aria-pressed="true"[^>]*><span class="block truncate"><bdi dir="ltr">Escritorio/s);
   });
 
+  it('URLs distintas: abre en la URL de la medición más reciente (la que «Medir ahora» trae), no en la más antigua', () => {
+    const OTRA = 'https://tienda-vieja.com/';
+    const viejas = de(2, 0).map((r) => ({ ...r, url: OTRA }));             // antes: 2 de móvil, con su gráfica
+    const nuevas = de(1, 1);                                                   // después: la medición base de la víctima
+    const html = pintar([...nuevas, ...viejas].reverse());
+    expect(html).toMatch(/aria-label="URL">(?:(?!<\/div>).)*aria-pressed="true"[^>]*><span class="block truncate"><bdi dir="ltr">vanguard-demo-victima\.pages\.dev\//s);
+    expect(html).toMatch(/aria-pressed="false"[^>]*><span class="block truncate"><bdi dir="ltr">tienda-vieja\.com\//);
+    expect(estrategiasDeUltimas(html)).toEqual(['Móvil', 'Escritorio']);
+    expect(html).toContain(PROXIMA);
+    expect(html).not.toContain('data-prueba="grafica"');
+    expect(html).not.toContain('aria-label="Estrategia"');
+    // Y al revés: si la más reciente es la de 2 mediciones, abre en ella con su gráfica.
+    const alReves = pintar([...de(1, 1).map((r) => ({ ...r, url: OTRA })), ...de(2, 0)]);
+    expect(alReves).toMatch(/aria-label="URL">(?:(?!<\/div>).)*aria-pressed="true"[^>]*><span class="block truncate"><bdi dir="ltr">vanguard-demo-victima\.pages\.dev\//s);
+    expect(alReves).toContain('data-prueba="grafica"');
+  });
+
   it('el viewer ve el mismo histórico (1 + 1) que el admin', () => {
     const viewer = pintar(de(1, 1), VIEWER);
     expect(estrategiasDeUltimas(viewer)).toEqual(['Móvil', 'Escritorio']);

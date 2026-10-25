@@ -17,7 +17,8 @@ import { TEXTO_ROL } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { Grupo } from './Grupo';
 import {
-  cuerpoMedir, ejemploUrl, etiquetaPrevia, medir, medirOculto, puedeMedir, urlsConocidas, type Aviso, type ErroresCampo, type Estrategia,
+  cuerpoMedir, ejemploUrl, etiquetaPrevia, medir, medirOculto, puedeMedir, sinErrorDe, urlsConocidas, type Aviso, type ErroresCampo,
+  type Estrategia,
 } from './medir';
 
 const ESTRATEGIAS: [Estrategia, string][] = [['mobile', 'Móvil'], ['desktop', 'Escritorio']];
@@ -68,8 +69,10 @@ export function MedirAhora() {
     if (r.tipo === 'campo') setErrores(r.errores);
     else if (r.tipo === 'aviso') setAviso(r.aviso);
   };
-  // Al escribir otra URL: su error se va (era de la anterior) y la etiqueta vuelve a la de esa URL si no se tocó.
-  const cambiarUrl = (u: string) => { setUrl(u); setErrores(({ url: _u, ...resto }) => resto); };
+  // Al escribir otra URL o etiqueta: el error de ese campo se va (era de lo anterior) y lo demás se queda. Con otra URL, la
+  // etiqueta vuelve a la de esa URL si no se tocó.
+  const cambiarUrl = (u: string) => { setUrl(u); setErrores((e) => sinErrorDe(e, 'url')); };
+  const cambiarVersion = (v: string) => { setVersion(v); setErrores((e) => sinErrorDe(e, 'version_label')); };
   const ayudaUrl = errores.url ? 'medir-url-ayuda medir-url-error' : 'medir-url-ayuda';
 
   return (
@@ -97,7 +100,7 @@ export function MedirAhora() {
           </div>
           <label className="flex min-w-0 flex-1 basis-56 flex-col gap-1.5">
             <span className="text-sm font-medium">Etiqueta de versión (opcional)</span>
-            <Input dir="ltr" spellCheck={false} maxLength={40} placeholder="v3" value={etiqueta} onChange={(e) => setVersion(e.target.value)}
+            <Input dir="ltr" spellCheck={false} maxLength={40} placeholder="v3" value={etiqueta} onChange={(e) => cambiarVersion(e.target.value)}
               className="font-mono text-[14px]"
               aria-invalid={errores.version_label ? true : undefined} aria-describedby={errores.version_label ? 'medir-version-error' : undefined} />
             <ErrorCampo id="medir-version-error" texto={errores.version_label} />

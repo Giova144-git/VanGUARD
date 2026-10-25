@@ -14,7 +14,7 @@ import { ApiError } from '@/lib/errores';
 import { TEXTO_ROL } from '@/lib/severidad';
 import PaginaAuditoria from '@/modulos/auditoria/PaginaAuditoria';
 import { AvisoMedir, MedirAhora } from './MedirAhora';
-import { cuerpoMedir, EN_CURSO, errorMedir, etiquetaPrevia, medir, puedeMedir, urlsConocidas, URL_VICTIMA_DEMO } from './medir';
+import { cuerpoMedir, EN_CURSO, errorMedir, etiquetaPrevia, medir, puedeMedir, sinErrorDe, urlsConocidas, URL_VICTIMA_DEMO } from './medir';
 
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
 vi.mock('@/componentes/vg/GraficaComparativa', () => ({ GraficaComparativa: () => null }));
@@ -140,6 +140,25 @@ describe('Medir ahora · cuerpo de E11 y navegación', () => {
     expect(cuerpoMedir('http://demo.officialvanguard.com/', 'mobile', '')).toEqual({ errores: { url: 'Solo medimos URLs que empiezan por https://' } });
     expect(cuerpoMedir('', 'mobile', '')).toEqual({ errores: { url: 'Escribe la URL que quieres medir' } });
     expect(cuerpoMedir(URL_DEMO, 'mobile', 'v 3')).toEqual({ errores: { version_label: 'Hasta 40 letras, números, «.», «_» o «-»' } });
+  });
+
+  it('lo que el BACK aceptaría sale tal cual (sin zona, con ruta, query o mayúsculas: él la limpia); lo que no, con su motivo', () => {
+    for (const url of ['https://tienda.com', 'https://sub.tienda.co.uk/a/b', 'https://tienda.com/ruta?utm=1#x', 'https://TIENDA.com/',
+      'https://xn--caf-dma.com/', URL_VICTIMA_DEMO]) {
+      expect(cuerpoMedir(url, 'desktop', ''), url).toStrictEqual({ body: { kind: 'lighthouse', url, strategy: 'desktop' } });
+    }
+    // Lo que el BACK rechazaría y el cliente ya sabe: el mismo motivo que daría urlMedible, no un «no es válida» genérico.
+    expect(cuerpoMedir(`https://tienda.com/${'a'.repeat(2050)}`, 'mobile', '')).toEqual({ errores: { url: 'La URL es demasiado larga (máximo 2048 caracteres)' } });
+    expect(cuerpoMedir(`https://tienda.com/${String.fromCodePoint(0x202e)}x`, 'mobile', ''))
+      .toEqual({ errores: { url: 'La URL lleva caracteres invisibles de control de dirección: vuelve a escribirla' } });
+    expect(cuerpoMedir('tienda.com', 'mobile', '')).toEqual({ errores: { url: 'Solo medimos URLs que empiezan por https://' } });
+  });
+
+  it('al editar un campo se va su error y el del otro se queda', () => {
+    const ambos = { url: 'No medimos direcciones IP: usa el dominio del sitio', version_label: 'Formato' };
+    expect(sinErrorDe(ambos, 'url')).toStrictEqual({ version_label: 'Formato' });
+    expect(sinErrorDe(ambos, 'version_label')).toStrictEqual({ url: ambos.url });
+    expect(sinErrorDe({}, 'url')).toStrictEqual({});
   });
 
   it('POST a /scans con ese cuerpo exacto y, con el 202, a /o/:org/audit/:id; el histórico queda para releerse', async () => {

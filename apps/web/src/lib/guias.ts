@@ -49,7 +49,7 @@ export const GUIAS: Record<IdNav, Guia> = {
   cloudflare: { titulo: '¿Cómo leer este módulo?', pasos: [
     'Aquí ves quién está tocando tu web: las IPs y los programas que más insisten, y los escaneos de rutas de administración.',
     'Cuando un ataque cruza el umbral abrimos un incidente y te avisamos por WhatsApp.',
-    'Con el «Modo blindaje» puedes bloquear la IP desde aquí o desde el mismo mensaje de WhatsApp, y deshacerlo con un botón.',
+    'Con el «Modo blindaje» puedes bloquear la IP desde aquí o desde el mismo mensaje de WhatsApp, y deshacerlo con un botón. Si te inundan varias IPs a la vez, puedes poner solo el host atacado en modo bajo ataque 30 min.',
   ] },
   codebase: { titulo: '¿Cómo leer este módulo?', pasos: [
     'Revisamos solo los archivos de riesgo de tu repo: .env subidos, claves en la configuración y lockfiles. Nunca el código entero.',

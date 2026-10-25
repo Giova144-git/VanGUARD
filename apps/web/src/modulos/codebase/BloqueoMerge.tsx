@@ -6,8 +6,8 @@
 // El token de estados vive en el estado del formulario y en la mutación (gcTime 0 y reset() al terminar): nunca toca
 // storage, la URL ni la caché de consultas.
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { ExternalLink, ShieldCheck } from 'lucide-react';
-import type { CodeReviewConfig, CommitStatusState, ConnectionPublic, MergeGateConfig, MergeGateMin, MergeGatePut, PermCheck } from '@vanguard/contracts';
+import { ExternalLink, RefreshCw, ShieldCheck } from 'lucide-react';
+import type { CodeReviewConfig, CommitStatusState, ConnectionPublic, MergeGateConfig, MergeGateMin, MergeGateProtection, MergeGatePut, PermCheck } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
@@ -22,7 +22,7 @@ import { cuando } from '@/lib/formato';
 import { GUIA_ESTADOS_GITHUB } from '@/lib/guias';
 import { useGuardarBloqueo, useRutaAusente } from '@/lib/mutaciones';
 import { preGuardar, type Rechazo } from '@/lib/pre-guardas';
-import { AVISO_APAGAR_BLOQUEO, UMBRALES_BLOQUEO, avisoAlApagar, chipEstadoBloqueo, textoErrorTokenBloqueo, textoPrueba } from '@/lib/revision';
+import { AVISO_APAGAR_BLOQUEO, UMBRALES_BLOQUEO, avisoAlApagar, chipEstadoBloqueo, textoErrorTokenBloqueo, textoPrueba, textosProteccion } from '@/lib/revision';
 import { deMapa } from '@/lib/severidad';
 
 const REPO_VALIDO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;   // solo así se arma un enlace a github.com
@@ -156,6 +156,15 @@ export function BloqueoMerge({ c, gate, conexion }: { c: CodeReviewConfig; gate:
         Si un cambio añade un hallazgo crítico, marcamos ✗ “VanGUARD” en GitHub. Con la protección de rama, GitHub no deja fusionarlo.
       </p>
       {gate.state === 'unchecked' ? <p className="text-sm">Comprueba en GitHub que el check “VanGUARD” es obligatorio (paso 2).</p> : null}
+      {gate.protection ? <LecturaProteccion p={gate.protection} /> : null}
+      {/* P1: E53 sin token relee la protección con el token de lectura. Solo con el token de estados activo. */}
+      {org.puedeEscribir && gate.enabled && tok?.status === 'active' ? (
+        <div>
+          <Button variant="secundaria" aria-busy={guardar.isPending || undefined} onClick={guardar.isPending ? undefined : () => void enviar(base)}>
+            {guardar.isPending ? <Spinner /> : <RefreshCw />}Comprobar de nuevo
+          </Button>
+        </div>
+      ) : null}
       {gate.state === 'error' ? <p className="text-[15px] font-medium text-mal">{textoErrorTokenBloqueo(gate.last_error)}</p> : null}
       {fase === 'encender' ? <SimulacionEncender rama={rama} cerrarPr={gate.close_pr !== undefined} ocupado={guardar.isPending} onCancelar={cancelar}
         onEncender={() => void enviar({ ...base, enabled: true })} /> : null}
@@ -199,6 +208,16 @@ export function BloqueoMerge({ c, gate, conexion }: { c: CodeReviewConfig; gate:
         </p>
       </> : null}
     </section>
+  );
+}
+
+// P1: lo que E53 leyó de la protección de la rama (textos por mapa cerrado) y cuándo.
+function LecturaProteccion({ p }: { p: MergeGateProtection }) {
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      {textosProteccion(p).map((t) => <p key={t}>{t}</p>)}
+      <p className="text-[12.5px] text-texto-3">Comprobado {cuando(p.checked_at)}</p>
+    </div>
   );
 }
 

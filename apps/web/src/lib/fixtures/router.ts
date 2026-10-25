@@ -656,12 +656,14 @@ function repoBloqueo(org: string): ConnectionPublic | undefined {
   const t = estadosGh(org);
   return t ? lecturasGh(org).find((c) => nombreGh(c) === nombreGh(t)) : githubDe(org);
 }
-// Como E45: `off` con la revisión o el bloqueo apagados; `needs_token` sin token activo; `error` con last_error; si no,
-// `unchecked` (P0 no lee la protección).
+// Como E45: `off` con la revisión o el bloqueo apagados; `needs_token` sin token activo; `error` con last_error; con la
+// protección leída (P1), `active` si GitHub exige el check y `needs_protection` si no; si no, `unchecked`.
 function estadoGate(cfg: CodeReviewConfig, g: MergeGateConfig): MergeGateConfig['state'] {
   if (!cfg.enabled || !g.enabled) return 'off';
   if (g.statuses_connection?.status !== 'active') return 'needs_token';
-  return g.last_error ? 'error' : 'unchecked';
+  if (g.last_error) return 'error';
+  const r = g.protection?.required;
+  return r === 'yes' ? 'active' : r === 'no' || r === 'other_source' ? 'needs_protection' : 'unchecked';
 }
 // La config tal como la ve el FRONT: con `gate` solo en el repo del bloqueo (sembrado apagado la primera vez).
 function vistaConfig(org: string, gh: ConnectionPublic, cfg: CodeReviewConfig | null): CodeReviewConfig | null {
@@ -721,6 +723,10 @@ function guardarBloqueo(org: string, body: unknown): MergeGateSaved {
   }
   Object.assign(g, { enabled, min_severity });
   if (close_pr !== undefined) g.close_pr = close_pr && g.can_close_pr !== false;
+  // P1 (§6.5): sin token y encendido, E53 relee la protección («Comprobar de nuevo»). En fixtures, la de §9: GitHub exige
+  // «VanGUARD», los admins pueden saltárselo (demo sin «Do not allow bypassing») y la regla clásica no deja ver si exige PR.
+  if (statuses_pat === undefined && enabled && g.statuses_connection?.status === 'active')
+    g.protection = { required: 'yes', admins: 'bypass', pr_required: 'unknown', checked_at: new Date().toISOString() };
   return { gate: vistaConfig(org, gh, cfg)!.gate!, checks, probe_sha, probe_state };
 }
 const nombreRepoGh = (c: ConnectionPublic) => String(c.meta.repo_full_name ?? '');

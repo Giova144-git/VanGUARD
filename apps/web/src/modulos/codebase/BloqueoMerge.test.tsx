@@ -10,7 +10,7 @@ import { fixtures as fx, CodeReviewState, ConnectionPublic, type MergeGateConfig
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
 import { ApiError } from '@/lib/errores';
 import { opcionesAccionBloqueo, opcionesGuardarBloqueo } from '@/lib/mutaciones';
-import { AVISO_APAGAR_BLOQUEO, avisoAlApagar } from '@/lib/revision';
+import { AVISO_APAGAR_BLOQUEO, avisoAlApagar, textosProteccion } from '@/lib/revision';
 import { AvisoApagar, SimulacionEncender, alPulsarBloqueo, errorGuardarBloqueo } from './BloqueoMerge';
 import { TarjetaRevisionCodigo } from './TarjetaRevisionCodigo';
 
@@ -123,6 +123,37 @@ describe('BloqueoMerge · admin y viewer', () => {
   it('con error del token lo dice con su arreglo; un last_error fuera de contrato cae al texto por defecto', () => {
     expect(tarjeta(ADMIN, conGate({ state: 'error', last_error: 'forbidden' }))).toContain('márcale Commit statuses: Read and write');
     expect(tarjeta(ADMIN, conGate({ state: 'error', last_error: '__proto__' as never }))).toContain('El token de estados falló al publicar');
+  });
+});
+
+describe('BloqueoMerge · protección leída (P1)', () => {
+  const PROT = { required: 'yes', admins: 'bypass', pr_required: 'unknown', checked_at: '2026-10-24T19:50:00.000Z' } as const;
+
+  it('activo: el chip lo dice, la lectura sale con sus textos y «Comprobar de nuevo» solo para el admin', () => {
+    const html = tarjeta(ADMIN, conGate({ state: 'active', protection: PROT }));
+    expect(html).toContain('Activo: GitHub exige “VanGUARD”');
+    expect(html).toContain('GitHub exige “VanGUARD” para fusionar en la rama vigilada.');
+    expect(html).toContain('Los admins del repo pueden saltárselo.');
+    expect(html).toContain('con un token de solo lectura no lo vemos');
+    expect(html).toContain('Comprobado ');
+    expect(html).toContain('Comprobar de nuevo');
+    const viewer = tarjeta(VIEWER, conGate({ state: 'active', protection: PROT }));
+    expect(viewer).toContain('Los admins del repo pueden saltárselo.');
+    expect(viewer).not.toContain('Comprobar de nuevo');
+    // Sin token de estados activo no hay nada que comprobar.
+    expect(tarjeta(ADMIN, conGate({ state: 'needs_token', statuses_connection: null }))).not.toContain('Comprobar de nuevo');
+  });
+
+  it('otra fuente y valores fuera de contrato: el texto de «Any source»; lo desconocido no se pinta', () => {
+    expect(textosProteccion({ ...PROT, required: 'other_source', admins: 'enforced', pr_required: 'yes' }))
+      .toEqual(['GitHub exige “VanGUARD” de una app concreta. Elige “Any source” en ese check para que cuente el nuestro.', 'Vale también para los admins.']);
+    expect(textosProteccion({ ...PROT, required: '__proto__' as never, admins: 'zzz' as never, pr_required: 'no' })).toEqual([]);
+  });
+
+  it('con la protección leída, apagar solo avisa si GitHub puede estar exigiendo el check', () => {
+    expect(avisoAlApagar({ state: 'needs_protection', protection: { ...PROT, required: 'no' } })).toBe(false);
+    expect(avisoAlApagar({ state: 'active', protection: PROT })).toBe(true);
+    expect(avisoAlApagar({ state: 'unchecked', protection: null })).toBe(true);
   });
 });
 

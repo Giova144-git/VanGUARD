@@ -121,9 +121,28 @@ const ERROR_TOKEN_BLOQUEO: Record<string, string> = {
 };
 export const textoErrorTokenBloqueo = (e: unknown) => deMapa(ERROR_TOKEN_BLOQUEO, e, 'El token de estados falló al publicar: pega uno nuevo.');
 
-// Apagar el bloqueo (o «Revisar cada push») con GitHub exigiendo el check deja los PR en «Expected». P0 no lee la
-// protección: se avisa siempre que el bloqueo no esté apagado (P1: solo con protection.required = 'yes').
-export const avisoAlApagar = (g: Pick<MergeGateConfig, 'state'> | null | undefined) => !!g && g.state !== 'off';
+// Apagar el bloqueo (o «Revisar cada push») con GitHub exigiendo el check deja los PR en «Expected». Sin la protección
+// leída (P0, o nunca comprobada) se avisa siempre que el bloqueo no esté apagado; leída (P1), salvo que GitHub no lo exija.
+export const avisoAlApagar = (g: (Pick<MergeGateConfig, 'state'> & { protection?: MergeGateConfig['protection'] }) | null | undefined) =>
+  !!g && g.state !== 'off' && g.protection?.required !== 'no';
+
+// P1 (§6.1): lo que E53 leyó de la protección de la rama con el token de lectura. Valores fuera de contrato: nada.
+const PROTECCION_REQUERIDA: Record<string, string> = {
+  yes: 'GitHub exige “VanGUARD” para fusionar en la rama vigilada.',
+  other_source: 'GitHub exige “VanGUARD” de una app concreta. Elige “Any source” en ese check para que cuente el nuestro.',
+  no: 'GitHub aún no exige “VanGUARD”: un ✗ solo avisa. Sigue los pasos para proteger la rama.',
+  unknown: 'No pudimos leer la protección de la rama.',
+};
+const PROTECCION_ADMINS: Record<string, string> = {
+  bypass: 'Los admins del repo pueden saltárselo.', enforced: 'Vale también para los admins.',
+};
+export function textosProteccion(p: NonNullable<MergeGateConfig['protection']>): string[] {
+  return [
+    deMapa(PROTECCION_REQUERIDA, p.required, ''),
+    deMapa(PROTECCION_ADMINS, p.admins, ''),
+    p.pr_required === 'unknown' ? 'Comprueba que “Require a pull request before merging” está marcado: con un token de solo lectura no lo vemos.' : '',
+  ].filter(Boolean);
+}
 export const AVISO_APAGAR_BLOQUEO = 'Si GitHub exige el check “VanGUARD”, los pull requests quedarán en “Expected” y no se podrán fusionar. Quita el check en GitHub antes, o déjalo encendido.';
 
 // gate.error de una revisión (§6.4): por qué no se publicó su estado. Texto por defecto «No se publicó».

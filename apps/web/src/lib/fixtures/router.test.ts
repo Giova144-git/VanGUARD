@@ -518,12 +518,13 @@ describe('bloqueo de merge (E45 con gate, E53, E54)', () => {
   it('apagado: E45 dice off y E54 da 409; con la revisión apagada, off y E53 da 409 sin_revision', async () => {
     expect((await bloqueo({ ...BASE, enabled: false })).gate.state).toBe('off');
     expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 409, details: { reason: 'apagado' } });
-    expect((await bloqueo(BASE)).gate.state).toBe('unchecked');
+    // P1: encender sin token relee la protección («Comprobar de nuevo»): GitHub exige el check → active.
+    expect((await bloqueo(BASE)).gate).toMatchObject({ state: 'active', protection: { required: 'yes', admins: 'bypass', pr_required: 'unknown' } });
     await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: CONN_GITHUB, enabled: false });
     expect((await leer()).config?.gate?.state).toBe('off');
     expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', BASE)).toMatchObject({ status: 409, details: { reason: 'sin_revision' } });
     await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: CONN_GITHUB, enabled: true });
-    expect((await leer()).config?.gate?.state).toBe('unchecked');
+    expect((await leer()).config?.gate?.state).toBe('active');
   });
 
   it('quitar el token de estados en Conexiones deja el bloqueo pidiendo otro (needs_token)', async () => {

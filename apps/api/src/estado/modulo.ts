@@ -117,7 +117,7 @@ export function errorDeConexion(status: string, lastError: string | null): Error
 }
 
 // Último intento (done|failed) de los pasos del módulo, con las miradas de ESA auditoría (null = corrida vieja sin miradas).
-type Scan = { steps: unknown; coverage: unknown; finished_at: string | null; params?: unknown };
+type Scan = { steps: unknown; coverage: unknown; finished_at: string | null; params?: unknown; status?: string };
 export function ultimoPaso(scans: Scan[], nombres: ScanStep['name'][], modulo: Proveedor):
   { status: 'done' | 'failed'; miradas: Miradas | null } | null {
   for (const s of scans) {
@@ -183,13 +183,14 @@ async function estadoProveedor(env: CloudflareBindings, orgId: string, m: Provee
   const [fs, sc, cx] = await Promise.all([
     consultaHallazgos(admin, orgId, m),
     // Sin las mediciones de Rendimiento (kind lighthouse): ni dan la hora ni sacan de las 20 a las auditorías.
-    admin.from('scan_runs').select('steps, coverage, params, finished_at').eq('org_id', orgId).neq('kind', 'lighthouse')
+    admin.from('scan_runs').select('steps, coverage, params, finished_at, status').eq('org_id', orgId).neq('kind', 'lighthouse')
       .order('created_at', { ascending: false }).limit(20),
     admin.from('connections').select('id, provider, kind, status, last_error, meta, created_at').eq('org_id', orgId)
       .in('provider', provs).order('created_at', { ascending: true }).order('id', { ascending: true }).limit(20),
   ]);
   const scans = (sc.data ?? []) as Scan[];
-  const fin = scans.find((s) => s.finished_at)?.finished_at;
+  // «revisado» = la última auditoría TERMINADA (ux P0-2): una fallida o interrumpida no da la hora.
+  const fin = scans.find((s) => s.finished_at && s.status === 'succeeded')?.finished_at;
   const hora = fin ? iso(fin) : ahora.toISOString();
   const cifrasBase: CifraDato[] = [
     { tipo: `${m}_abiertos`, etiqueta: 'Hallazgos abiertos', n: null },

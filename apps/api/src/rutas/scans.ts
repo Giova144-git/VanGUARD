@@ -37,10 +37,24 @@ function reposDe(coverage: unknown): ScanRepo[] {
   return validas.slice(0, MAX_REPOS_GITHUB);
 }
 
-// Fila de scan_runs → ScanRun. coverage.detail y otros campos internos los quita zod; summary inválido → null. repos
-// solo si el paso repo dejó alguna entrada válida.
+// coverage.detail que sale de E12: SOLO cloudflare {modo, miradas} (modo sitio vs zona, cloudflare-por-url.md). El resto
+// (sha, connection_id, repos, cursores…) es interno y no sale; los repos van aparte en `repos`.
+function detallePublico(coverage: unknown): Record<string, unknown> | undefined {
+  const o = (x: unknown) => (x && typeof x === 'object' && !Array.isArray(x) ? x as Record<string, unknown> : {});
+  const cf = o(o(o(coverage).detail).cloudflare);
+  const miradas = Object.fromEntries(Object.entries(o(cf.miradas)).filter(([, v]) => typeof v === 'boolean'));
+  const modo = cf.modo === 'url' ? 'url' : cf.modo === 'zona' ? 'zona' : undefined;
+  if (!modo && !Object.keys(miradas).length) return undefined;
+  return { cloudflare: { ...(modo ? { modo } : {}), miradas } };
+}
+
+// Fila de scan_runs → ScanRun. De coverage.detail solo sale detallePublico; summary inválido → null. repos solo si el
+// paso repo dejó alguna entrada válida.
 export function aScanRun(f: Record<string, unknown>): ScanRun {
-  const cov = Coverage.safeParse(f.coverage);
+  const crudo = Coverage.safeParse(f.coverage);
+  const publico = crudo.success ? detallePublico(f.coverage) : undefined;
+  const cov = crudo.success ? { success: true as const, data: { seen: crudo.data.seen, total: crudo.data.total,
+    missing: crudo.data.missing, ...(publico ? { detail: publico } : {}) } } : crudo;
   const sum = AuditSummary.safeParse(f.summary);
   const score = typeof f.score === 'number' ? f.score : null;
   const t = (x: unknown) => (typeof x === 'string' ? iso(x) : null);

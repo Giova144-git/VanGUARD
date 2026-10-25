@@ -7,6 +7,8 @@ import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { calcularCobertura } from '../scans/cobertura.ts';
+import { esConexionSimulador } from '../lib/simulador.ts';
+import { esVistaPrevia } from '../mw/prod-host.ts';
 
 // E5 · GET /api/orgs/:org/overview · user · P0. Puntaje sobre los hallazgos open (marcar «corregido» lo mueve sin
 // re-auditar), cobertura de §15.9, «ahora» = hasta 10 filas: incidentes abiertos y luego hallazgos, por severidad.
@@ -22,7 +24,7 @@ overview.get('/orgs/:org/overview', async (c) => c.json(await armarOverview(c.en
 export async function armarOverview(env: CloudflareBindings, orgId: string, rid: string): Promise<Overview> {
   const admin = db(env);
   const abiertos = () => admin.from('findings').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('status', 'open');
-  const [[fs, top, inc, nInc, last, cov, ai], porSeveridad] = await Promise.all([
+  const [[fs, top, inc, nInc, last, cov, ai, ok, ing], porSeveridad] = await Promise.all([
     Promise.all([
       // Puntaje sobre todos los open, como el paso puntaje (mismo tope y solo las columnas que usa score()).
       admin.from('findings').select('module, severity, confirmed').eq('org_id', orgId).eq('status', 'open')
@@ -39,6 +41,11 @@ export async function armarOverview(env: CloudflareBindings, orgId: string, rid:
       calcularCobertura(env, orgId),
       env.IA_CORTE === '1' ? Promise.resolve({ data: { enabled: false, level: 'off' }, error: null })
         : admin.rpc('vg_ai_status', { p_org: orgId }),
+      // ux-revision-develop P0-1/P0-2: la última full_audit TERMINADA y lo que miró cada módulo en ella.
+      admin.from('scan_runs').select('id, steps, finished_at').eq('org_id', orgId).eq('kind', 'full_audit').eq('status', 'succeeded')
+        .order('finished_at', { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
+      // P0-4: las conexiones ingest de la org (la del simulador de E57 no es tráfico de la app del cliente).
+      admin.from('connections').select('id, meta').eq('org_id', orgId).eq('provider', 'ingest').limit(20),
     ]),
     // counts exactos por severidad (5 head, sin filas): no dependen del tope de arriba.
     Promise.all(Severity.options.map((s) => abiertos().eq('severity', s))),
@@ -63,10 +70,39 @@ export async function armarOverview(env: CloudflareBindings, orgId: string, rid:
   ].slice(0, 10);
   const l = last.data as { id: string; status: string; finished_at: string | null } | null;
   const aiData = (ai.data ?? null) as { enabled?: boolean; level?: string } | null;
+  const buena = ok.error ? null : (ok.data as { id: string; steps: unknown; finished_at: string | null } | null);
+  // Último evento de ingesta de las conexiones de la app (sin la del simulador). Sin conexiones, sin consulta: null.
+  const ingesta = ing.error ? [] : ((ing.data ?? []) as { id: string; meta: unknown }[]).filter((x) => !esConexionSimulador(x));
+  let ultimaIngesta: string | null = null;
+  if (ingesta.length) {
+    const { data: h, error: eh } = await admin.from('edge_hits').select('ts').eq('org_id', orgId)
+      .in('connection_id', ingesta.map((x) => x.id)).order('ts', { ascending: false }).limit(1).maybeSingle();
+    if (eh) log('warn', 'overview.ingesta_error', { rid, code: eh.code ?? null });
+    const ts = (h as { ts?: string } | null)?.ts;
+    ultimaIngesta = ts ? iso(ts) : null;
+  }
+  if (ok.error || ing.error) log('warn', 'overview.ux_error', { rid, code: ok.error?.code ?? ing.error?.code ?? null });
   return Overview.parse({
     score: p?.score ?? null, band: p?.band ?? null, coverage: cov, counts, open_incidents: nInc.count ?? incidentes.length,
     last_scan: l ? { id: l.id, status: l.status, finished_at: l.finished_at ? iso(l.finished_at) : null } : null,
     ...(aiData ? { ai: { enabled: aiData.enabled === true, level: aiData.level ?? 'off' } } : {}),
     ahora,
+    ...(ok.error ? {} : {
+      last_ok_scan: buena?.finished_at ? { id: buena.id, finished_at: iso(buena.finished_at) } : null,
+      module_checks: revisionModulos(buena?.steps),
+    }),
+    ...(ing.error ? {} : { last_ingest_at: ultimaIngesta }),
+    preview: esVistaPrevia(env),
   });
+}
+
+/** P0-1: lo que miró cada módulo en la última full_audit terminada. done = su paso quedó done; fallido = failed;
+ *  sin_revisar = skipped, pending o sin auditoría terminada. Rendimiento no es un paso de full_audit: no sale. */
+export function revisionModulos(steps: unknown): Partial<Record<'supabase' | 'cloudflare' | 'codebase', 'done' | 'sin_revisar' | 'fallido'>> {
+  const xs = (Array.isArray(steps) ? steps : []) as { name?: unknown; status?: unknown }[];
+  const de = (paso: string) => {
+    const s = xs.find((x) => x.name === paso)?.status;
+    return s === 'done' ? 'done' as const : s === 'failed' ? 'fallido' as const : 'sin_revisar' as const;
+  };
+  return { supabase: de('supabase'), cloudflare: de('cloudflare'), codebase: de('repo') };
 }

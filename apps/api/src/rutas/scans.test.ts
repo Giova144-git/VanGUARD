@@ -94,7 +94,7 @@ describe('E11 · POST /api/orgs/:org/scans con kind zip', () => {
       expect(r.status).toBe(503);
       const e = await error(r);
       expect(e.message).toBe('Las auditorías no corren en la vista previa');
-      expect(e.details?.reason).toBe('sin_cola');
+      expect(e.code).toBe('preview_unsupported');
     }
     expect(filas).toEqual([]);
     expect(doble.ops.some((o) => o.table === 'scan_runs' && o.action !== 'select')).toBe(false);

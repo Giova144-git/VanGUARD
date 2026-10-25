@@ -456,6 +456,20 @@ describe('despachador · 2.º mensaje «Modo bajo ataque»', () => {
     expect(filasNotif().some((f) => f.template === 'bajo_ataque_v1')).toBe(false);
   });
 
+  it('el 2.º mensaje gasta del tope por hora: si los avisos lo llenan (8 usados + 2 = 10), la oferta no sale', async () => {
+    usadas = 8;
+    await avisar();
+    expect(enviados().filter((m) => m.interactive?.header.text.startsWith('ALERTA'))).toHaveLength(2);
+    expect(deOferta()).toEqual([]);
+    expect(filasNotif().some((f) => f.template === 'bajo_ataque_v1')).toBe(false);
+    expect(lineas()).toContain('"motivo":"cap"');
+    // Con un hueco más, sale.
+    usadas = 7;
+    doble.ops.length = 0;
+    await avisar();
+    expect(filasNotif().filter((f) => f.template === 'bajo_ataque_v1')).toHaveLength(1);
+  });
+
   it('approvals falla → el aviso sale como texto y la oferta NO sale (sin su botón no sirve): failed sin_botones', async () => {
     errorApprovals = { code: '57014' };
     await avisar();

@@ -187,7 +187,10 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     if (m) porModulo[m] = (porModulo[m] ?? 0) + 1;
   }
   const ctx: Despacho = { env, admin, orgId, incidentId, inc, rid, ahora, k, porModulo, notificado: inc.notified_at !== null,
-    ipBloqueo: accion ? ipBloqueo : null };
+    ipBloqueo: accion ? ipBloqueo : null,
+    // Lo que queda del tope de WhatsApp de la hora tras los avisos que el plan deja salir (el 2.º mensaje también gasta).
+    cupoWhatsapp: topesDeOrg(org).whatsapp - (u.count ?? 0)
+      - plan.envios.filter((x) => x.channel === 'whatsapp' && x.status === 'queued').length };
   // ≤ 5 contactos (E26): en paralelo, cada uno con su propia fila y su propio manejo de errores.
   const salieron = await Promise.all(plan.envios.filter((p) => p.channel === 'whatsapp' && !p.p1).map(async (p) => {
     const contacto = porId.get(p.contact_id);
@@ -213,6 +216,7 @@ type Despacho = {
   env: CloudflareBindings; admin: Cliente; orgId: string; incidentId: string; inc: Incidente; rid: string; ahora: number;
   k: number; porModulo: Partial<Record<Module, number>>; notificado: boolean;
   ipBloqueo: string | null;   // IP del botón blk, o null si no se ofrece
+  cupoWhatsapp: number;       // WhatsApp que aún caben en el tope de la hora de la org
 };
 
 // ¿Tiene la org una conexión Cloudflare kind:'action' activa? Un error de lectura cuenta como no (sin botón blk).
@@ -377,6 +381,11 @@ async function ofrecerBajoAtaque(d: Despacho, conAviso: readonly Contacto[]) {
     // Corte puro antes de leer nada: sin CF_IP_FLOOD, resuelto o sin host canónico no se ofrece nunca.
     if (!ofreceBajoAtaque(d.inc, MIN_IPS_BAJO_ATAQUE).ofrece) return;
     if (d.env.VG_ENV !== 'production' || !kapsoConfigurado(d.env)) return;
+    // El 2.º mensaje gasta del mismo tope por hora que los avisos (TOPES_AVISOS.whatsapp): sin cupo, no sale.
+    if (d.cupoWhatsapp <= 0) {
+      log('info', 'despacho.oferta_omitida', { ...registro, motivo: 'cap' });
+      return;
+    }
     const contacto = conAviso.find((c) => ventanaAbierta(d.env, c.wa_last_inbound_at, d.ahora));
     if (!contacto) {
       log('info', 'despacho.oferta_omitida', { ...registro, motivo: 'window_closed' });

@@ -9,8 +9,9 @@
 // (el navegador muere, el móvil mata la pestaña).
 //
 // Si la copia caducó igual (el equipo dormía), la web prepara otra sola, una vez: destinoAlCaducar.
-// Solo el tipo: main.tsx importa este módulo, y un import estático del contrato metería zod en un chunk que corre antes que
-// lib/zod-sin-jit (el build lo rechaza: vg-zod-sin-jit en vite.config.ts). El esquema se carga con import() al unirse.
+// Solo el tipo: main.tsx importa este módulo y no puede arrastrar el contrato (zod) ni de forma estática (correría antes que
+// lib/zod-sin-jit: vg-zod-sin-jit rechaza el build) ni con import() (desde /demo, el chunk del contrato se evalúa en un
+// orden circular con el de guardas y lanza). La respuesta de E4 se valida a mano en comoDemoJoin.
 import type { DemoJoin } from '@vanguard/contracts';
 import { api } from './api';
 import { esApiError } from './errores';
@@ -144,6 +145,14 @@ export const NO_DISPONIBLE = 'La demo abierta no está disponible ahora. Entra c
 export const DEMASIADAS = 'Hay demasiadas demos abiertas desde tu red. Espera unos minutos y vuelve a intentarlo';
 export class ErrorDemo extends Error {}
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** E4 (DemoJoin del contrato): { org_id: uuid, sandbox?: boolean }. Cualquier otra forma es «no disponible». */
+export function comoDemoJoin(x: unknown): DemoJoin {
+  const o = (x && typeof x === 'object' ? x : {}) as { org_id?: unknown; sandbox?: unknown };
+  if (typeof o.org_id !== 'string' || !UUID.test(o.org_id)) throw new ErrorDemo(NO_DISPONIBLE);
+  return typeof o.sandbox === 'boolean' ? { org_id: o.org_id, sandbox: o.sandbox } : { org_id: o.org_id };
+}
+
 type AuthDemo = {
   getSession: () => Promise<{ data: { session: unknown } }>;
   signInAnonymously: () => Promise<{ data: { session: unknown }; error: { status?: number } | null }>;
@@ -163,8 +172,7 @@ export async function unirseADemo(auth: AuthDemo = supabase.auth, pedir: typeof 
     invitadoNuevo = true;
   }
   try {
-    const { DemoJoin: esquema } = await import('@vanguard/contracts');
-    return await pedir('/api/demo/join', { method: 'POST', body: {}, esquema });
+    return comoDemoJoin(await pedir<unknown>('/api/demo/join', { method: 'POST', body: {} }));
   } catch (e) {
     // La purga ya borró a este invitado (401 de E4 con su sesión vieja): se olvida y se entra como invitado nuevo, una vez.
     if (anonimaVieja && reintento && esApiError(e) && e.status === 401) {

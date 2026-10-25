@@ -16,7 +16,7 @@ import { ErrorBloque } from '@/componentes/vg/Vacio';
 import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
-import { useHallazgos, useOverview, useScan } from '@/lib/consultas';
+import { useDeltaAuditoria, useHallazgos, useOverview, useScan } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
@@ -25,6 +25,7 @@ import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
 import { useRepoDeConexion } from '@/lib/repos';
+import { Cambios } from './Cambios';
 import { PINTA_PASO, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
@@ -183,6 +184,9 @@ function Corrida({ id }: { id: string }) {
   const repoDe = useRepoDeConexion(org.id);   // chip del repo con 2 o más (varias-codebases §6.4)
   const { auditar, ocupado, error } = useLanzarYNavegar();
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
+  // «Nuevo» en «Hallazgos abiertos»: nuevo frente a la auditoría anterior (E51; sin foto o con 404, sin etiqueta).
+  const delta = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded').data;
+  const nuevos = useMemo(() => new Set(delta?.available && !delta.first ? delta.new.items.map((i) => i.finding_id) : []), [delta]);
   const run = q.data;
   if (!esId(id) || (q.isError && esApiError(q.error) && q.error.status === 404))
     return <NoEncontrada texto="Esta auditoría no existe o no es de esta organización" />;
@@ -223,6 +227,7 @@ function Corrida({ id }: { id: string }) {
           band={run.band ?? (overview.data?.last_scan?.id === run.id ? overview.data.band : null)}
           coverage={run.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} /></section>
       ) : null}
+      {terminada ? <Cambios scanId={run.id} /> : null}
       {terminada ? <Resumen run={run} porId={porId} /> : null}
       {terminada && ordenados.length ? (
         <section className="flex flex-col gap-3" aria-labelledby="hallazgos-abiertos">
@@ -232,6 +237,7 @@ function Corrida({ id }: { id: string }) {
               <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
                 <ChapaSeveridad severity={f.severity} />
                 <ChipRepo repo={repoDe(f.connection_id)} />
+                {nuevos.has(f.id) ? <Etiqueta texto="Nuevo" rol="info" /> : null}
                 <div className="flex min-w-0 flex-1 flex-col">
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>

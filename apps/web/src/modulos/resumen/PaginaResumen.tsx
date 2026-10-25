@@ -18,6 +18,7 @@ import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
+import { DesdeAnterior } from '@/modulos/evolucion/DesdeAnterior';
 import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
@@ -120,6 +121,7 @@ export default function PaginaResumen() {
             <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}
               <Link to={`/o/${org.id}/audit/${encodeURIComponent(o.last_scan.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver</Link></span>
           ) : null}
+          <DesdeAnterior org={org.id} ultima={o?.last_scan ?? null} />
         </div>
       </section>
 

@@ -3,7 +3,7 @@
 import type { IdNav } from './nav';
 
 export const SECUENCIA_G: Record<string, IdNav> = {
-  r: 'overview', s: 'supabase', c: 'cloudflare', o: 'codebase', w: 'wiki', p: 'performance', a: 'audit', i: 'incidents',
+  r: 'overview', s: 'supabase', c: 'cloudflare', o: 'codebase', w: 'wiki', p: 'performance', a: 'audit', e: 'evolution', i: 'incidents',
 };
 export const ESPERA_G_MS = 1500;   // tiempo para la segunda tecla tras «g»
 

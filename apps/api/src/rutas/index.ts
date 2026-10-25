@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.ts';
 import { actions } from './actions.ts';
+import { bajoAtaque } from './bajo-ataque.ts';
 import { connections } from './connections.ts';
 import { contacts } from './contacts.ts';
 import { demo } from './demo.ts';
@@ -38,6 +39,8 @@ rutas.route('/', notifications);
 rutas.route('/', traffic);
 rutas.route('/', incidents);
 rutas.route('/', actions);
+// E55–E56 (modo-bajo-ataque.md): esta línea es el interruptor del corte de §13.1 (sin ella E55 → 404 y no hay tarjeta).
+rutas.route('/', bajoAtaque);
 rutas.route('/', wiki);
 rutas.route('/', exportRuta);
 rutas.route('/', mcpTokens);

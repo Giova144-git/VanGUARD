@@ -309,6 +309,17 @@ describe('deshacerBloqueos (E22, E10 y caducidad)', () => {
     expect(MENSAJE_DESHACER.rechazado).toContain('quítala a mano');
   });
 
+  it('una fila de bajo ataque (previous.scope) → invalido sin tocar Cloudflare: un DELETE de access rule daría 404 y la «desharía»', async () => {
+    const modo = accion('u1', { provider_ref: 'd'.repeat(32),
+      previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ruleset_id: 'b'.repeat(32) } });
+    const { resultados, subpeticiones } = await deshacerBloqueos(envDoble().env, [modo], { rid: 'r' });
+    expect(resultados.get('u1')).toBe('invalido');
+    expect(subpeticiones).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(cred.withSecret).not.toHaveBeenCalled();
+    expect(de('actions', 'update')).toHaveLength(0);
+  });
+
   it('sin credencial o sobre ilegible → sin_credencial (permanente); material de claves sin leer → caido (se reintenta)', async () => {
     cred.withSecret.mockImplementation(async () => { throw new ApiError('not_found', 'x'); });
     expect((await deshacerBloqueos(envDoble().env, [accion('a1')], { rid: 'r' })).resultados.get('a1')).toBe('sin_credencial');

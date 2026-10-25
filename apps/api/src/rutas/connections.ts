@@ -3,6 +3,7 @@ import { ConnectionCreate, ConnectionCreated, ConnectionPublic, ConnectionTest, 
 import { guardKey, type KeyRejection } from '@vanguard/core';
 import { newIngestSecret, type SecretCtx } from '@vanguard/core/crypto';
 import { deshacerBloqueos, EN_CURSO_MS } from '../actions/block-ip.ts';
+import { deshacerBajoAtaque } from '../actions/under-attack.ts';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
 import { createConnectionWithSecret, withSecret } from '../lib/credentials.ts';
@@ -239,8 +240,10 @@ connections.delete('/orgs/:org/connections/:id', requireAdmin, async (c) => {
     // Antes de borrar un token de acciones se deshacen (como E22) sus bloqueos executed; si alguno no se puede retirar,
     // 409 y no se borra nada (§05.8). Retirar toca Cloudflare: solo desde el host de producción (S15 15.3). Un
     // executeBlock en marcha (proposed reciente) aún no tiene previous.connection_id: también 409 hasta que termine.
+    // Por tipo (modo-bajo-ataque.md D10): block_ip → deshacerBloqueos (sin cambios); under_attack_on → deshacerBajoAtaque.
+    // Mandar una regla de configuración a deshacerBloqueos daría 404 en access_rules, la «desharía» y seguiría en Cloudflare.
     const [{ data: activas, error: ea }, enCurso] = await Promise.all([
-      admin.from('actions').select('id, org_id, provider_ref, previous')
+      admin.from('actions').select('id, org_id, kind, provider_ref, previous')
         .eq('org_id', orgId).eq('status', 'executed').eq('previous->>connection_id', fila.id).limit(MAX_DESHACER_E10 + 1),
       admin.from('actions').select('id').eq('org_id', orgId).eq('status', 'proposed')
         .gte('created_at', new Date(Date.now() - EN_CURSO_MS).toISOString()).limit(1),
@@ -249,11 +252,17 @@ connections.delete('/orgs/:org/connections/:id', requireAdmin, async (c) => {
     if (Array.isArray(enCurso.data) && enCurso.data.length) {
       throw new ApiError('conflict', 'Se está aplicando un bloqueo ahora mismo. Vuelve a intentarlo en un minuto.', { reason: 'block_in_progress' });
     }
-    const lista = (Array.isArray(activas) ? activas : []) as { id: string; org_id: string; provider_ref: string | null; previous: unknown }[];
+    const lista = (Array.isArray(activas) ? activas : []) as { id: string; org_id: string; kind?: string; provider_ref: string | null;
+      previous: unknown }[];
     if (lista.length) {
       if (!esHostProduccion(c)) throw new ApiError('conflict', 'Hay bloqueos activos: quítalos desde officialvanguard.com antes de borrar este token');
       const tanda = lista.slice(0, MAX_DESHACER_E10);
-      const { resultados } = await deshacerBloqueos(c.env, tanda, { rid: c.get('rid') });
+      const modos = tanda.filter((a) => a.kind === 'under_attack_on');
+      const bloqueos = tanda.filter((a) => a.kind !== 'under_attack_on');
+      const resultados = new Map([
+        ...(bloqueos.length ? (await deshacerBloqueos(c.env, bloqueos, { rid: c.get('rid') })).resultados : []),
+        ...(modos.length ? (await deshacerBajoAtaque(c.env, modos, { rid: c.get('rid') })).resultados : []),
+      ]);
       const fallidos = tanda.filter((a) => resultados.get(a.id) !== 'deshecho').length;
       log('info', 'connection.bloqueos_retirados', { rid: c.get('rid'), retirados: tanda.length - fallidos, fallidos });
       if (fallidos) throw new ApiError('conflict', 'Hay bloqueos activos que no pudimos retirar', { reason: 'unblock_failed' });

@@ -1,5 +1,6 @@
 import { ORDEN_REGLAS_EDGE, RESOLVER_SIN_EVENTOS_MS } from '@vanguard/core';
 import { deshacerBloqueos, PERMANENTES } from '../actions/block-ip.ts';
+import { deshacerBajoAtaque, retirarHuerfanaBajoAtaque } from '../actions/under-attack.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
@@ -17,6 +18,11 @@ import { SIN_AVANCE_MS } from '../wiki/corridas.ts';
 // reintentarla). Uno pasajero (red, 5xx, 429) la deja executed con previous.intentos y previous.reintento_en (espera de
 // 1, 2, 4… min): mientras espera se salta, así unas filas atascadas no tapan las de otras orgs; al MAX_REINTENTOS pasa a
 // failed. Solo con VG_ENV=production (cron sin petición, S15 15.3): en local y previews no se toca Cloudflare.
+// Modo bajo ataque (modo-bajo-ataque.md §8): la misma caducidad lee también under_attack_on y la retira con
+// deshacerBajoAtaque (DELETE de la regla de configuración); de las ≤ 5 filas por minuto, ≤ 2 son de bajo ataque (con la
+// caducidad dentro de la regla no corre prisa). Después, solo si la caducidad de este minuto gastó ≤ 15 subpeticiones,
+// una propuesta huérfana (proposed de bajo ataque de > 2 min: el Worker murió entre el POST y el UPDATE) se reconcilia
+// por su ref y queda failed (retirarHuerfanaBajoAtaque, ≤ 6).
 // SB_DB_DOWN se cierra en su monitor (2 lecturas sanas seguidas), no aquí.
 // Vigilante (0011, vg_vigilar_corridas): una corrida cuyo mensaje de vg-jobs se perdió (dev-node --watch reiniciado con
 // la cola en memoria, un mensaje que no llegó ni a la DLQ) se quedaría queued/running para siempre. Una sola RPC acotada
@@ -27,10 +33,14 @@ import { SIN_AVANCE_MS } from '../wiki/corridas.ts';
 // misma sentencia que escribe: un paso que avanza a la vez gana. Corre en todos los entornos (solo toca la base). Mientras
 // la 0011 no esté aplicada (PGRST202), respaldo en un solo UPDATE acotado (orden por id + limit), una tabla por minuto
 // (wiki en los pares, auditorías en los impares) para no pasar de 2 subpeticiones; sin arreglar steps.
-// Presupuesto del minuto: incidentes ≤ 2 + vigilante ≤ 2 + caducidad ≤ 23 = 27 subpeticiones (tope del equipo: 40).
+// Presupuesto del minuto (por subpeticiones contadas, no por filas): incidentes ≤ 2 + vigilante ≤ 2 + caducidad ≤ 22
+// (1 lectura + por cada función de deshacer 2 por conexión, 1 por regla y ≤ 2 escrituras + 1 por fila no retirada; 5
+// filas en 5 conexiones) + huérfana ≤ 6 solo si la caducidad gastó ≤ 15 → peor caso ≤ 26 (tope del equipo: 40).
 
 export const LIMITE_CIERRE = 200;
-export const LIMITE_CADUCIDAD = 5;           // ≤ 5 reglas por minuto (§08.8): ≤ 23 subpeticiones en el peor caso
+export const LIMITE_CADUCIDAD = 5;           // ≤ 5 reglas por minuto (§08.8), de los dos tipos
+export const LIMITE_CADUCIDAD_BAJO_ATAQUE = 2;   // de ellas, ≤ 2 under_attack_on (la regla ya caduca sola)
+export const PRESUPUESTO_HUERFANA = 15;      // la huérfana solo corre si la caducidad gastó ≤ 15 subpeticiones
 export const CANDIDATOS_CADUCIDAD = 50;      // se leen más para saltar las que esperan su reintento
 export const MAX_REINTENTOS = 6;             // ~1 h de esperas (1+2+4+8+16+32 min) antes de rendirse
 export const VIGILANTE_WIKI_MS = SIN_AVANCE_MS;            // 10 min sin avanzar ni esperar
@@ -49,8 +59,8 @@ export type ResultadoHousekeeping = {
   subpeticiones: number;
   modo: 'rpc' | 'respaldo' | null;
   error: string | null;       // código corto (de Postgres/PostgREST o nuestro), nunca un mensaje
-  deshechos: number;          // bloqueos caducados retirados de Cloudflare
-  fallidos: number;           // bloqueos que no se pudieron retirar y quedan failed
+  deshechos: number;          // bloqueos y modos bajo ataque caducados retirados de Cloudflare
+  fallidos: number;           // los que no se pudieron retirar y quedan failed
   vigilante: 'rpc' | 'respaldo' | null;
   interrumpidas: { wiki: number; scans: number };   // corridas que el vigilante dejó failed
 };
@@ -140,23 +150,43 @@ function contarInterrumpidas(r: ResultadoHousekeeping, filas: Obj[]) {
 
 async function caducarBloqueos(env: CloudflareBindings, now: Date, r: ResultadoHousekeeping) {
   if (env.VG_ENV !== 'production') return;
+  const antes = r.subpeticiones;
+  await caducar(env, now, r);
+  if (r.subpeticiones - antes <= PRESUPUESTO_HUERFANA) {
+    const h = await retirarHuerfanaBajoAtaque(env, { rid: 'cron', ahora: now.getTime() });   // nunca lanza
+    r.subpeticiones += h.subpeticiones;
+  }
+}
+
+async function caducar(env: CloudflareBindings, now: Date, r: ResultadoHousekeeping) {
   try {
     const admin = db(env);
     const t = now.getTime();
-    const { data, error } = await admin.from('actions').select('id, org_id, provider_ref, previous')
-      .eq('status', 'executed').eq('kind', 'block_ip').lt('expires_at', now.toISOString())
+    const { data, error } = await admin.from('actions').select('id, org_id, kind, provider_ref, previous')
+      .eq('status', 'executed').in('kind', ['block_ip', 'under_attack_on']).lt('expires_at', now.toISOString())
       .order('expires_at').limit(CANDIDATOS_CADUCIDAD);
     r.subpeticiones++;
     if (error) {
       r.error ??= error.code ?? 'actions';
       return;
     }
-    type Fila = { id: string; org_id: string; provider_ref: string | null; previous: unknown };
-    const filas = ((Array.isArray(data) ? data : []) as Fila[])
-      .filter((f) => !(Date.parse(String(obj(f.previous).reintento_en ?? '')) > t)).slice(0, LIMITE_CADUCIDAD);
+    type Fila = { id: string; org_id: string; kind?: string; provider_ref: string | null; previous: unknown };
+    const modo = (f: Fila) => f.kind === 'under_attack_on';
+    // Las más viejas primero, ≤ LIMITE_CADUCIDAD en total y ≤ LIMITE_CADUCIDAD_BAJO_ATAQUE de bajo ataque.
+    const filas: Fila[] = [];
+    let modos = 0;
+    for (const f of (Array.isArray(data) ? data : []) as Fila[]) {
+      if (filas.length >= LIMITE_CADUCIDAD) break;
+      if (Date.parse(String(obj(f.previous).reintento_en ?? '')) > t) continue;
+      if (modo(f) && modos++ >= LIMITE_CADUCIDAD_BAJO_ATAQUE) continue;
+      filas.push(f);
+    }
     if (!filas.length) return;
-    const { resultados, subpeticiones } = await deshacerBloqueos(env, filas, { rid: 'cron', ahora: t });
-    r.subpeticiones += subpeticiones;
+    const bloqueos = filas.filter((f) => !modo(f)), enModo = filas.filter(modo);
+    const a = bloqueos.length ? await deshacerBloqueos(env, bloqueos, { rid: 'cron', ahora: t }) : null;
+    const b = enModo.length ? await deshacerBajoAtaque(env, enModo, { rid: 'cron', ahora: t }) : null;
+    const resultados = new Map([...(a?.resultados ?? []), ...(b?.resultados ?? [])]);
+    r.subpeticiones += (a?.subpeticiones ?? 0) + (b?.subpeticiones ?? 0);
     r.deshechos = filas.filter((f) => resultados.get(f.id) === 'deshecho').length;
     // Una escritura por fila no retirada (≤ 5): cada una guarda su previous con el intento o el motivo.
     const pendientes = filas.filter((f) => resultados.get(f.id) !== 'deshecho');
@@ -169,14 +199,17 @@ async function caducarBloqueos(env: CloudflareBindings, now: Date, r: ResultadoH
         : { previous: { ...prev, intentos, reintento_en: new Date(t + esperaMs(intentos)).toISOString() } };
       const u = await admin.from('actions').update(cambio).eq('id', f.id).eq('org_id', f.org_id).eq('status', 'executed');
       if (u.error) r.error ??= u.error.code ?? 'update';
-      // La regla puede seguir en Cloudflare: queda en el log de errores (sin la IP) y como failed en la app.
-      else if (rendida) log('error', 'bloqueo.caducidad_fallida', { action_id: f.id, motivo, intentos });
+      // La regla puede seguir en Cloudflare: queda en el log de errores (sin la IP) y como failed en la app. Una regla de
+      // bajo ataque con la caducidad dentro ya no actúa; E55 la enseña como retirada_fallida con los pasos para borrarla.
+      else if (rendida) {
+        log('error', modo(f) ? 'bajo_ataque.caducidad_fallida' : 'bloqueo.caducidad_fallida', { action_id: f.id, motivo, intentos });
+      }
       return !u.error && rendida;
     }));
     r.subpeticiones += pendientes.length;
     r.fallidos = escritas.filter(Boolean).length;
     log(r.fallidos ? 'warn' : 'info', 'bloqueos.caducados', { deshechos: r.deshechos, fallidos: r.fallidos,
-      reintentos: pendientes.length - r.fallidos });
+      reintentos: pendientes.length - r.fallidos, bajo_ataque: enModo.length });
   } catch (e) {
     r.error ??= e instanceof ApiError ? e.code : e instanceof Error ? e.name : 'desconocido';
   }

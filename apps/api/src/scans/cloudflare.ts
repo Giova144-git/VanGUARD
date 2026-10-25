@@ -1,4 +1,6 @@
 import type { PermCheck } from '@vanguard/contracts';
+import { hostCanonico, reglaBajoAtaque, TTL_BAJO_ATAQUE_S } from '@vanguard/core';
+import { cabecerasCf, mutarEnSeco } from '../actions/cf-seco.ts';
 import type { FnPaso } from '../jobs.ts';
 import { withSecret } from '../lib/credentials.ts';
 import { db } from '../lib/db.ts';
@@ -140,11 +142,53 @@ export async function probarCloudflareLectura(token: string, zoneId: string): Pr
   };
 }
 
-// Token de acciones («Modo blindaje»): solo el GET de access rules al conectar; la escritura se prueba al confirmar.
+// Sonda de Zone · Config Rules · Edit (modo-bajo-ataque.md §5, E9): GET del entrypoint de http_config_settings y la
+// misma regla que mandaría E21 (con http.request.timestamp.sec en la expresión) por mutarEnSeco: dry_run, nunca escribe.
+// Solo un 403 guarda config_rules_edit:false; un fallo de red, un 4xx de validación o un token inválido omiten la clave
+// (E55 dirá sin_probar y E56 lo valida): un fallo pasajero no esconde el botón. required:false: un token con solo
+// Firewall Services · Edit sigue conectando. 2 subpeticiones (+1 si se colara una escritura y hubiera que borrarla).
+export const REF_SONDA = 'vg_ua_sonda';
+type Sonda = { check: PermCheck; capacidad: { config_rules_edit?: boolean } };
+async function sondaConfigRules(token: string, zoneId: string, zona: unknown): Promise<Sonda> {
+  const mal = (error_code: PermCheck['error_code'], capacidad: Sonda['capacidad'] = {}): Sonda =>
+    ({ check: { permission: 'config_rules_edit', ok: false, required: false, error_code }, capacidad });
+  if (!/^[a-f0-9]{32}$/.test(zoneId)) return mal('invalid');
+  const host = hostCanonico(`vanguard-sonda.${typeof zona === 'string' ? zona : ''}`) ?? 'vanguard-sonda.example.com';
+  const regla = reglaBajoAtaque(host, REF_SONDA, 'VanGUARD · sonda de permiso (dry_run, no se publica)',
+    new Date(Date.now() + TTL_BAJO_ATAQUE_S * 1000));
+  let ep: Response;
+  try {
+    ep = await pedir(`${CF}/zones/${zoneId}/rulesets/phases/http_config_settings/entrypoint`, { headers: cabecerasCf(token) }, PLAZO);
+  } catch {
+    return mal('unavailable');
+  }
+  let id: unknown = null;
+  if (ep.ok) { try { id = ((await ep.json()) as { result?: { id?: unknown } }).result?.id; } catch { id = null; } }
+  else await ep.body?.cancel();
+  if (ep.status === 403) return mal('forbidden', { config_rules_edit: false });
+  if (!ep.ok && ep.status !== 404) return mal(ep.status === 408 || ep.status === 429 || ep.status >= 500 ? 'unavailable' : 'invalid');
+  const seco = ep.ok && typeof id === 'string' && /^[A-Za-z0-9]{1,64}$/.test(id)
+    ? await mutarEnSeco(token, zoneId, `/rulesets/${id}/rules`, regla, REF_SONDA)
+    : ep.status === 404
+      ? await mutarEnSeco(token, zoneId, '/rulesets',
+        { name: 'default', kind: 'zone', phase: 'http_config_settings', rules: [regla] }, REF_SONDA)
+      : { tipo: 'sin_respuesta' as const };
+  if (seco.tipo === 'valida') {
+    return { check: { permission: 'config_rules_edit', ok: true, required: false }, capacidad: { config_rules_edit: true } };
+  }
+  if (seco.tipo === 'sin_permiso') return mal('forbidden', { config_rules_edit: false });
+  if (seco.tipo === 'rechazada' || seco.tipo === 'token_invalido') return mal('invalid');
+  return mal('unavailable');
+}
+
+// Token de acciones («Modo blindaje»): el GET de access rules al conectar (la escritura se prueba al confirmar) y, en
+// paralelo, la sonda de Config Rules · Edit del modo bajo ataque.
 export async function probarCloudflareAcciones(token: string, zoneId: string, lectura: Sondeo): Promise<Sondeo> {
-  const fw = await sondear(`${CF}/zones/${zoneId}/firewall/access_rules/rules?per_page=5`,
-    { headers: { Authorization: `Bearer ${token}` } }, PLAZO);
-  const checks = [check('firewall_read', true, fw)];
+  const [fw, cfg] = await Promise.all([
+    sondear(`${CF}/zones/${zoneId}/firewall/access_rules/rules?per_page=5`, { headers: { Authorization: `Bearer ${token}` } }, PLAZO),
+    sondaConfigRules(token, zoneId, lectura.meta.zone_name),
+  ]);
+  const checks = [check('firewall_read', true, fw), cfg.check];
   const v = veredicto(checks);
   const meta = { ...lectura.meta };
   delete meta.cf_cursor;
@@ -153,7 +197,7 @@ export async function probarCloudflareAcciones(token: string, zoneId: string, le
     ...v,
     ...(v.estado === 'rechazado' ? { mensaje: 'El token de acciones no ve las reglas de acceso de esta zona (Firewall Services)' } : {}),
     checks,
-    capabilities: { firewall_read: checks[0]?.ok === true },
+    capabilities: { firewall_read: checks[0]?.ok === true, ...cfg.capacidad },
     scopes: checks.filter((c) => c.ok).map((c) => c.permission),
     meta,
     label: `${lectura.label} · blindaje`.slice(0, 80),

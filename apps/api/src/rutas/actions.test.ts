@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError as ApiErrorBody, ProposeResponse, RespuestaEscritura } from '@vanguard/contracts';
-import { otpHashParam } from '@vanguard/core';
+import { otpHashParam, refBajoAtaque } from '@vanguard/core';
 import type { Keys } from '@vanguard/core/crypto';
 import { sha256Hex } from '../lib/hmac.ts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
@@ -390,5 +390,83 @@ describe('E22 · undo', () => {
     const r = await deshacer();
     expect([r.status, (await error(r)).details?.reason]).toEqual([409, 'not_executed']);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// Modo bajo ataque (modo-bajo-ataque.md §5): E21 y E22 despachan por tipo en la primera línea; la rama block_ip de
+// arriba sigue igual (sus casos no cambian).
+describe('E21 y E22 · under_attack_on (despacho por tipo)', () => {
+  const HOST = 'demo.officialvanguard.com';
+  const RS = 'b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6';
+  const REGLA = 'd'.repeat(32);
+  const EP = `https://api.cloudflare.com/client/v4/zones/${ZONA}/rulesets/phases/http_config_settings/entrypoint`;
+  const POST_REGLA = `https://api.cloudflare.com/client/v4/zones/${ZONA}/rulesets/${RS}/rules`;
+  let cf: Record<string, () => Response>;
+  beforeEach(() => {
+    aprob = { ...aprob, action_kind: 'under_attack_on', params: { scope: 'host', target: HOST, zone_id: ZONA, zone_name: 'officialvanguard.com',
+      connection_id: CONN, incident_id: INC, incident_code: 'A1F3C9', ttl_s: 1800, group: APR, kid: 'v1', requested_by: ANA,
+      ref: refBajoAtaque(APR), ruleset_id: RS, plan: 'free' } };
+    accion = { id: ACT, org_id: ORG, kind: 'under_attack_on', status: 'executed', provider_ref: REGLA,
+      previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: refBajoAtaque(APR), ruleset_id: RS } };
+    cf = {
+      [`GET ${EP}`]: () => new Response(JSON.stringify({ success: true, result: { id: RS, rules: [] } })),
+      [`POST ${POST_REGLA}`]: () => new Response(JSON.stringify({ success: true, result: { id: RS, rules: [{ id: REGLA, ref: refBajoAtaque(APR) }] } })),
+      [`DELETE ${POST_REGLA}/${REGLA}`]: () => new Response(null, { status: 200 }),
+    };
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => (cf[`${init.method ?? 'GET'} ${url}`]
+      ?? (() => new Response('{}', { status: 500 })))());
+  });
+
+  it('E21 con una aprobación under_attack_on → el mismo canje y executeUnderAttack: la regla de configuración, nunca access_rules', async () => {
+    const r = await confirmar();
+    expect(r.status).toBe(200);
+    expect(RespuestaEscritura.parse(await r.json())).toMatchObject({ ok: true, action_id: ACT,
+      resultado: 'Modo bajo ataque activo 30 min en demo.officialvanguard.com' });
+    expect(doble.rpcs[0]).toEqual({ name: 'vg_redeem_approval', args: { p_approval: APR, p_nonce_hash: aprob.nonce_hash, p_recipient: ANA } });
+    expect(claves.kids).toEqual(['v1']);
+    expect(aCloudflare().map((c) => `${(c[1] as RequestInit).method} ${String(c[0])}`)).toEqual([`GET ${EP}`, `POST ${POST_REGLA}`]);
+    expect(de('actions', 'insert')[0]!.payload).toMatchObject({ kind: 'under_attack_on', target: HOST, status: 'proposed' });
+    expect(de('actions', 'update').at(-1)!.payload).toMatchObject({ status: 'executed', provider_ref: REGLA });
+    expect(lineas()).not.toContain(CODIGO);
+  });
+
+  it('E21 under_attack_on: código erróneo → 422 wrong_code (mismo canje); Cloudflare 403 → ok:false con Config Rules; 5xx → 502', async () => {
+    const malo = await confirmar('000000');
+    expect([malo.status, (await error(malo)).details]).toEqual([422, { reason: 'wrong_code', attempts_left: 4 }]);
+    expect(aCloudflare()).toHaveLength(0);
+    aprob = { ...aprob, attempts: 0 };
+    cf[`POST ${POST_REGLA}`] = () => new Response('{"success":false}', { status: 403 });
+    expect(RespuestaEscritura.parse(await (await confirmar()).json())).toMatchObject({ ok: false,
+      error: 'Te falta el permiso Zone · Config Rules · Edit en el token de Modo blindaje' });
+    aprob = { ...aprob, used_at: null };
+    cf[`POST ${POST_REGLA}`] = () => new Response('{}', { status: 503 });
+    const caido = await confirmar();
+    expect([caido.status, (await error(caido)).message]).toEqual([502, 'Cloudflare no respondió. Vuelve a proponerlo.']);
+  });
+
+  it('E21: ya usado → 409 «Vuelve a proponerlo» (sirve a los dos tipos)', async () => {
+    expect((await confirmar()).status).toBe(200);
+    const otra = await confirmar();
+    expect([otra.status, (await error(otra)).message]).toEqual([409, 'Ese código ya se usó. Vuelve a proponerlo.']);
+  });
+
+  it('E22 con una acción under_attack_on → deshacerBajoAtaque: DELETE de la regla de configuración y «Modo bajo ataque desactivado»', async () => {
+    const r = await deshacer();
+    expect(RespuestaEscritura.parse(await r.json())).toMatchObject({ ok: true, resultado: 'Modo bajo ataque desactivado' });
+    expect(aCloudflare().map((c) => `${(c[1] as RequestInit).method} ${String(c[0])}`)).toEqual([`DELETE ${POST_REGLA}/${REGLA}`]);
+    expect(aCloudflare().some((c) => String(c[0]).includes('access_rules'))).toBe(false);
+    expect(de('actions', 'update')[0]!.filters).toContainEqual(['kind', 'eq', 'under_attack_on']);
+  });
+
+  it('E22 under_attack_on: 403 → ok:false con Config Rules y sigue executed; ya desactivado → 409 undone; 5xx → 502', async () => {
+    cf[`DELETE ${POST_REGLA}/${REGLA}`] = () => new Response(null, { status: 403 });
+    expect(RespuestaEscritura.parse(await (await deshacer()).json())).toEqual({ ok: false,
+      error: 'Te falta el permiso Zone · Config Rules · Edit en el token de Modo blindaje' });
+    expect(de('actions', 'update')).toHaveLength(0);
+    cf[`DELETE ${POST_REGLA}/${REGLA}`] = () => new Response(null, { status: 503 });
+    expect((await deshacer()).status).toBe(502);
+    accion = { ...accion, status: 'undone' };
+    const r = await deshacer();
+    expect([r.status, (await error(r)).details?.reason]).toEqual([409, 'undone']);
   });
 });

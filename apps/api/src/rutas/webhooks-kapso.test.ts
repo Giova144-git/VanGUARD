@@ -784,6 +784,10 @@ describe('E31 · botones del anexo: fix, rvs, iss, rpr y uat', () => {
       if (op.table === 'contacts' && op.single) {
         return { data: eqDe(op, 'org_id') === ORG_A && eqDe(op, 'phone_e164') === `+${TEL}` ? contacto : null };
       }
+      // Sin org (botón vencido o «llega pronto»): las filas de ese teléfono en todas las orgs; aquí solo la de ORG_A.
+      if (op.table === 'contacts' && op.action === 'select') {
+        return { data: eqDe(op, 'phone_e164') === `+${TEL}` && contacto ? [contacto] : [] };
+      }
       return undefined;
     };
   });
@@ -833,6 +837,17 @@ describe('E31 · botones del anexo: fix, rvs, iss, rpr y uat', () => {
     expect(marcas).toHaveLength(0);
   });
 
+  it('botón viejo de quien hizo BAJA (ningún contacto verificado con ese teléfono) → sin canje ni respuesta', async () => {
+    await sembrar(NONCE, { expires_at: new Date(Date.now() - 1000).toISOString() });
+    contacto = { id: 'c1', verified_at: null };
+    await pulsar(`fix:C4A1E9:${NONCE}`, 'b1');
+    contacto = null;
+    await pulsar(`rvs:C4A1E9:${NONCE_RVS}`, 'b2');
+    expect(resultados()).toEqual(['sin_canje', 'sin_canje']);
+    expect(rlWa).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('remitente no verificado o aprobación de otra org → sin efecto y sin respuesta', async () => {
     await sembrar(NONCE);
     contacto = { id: 'c1', verified_at: null };
@@ -858,7 +873,7 @@ describe('E31 · botones del anexo: fix, rvs, iss, rpr y uat', () => {
     expect(marcas).toEqual([{ whatsapp_action: 'muted', whatsapp_action_at: expect.stringMatching(/Z$/) }]);
   });
 
-  it('iss, rpr y uat → «Esta acción llega pronto» (con RL_WA), sin canje ni lecturas', async () => {
+  it('iss, rpr y uat → «Esta acción llega pronto» (con RL_WA) al verificado, sin canje ni aprobaciones', async () => {
     for (const [i, a] of ['iss', 'rpr', 'uat'].entries()) await pulsar(`${a}:C4A1E9:${NONCE}`, `p${i}`);
     expect(doble.rpcs).toHaveLength(0);
     expect(doble.ops.some((o) => o.table === 'approvals' || o.table === 'code_reviews')).toBe(false);
@@ -866,6 +881,14 @@ describe('E31 · botones del anexo: fix, rvs, iss, rpr y uat', () => {
       .toEqual(Array(3).fill('Esta acción llega pronto. Mientras tanto, la tienes en la app de VanGUARD.'));
     expect(lineas().filter((l) => l.includes('"kapso.boton_pronto"')).map((l) => JSON.parse(l).accion))
       .toEqual(['iss', 'rpr', 'uat']);
+  });
+
+  it('iss, rpr o uat de quien hizo BAJA → sin respuesta (respeta la baja)', async () => {
+    contacto = { id: 'c1', verified_at: null };
+    await pulsar(`uat:C4A1E9:${NONCE}`, 'q1');
+    expect(lineas().filter((l) => l.includes('"kapso.boton_pronto"'))).toHaveLength(1);
+    expect(rlWa).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('ids inválidos de las acciones nuevas → desconocido: ni canje ni respuesta', async () => {

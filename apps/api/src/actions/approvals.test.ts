@@ -335,6 +335,7 @@ describe('botones del aviso de revisión: filas y canje (E31 fix/rvs)', () => {
   let canje: Resp;
   let revision: Fila | null;
   let contacto: Fila | null;
+  let contactos: Resp;   // las filas de ese teléfono en TODAS las orgs (la consulta sin org de un canje sin filas)
   let silencio: Resp;
   let doble: ReturnType<typeof dbDoble>;
 
@@ -349,12 +350,13 @@ describe('botones del aviso de revisión: filas y canje (E31 fix/rvs)', () => {
       { finding_id: 'f2', rule_id: 'CB_SECRET_GITHUB_PAT', severity: 'critical', title: 'Token de GitHub en el código',
         resource: 'scripts/deploy.sh:12' }] };
     contacto = { id: 'c1', verified_at: '2026-10-24T14:00:00+00:00' };
+    contactos = { data: [{ verified_at: null }, { verified_at: '2026-10-24T14:00:00+00:00' }] };
     silencio = { data: [{ id: CFG }] };
     doble = dbDoble({
       rpc: () => canje,
       tabla: (op: Op) => {
         if (op.table === 'code_reviews' && op.action === 'select') return { data: revision };
-        if (op.table === 'contacts') return { data: contacto };
+        if (op.table === 'contacts') return op.single ? { data: contacto } : contactos;
         if (op.table === 'code_review_configs') return silencio;
         return undefined;
       },
@@ -424,10 +426,26 @@ describe('botones del aviso de revisión: filas y canje (E31 fix/rvs)', () => {
     expect(doble.ops.length + doble.rpcs.length).toBeLessThanOrEqual(COSTE_BOTON_REVISION);
   });
 
-  it('nonce reusado, vencido o de otro teléfono (0 filas) → «No se pudo: el botón venció…» sin leer ni escribir nada', async () => {
+  it('nonce reusado, vencido o de otro teléfono (0 filas) → «venció…» al verificado de una org; nada escrito', async () => {
     canje = { data: [] };
     expect(await pulsar('fix')).toEqual({ resultado: 'sin_canje', texto: TEXTO_BOTON_VENCIDO });
-    expect(doble.ops).toHaveLength(0);
+    // Sin fila canjeada no hay org: una sola lectura de las filas de ese teléfono (cualquier org), sin escribir nada.
+    expect(doble.ops).toHaveLength(1);
+    const [c] = doble.ops;
+    expect([c!.table, c!.action, eqDe(c!, 'phone_e164'), eqDe(c!, 'org_id')])
+      .toEqual(['contacts', 'select', `+${TEL}`, undefined]);
+    expect(doble.ops.length + doble.rpcs.length).toBeLessThanOrEqual(COSTE_BOTON_REVISION);
+  });
+
+  it('botón vencido de quien hizo BAJA, de quien no es contacto o con la lectura caída → SIN respuesta', async () => {
+    canje = { data: [] };
+    contactos = { data: [{ verified_at: null }, { verified_at: null }] };   // BAJA: verified_at = null en todas sus filas
+    expect(await pulsar('fix')).toEqual({ resultado: 'sin_canje', texto: null });
+    contactos = { data: [] };
+    expect(await pulsar('rvs')).toEqual({ resultado: 'sin_canje', texto: null });
+    contactos = { error: { code: '57014' } };
+    expect(await pulsar('fix')).toEqual({ resultado: 'sin_canje', texto: null });
+    expect(escrituras()).toHaveLength(0);
   });
 
   it('remitente que ya no es contacto verificado (o de otra org) → sin efecto y SIN respuesta', async () => {

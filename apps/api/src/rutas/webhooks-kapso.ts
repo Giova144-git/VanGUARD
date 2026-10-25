@@ -1,8 +1,8 @@
 import { Hono, type Context } from 'hono';
 import { redact, TEXTO_ACCION_PRONTO, textoSeguro, unaLinea } from '@vanguard/core';
 import {
-  canjearBotonAlerta, canjearBotonBloqueo, canjearBotonRevision, COSTE_BOTON_BLOQUEO, COSTE_BOTON_REVISION, parsearBoton,
-  type AccionBoton, type Boton,
+  canjearBotonAlerta, canjearBotonBloqueo, canjearBotonRevision, COSTE_BOTON_BLOQUEO, COSTE_BOTON_REVISION,
+  esContactoVerificado, parsearBoton, type AccionBoton, type Boton,
 } from '../actions/approvals.ts';
 import type { AppEnv } from '../env.ts';
 import { db } from '../lib/db.ts';
@@ -58,7 +58,7 @@ const COSTE = {
   baja: 4,         // update + RL_WA + envío·2
   bloqueo: COSTE_BOTON_BLOQUEO + 3,   // canje y executeBlock/propuesta/cancelación + RL_WA + envío·2 de la respuesta
   revision: COSTE_BOTON_REVISION + 3, // canje, revisión, contacto y escrituras de fix/rvs + RL_WA + envío·2
-  pronto: 3,       // RL_WA + envío·2 («Esta acción llega pronto»)
+  pronto: 4,       // contacto verificado en alguna org + RL_WA + envío·2 («Esta acción llega pronto»)
 } as const;
 function gastar(p: Presupuesto, n: number): boolean {
   if (p.quedan < n) {
@@ -184,7 +184,8 @@ const BLOQUEO: Accion = {
 };
 
 // fix/rvs (anexo de botones): «Enviarme el arreglo» y «Silenciar repo 1 h» del aviso de revisión. La respuesta («Hecho: …»
-// o «No se pudo: …») solo va al remitente verificado de la org de la aprobación (o, sin canje, el aviso de botón vencido).
+// o «No se pudo: …») solo va al remitente verificado de la org de la aprobación; sin canje, el aviso de botón vencido
+// solo si es contacto verificado de alguna org (quien hizo BAJA no recibe nada).
 const REVISION: Accion = {
   coste: COSTE.revision,
   async ejecutar(env, b, remitente, rid, enmascarado) {
@@ -196,14 +197,17 @@ const REVISION: Accion = {
 };
 
 // iss («Crear issue»), rpr («Reabrir el PR») y uat («Modo bajo ataque»): registradas pero todavía sin la acción detrás
-// (ningún mensaje las ofrece) → «Esta acción llega pronto», sin canje. PUNTO DE ENGANCHE: cuando la función bloqueo traiga
-// crearIssue/reabrirPr y la de bajo ataque su activación, cada una cambia aquí PRONTO por su canje (botón → propuesta con
-// ok/no y aprobación de 10 min, como blk; título del ok en TITULOS_CONFIRMACION de core).
+// (ningún mensaje las ofrece) → «Esta acción llega pronto», sin canje y solo a un contacto verificado de alguna org.
+// PUNTO DE ENGANCHE: cuando la función bloqueo traiga crearIssue/reabrirPr y la de bajo ataque su activación, cada una
+// cambia aquí PRONTO por su canje (botón → propuesta con ok/no y aprobación de 10 min, como blk; título del ok en
+// TITULOS_CONFIRMACION de core), con la misma guarda del remitente verificado.
 const PRONTO: Accion = {
   coste: COSTE.pronto,
   async ejecutar(env, b, remitente, rid, enmascarado) {
     log('info', 'kapso.boton_pronto', { rid, accion: b.accion, remitente: enmascarado });
-    if (REMITENTE.test(remitente)) await responderConTope(env, remitente, TEXTO_ACCION_PRONTO, `pronto_${b.accion}`, rid);
+    if (await esContactoVerificado(env, remitente, rid)) {
+      await responderConTope(env, remitente, TEXTO_ACCION_PRONTO, `pronto_${b.accion}`, rid);
+    }
   },
 };
 

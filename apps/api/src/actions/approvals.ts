@@ -471,13 +471,36 @@ export function peorHallazgo(x: unknown): { rule_id: string; severity: Severity 
 
 const codigoDe = (id: string): string | null => { try { return codigoRevision(id); } catch { return null; } };
 
+const MAX_FILAS_TELEFONO = 20;   // contactos con el mismo teléfono: uno por org como mucho (como MAX_CANDIDATOS de E31)
+
+/** ¿El teléfono (E.164 sin '+') es contacto VERIFICADO de alguna org? Las respuestas sin aprobación canjeada (botón
+ *  vencido o ya usado, acción que llega pronto) no tienen org con la que mirar: solo se contesta si sigue suscrito en
+ *  alguna. Quien hizo BAJA (verified_at = null en todas sus filas) o no es contacto no recibe nada. Una consulta; si
+ *  falla, false (falla cerrada: no se contesta). Nunca lanza. */
+export async function esContactoVerificado(env: CloudflareBindings, remitente: string, rid: string): Promise<boolean> {
+  if (!REMITENTE.test(remitente)) return false;
+  try {
+    const { data, error } = await db(env).from('contacts').select('verified_at').eq('phone_e164', `+${remitente}`)
+      .limit(MAX_FILAS_TELEFONO);
+    if (error) {
+      log('warn', 'kapso.contacto_error', { rid, code: error.code ?? null });
+      return false;
+    }
+    return (Array.isArray(data) ? data : []).some((c) => !!str(obj(c).verified_at));
+  } catch (e) {
+    log('warn', 'kapso.contacto_error', { rid, name: e instanceof Error ? e.name : typeof e });
+    return false;
+  }
+}
+
 /** Por qué un botón fix/rvs tuvo o no efecto (va al log de E31). */
 export type ResultadoBotonRevision = 'arreglo_enviado' | 'silenciado' | 'sin_canje' | 'no_contacto' | 'tipo_distinto'
   | 'otra_revision' | 'sin_hallazgos' | 'sin_config' | 'remitente_invalido' | 'error';
 /** `texto`: la respuesta que E31 manda al remitente (con RL_WA y su presupuesto), o null (no se contesta). */
 export type CanjeRevision = { resultado: ResultadoBotonRevision; texto: string | null };
 /** Peor caso de subpeticiones de canjearBotonRevision: canje 1 + revisión y contacto 2 + (fix: whatsapp_action 1 | rvs:
- *  muted_until 1 + whatsapp_action 1). E31 lo reserva antes de llamar y suma aparte RL_WA y el envío de `texto`. */
+ *  muted_until 1 + whatsapp_action 1); sin canje, 1 + el contacto en cualquier org 1. E31 lo reserva antes de llamar y
+ *  suma aparte RL_WA y el envío de `texto`. */
 export const COSTE_BOTON_REVISION = 5;
 
 /** E31 · fix/rvs (anexo de botones). Canje atómico del nonce (sha256, un solo uso, no vencido, recipient = remitente) y,
@@ -485,7 +508,8 @@ export const COSTE_BOTON_REVISION = 5;
  *  respeta su BAJA), la fila de WhatsApp con la acción del botón y una revisión de esa org con el código del botón.
  *  fix → los pasos fijos de la regla del hallazgo nuevo más grave (sin IA, sin valores ni rutas) y el enlace al panel;
  *  rvs → code_review_configs.muted_until = ahora + 1 h y la hora de fin. Las dos dejan whatsapp_action en la revisión
- *  para la app. Un canje sin filas contesta TEXTO_BOTON_VENCIDO (E31 lo manda con RL_WA). Nunca lanza. */
+ *  para la app. Un canje sin filas contesta TEXTO_BOTON_VENCIDO (E31 lo manda con RL_WA) solo si el remitente es
+ *  contacto verificado de alguna org (esContactoVerificado); si no, nada. Nunca lanza. */
 export async function canjearBotonRevision(env: CloudflareBindings, b: Boton, remitente: string, rid: string,
   ahora = Date.now()): Promise<CanjeRevision> {
   const r = (resultado: ResultadoBotonRevision, texto: string | null = null): CanjeRevision => ({ resultado, texto });
@@ -501,7 +525,8 @@ export async function canjearBotonRevision(env: CloudflareBindings, b: Boton, re
     }
     const fila = obj(Array.isArray(data) ? data[0] : data);
     const org = str(fila.org_id), revision = str(fila.code_review_id);
-    if (!org) return r('sin_canje', TEXTO_BOTON_VENCIDO);
+    // Sin fila no hay org: el aviso de botón vencido solo a quien sigue suscrito en alguna (respeta su BAJA).
+    if (!org) return r('sin_canje', await esContactoVerificado(env, remitente, rid) ? TEXTO_BOTON_VENCIDO : null);
     const [v, c] = await Promise.all([
       revision ? admin.from('code_reviews').select('id, config_id, new_findings').eq('id', revision).eq('org_id', org)
         .maybeSingle() : null,

@@ -340,41 +340,63 @@ function volcarZip(id: string, c: CorridaZip) {
 }
 
 // ── «Medir ahora» (E11 con kind 'lighthouse', F-17) ──────────────────────────────────────────────────────────
-// Producción aún responde 422 not_available; aquí se simula la medición de S10 §10.4 para ver el flujo entero: solo admin,
-// URL https de una zona de Cloudflare activa de la org (422 si no), 409 con scan_run_id si hay otra en curso, tope diario
-// (10; la demo 20) y 8 s de PSI: step psi-<estrategia> → perf-compare → fin. Al terminar, 3 repeticiones nuevas (un
-// run_group) en perf/runs con las cifras de la última medición de esa URL y estrategia, o unas por defecto.
+// Como el BACK (rutas/scans.ts y scans/psi.ts): solo admin; la URL pasa por urlMedible (https de internet, sin IPs, hosts
+// locales, credenciales, puertos, secretos ni hosts de VanGUARD, salvo la víctima de la demo desde la org de demo; sin
+// zona de Cloudflare) → 422 invalid_body con reason y field_errors.url; 409 con scan_run_id si hay otra en curso; tope
+// diario 10 (la demo 20) → 429 budget_exceeded. Un único paso psi (8 s; en producción ~10 s) y, al terminar, UNA fila
+// nueva en perf/runs (rep 1, run_group = el id del scan) con las cifras de la última medición de esa URL y estrategia.
 type CorridaPerf = { id: string; org: string; inicio: number; url: string; strategy: 'mobile' | 'desktop'; version_label: string | null; volcada: boolean };
 const mediciones = new Map<string, CorridaPerf>();
-const perfNuevas = new Map<string, PerfRunExt[]>();             // org → repeticiones medidas en esta pestaña (más nuevas primero)
+const perfNuevas = new Map<string, PerfRunExt[]>();             // org → mediciones de esta pestaña (más nuevas primero)
 const perfHoy = new Map<string, number>();                     // `${org}|${día en Caracas}` → mediciones creadas
 const DURACION_PERF = 8_000;
-const zonasDe = (org: string) => [...new Set(listaDe(org)
-  .filter((c) => c.provider === 'cloudflare' && c.status === 'active' && typeof c.meta.zone_name === 'string')
-  .map((c) => String(c.meta.zone_name).toLowerCase()))];
 const perfDe = (org: string) => [...(perfNuevas.get(org) ?? []), ...(vacia(org) ? [] : fx.perfRuns as PerfRunExt[])];
 
+// Copia de urlMedible/urlMedibleOrg (scans/psi.ts): mismos motivos y mensajes. PARECE_SECRETO, el de scans/comun.ts.
+const HOSTS_VANGUARD = ['officialvanguard.com', 'giovannizm14.workers.dev', 'accshmgmfrqrxubpuxcl.supabase.co'];
+const HOST_VICTIMA_DEMO = 'demo.officialvanguard.com';
+const INTERNOS = ['localhost', 'local', 'internal', 'lan', 'arpa', 'test', 'invalid', 'example', 'onion'];
+const ETIQUETA_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const URL_BD = /^https:\/\/[a-z0-9.-]+(\/[^?#\s]*)?$/;
+const PARECE_SECRETO = /(sb_secret_[A-Za-z0-9_-]{16,}|sbp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|vg[iks]_[A-Za-z0-9_-]{20,}|cf(k|ut|at)_[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.)/;
+function urlMedible(org: string, raw: string): string {
+  const no = (motivo: string, mensaje: string): never => falla(422, 'invalid_body', mensaje, { reason: motivo, field_errors: { url: [mensaje] } });
+  if (raw.length > 2048) no('largo', 'La URL es demasiado larga (máximo 2048 caracteres)');
+  let u: URL | null = null;
+  try { u = new URL(raw); } catch { /* abajo */ }
+  if (!u) return no('url', 'No es una URL válida');
+  if (u.protocol !== 'https:') no('https', 'Solo medimos URLs https://');
+  if (u.username || u.password) no('credenciales', 'Quita el usuario y la contraseña de la URL');
+  if (u.port) no('puerto', 'Solo medimos el puerto estándar de https (443)');
+  const h = u.hostname.toLowerCase().replace(/\.$/, '');
+  if (h.startsWith('[') || /^\d+(\.\d+){3}$/.test(h)) no('ip', 'No medimos direcciones IP: usa el dominio del sitio');
+  if (INTERNOS.some((x) => h === x || h.endsWith(`.${x}`))) no('interno', 'No medimos hosts locales ni de red interna');
+  const etiquetas = h.split('.');
+  if (etiquetas.length < 2 || !etiquetas.every((e) => ETIQUETA_HOST.test(e))) no('host', 'Usa un dominio público, como tusitio.com');
+  if (!(h === HOST_VICTIMA_DEMO && esDemo(org)) && HOSTS_VANGUARD.some((x) => h === x || h.endsWith(`.${x}`))) {
+    no('propio', 'Esa URL es de VanGUARD: mide la de tu sitio');
+  }
+  const limpia = `https://${h}${u.pathname || '/'}`;
+  if (!URL_BD.test(limpia)) no('url', 'No es una URL válida');
+  if (PARECE_SECRETO.test(limpia)) no('secreto', 'La URL parece llevar un secreto: quítalo antes de medir');
+  return limpia;
+}
+
+// Mismo orden que E11: admin, cuerpo, URL, 409 de la que está en curso y tope diario.
 function iniciarMedicion(org: string, body: unknown) {
   exigirAdmin();
   const r = ScanCreate.safeParse(body);
   if (!r.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(r.error));
   const b = r.data as Extract<ScanCreate, { kind: 'lighthouse' }>;
+  const url = urlMedible(org, b.url);
   const enCurso = [...mediciones.values()].find((m) => m.org === org && Date.now() - m.inicio < DURACION_PERF);
   if (enCurso) falla(409, 'conflict', 'Ya hay una medición de rendimiento en curso: espera a que termine', { scan_run_id: enCurso.id });
-  // assertMeasurableUrl de S10 §10.9: el PerfUrlError sale como 422 invalid_body con su mensaje.
-  const zonas = zonasDe(org);
-  const u = new URL(b.url);
-  const host = u.hostname.toLowerCase().replace(/\.$/, '');
-  if (!zonas.length) falla(422, 'invalid_body', 'Para medir necesitamos saber que el dominio es tuyo: conecta tu zona de Cloudflare');
-  if (u.username || u.password || (u.port && u.port !== '443')) falla(422, 'invalid_body', 'Sin credenciales ni puertos');
-  if (!zonas.some((z) => host === z || host.endsWith(`.${z}`))) falla(422, 'invalid_body', `Solo dominios de tus zonas: ${zonas.join(', ')}`);
   const clave = `${org}|${diaCaracas()}`;
   const tope = esDemo(org) ? 20 : 10;
   if ((perfHoy.get(clave) ?? 0) >= tope) falla(429, 'budget_exceeded', `Ya hiciste ${tope} mediciones de rendimiento hoy, el máximo diario. Vuelve mañana.`);
   perfHoy.set(clave, (perfHoy.get(clave) ?? 0) + 1);
   const id = crypto.randomUUID();
-  mediciones.set(id, { id, org, inicio: Date.now(), url: `${u.origin}${u.pathname || '/'}`, strategy: b.strategy,
-    version_label: b.version_label ?? null, volcada: false });
+  mediciones.set(id, { id, org, inicio: Date.now(), url, strategy: b.strategy, version_label: b.version_label ?? null, volcada: false });
   return { scan_run_id: id };
 }
 
@@ -385,7 +407,7 @@ function verMedicion(id: string, m: CorridaPerf): ScanRun {
   const fecha = (ms: number) => new Date(ms).toISOString();
   return {
     id, kind: 'lighthouse', status: hecho ? 'succeeded' : 'running', progress: Math.round(t * 100),
-    step: hecho ? null : t < 0.75 ? `psi-${m.strategy}` : t < 0.95 ? 'perf-compare' : 'fin',
+    step: hecho ? null : 'psi',                                   // vg_claim_step deja 'psi' toda la medición
     steps: [{ name: 'psi', status: hecho ? 'done' : 'running' }], score: null, coverage: null, summary: null, error: null,
     created_at: fecha(m.inicio), started_at: fecha(m.inicio), finished_at: hecho ? fecha(m.inicio + DURACION_PERF) : null,
   };
@@ -396,15 +418,12 @@ function volcarMedicion(m: CorridaPerf) {
   m.volcada = true;
   const previa = perfDe(m.org).find((r) => r.url === m.url && r.strategy === m.strategy);
   const base = previa ?? { scores: { performance: 0.9 }, metrics: { lcp_ms: 1800, tbt_ms: 120, cls: 0.02, fcp_ms: 900, si_ms: 1500, ttfb_ms: 130 } };
-  const run_group = crypto.randomUUID();
-  const reps = [0.98, 1, 1.03].map((f, i): PerfRunExt => ({
+  const fila: PerfRunExt = {
     id: crypto.randomUUID(), url: m.url, strategy: m.strategy, source: 'psi', lighthouse_version: '13.5.0',
-    run_group, rep: i + 1, is_representative: i === 1, trigger: 'manual', version_label: m.version_label, runtime_error: null,
-    scores: { ...base.scores, performance: Math.min(1, Math.round((base.scores.performance ?? 0.9) / f * 100) / 100) },
-    metrics: Object.fromEntries(Object.entries(base.metrics).map(([k, v]) => [k, v == null ? null : Math.round(v * f * 1000) / 1000])) as PerfRunExt['metrics'],
-    created_at: new Date(m.inicio + 2_000 * (i + 1)).toISOString(),
-  }));
-  perfNuevas.set(m.org, [...reps.reverse(), ...(perfNuevas.get(m.org) ?? [])]);
+    run_group: m.id, rep: 1, is_representative: true, trigger: 'manual', version_label: m.version_label, runtime_error: null,
+    scores: { ...base.scores }, metrics: { ...base.metrics }, created_at: new Date(m.inicio + DURACION_PERF).toISOString(),
+  };
+  perfNuevas.set(m.org, [fila, ...(perfNuevas.get(m.org) ?? [])]);
 }
 
 // ── Incidentes (S14 §14.19) ──────────────────────────────────────────────────────────────────────────────────

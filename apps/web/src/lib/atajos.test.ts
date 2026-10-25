@@ -10,6 +10,7 @@ describe('leerTecla', () => {
     expect(a).toEqual({ accion: { tipo: 'esperar' }, gPendiente: true });
     expect(leerTecla(t('i'), true)).toEqual({ accion: { tipo: 'ir', destino: 'incidents' }, gPendiente: false });
     expect(leerTecla(t('r'), true).accion).toEqual({ tipo: 'ir', destino: 'overview' });
+    expect(leerTecla(t('e'), true).accion).toEqual({ tipo: 'ir', destino: 'evolution' });
   });
   it('una letra sin g o una letra desconocida no hace nada', () => {
     expect(leerTecla(t('i'), false).accion).toBeNull();

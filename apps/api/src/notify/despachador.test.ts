@@ -479,91 +479,111 @@ describe('despachador · 2.º mensaje «Modo bajo ataque»', () => {
   });
 });
 
-// Llamada de Guardia (asignaciones/llamada-ataque.md §B1): la entrada voice/call_v1 del plan, después del WhatsApp.
-describe('despachador · llamada de Guardia', () => {
-  const VOZ = 'https://vanguard-voz.onrender.com';
+// Botón «Llamar a Guardia» (asignaciones/llamada-ataque.md §B1): Meta no deja iniciar la llamada (138013); la entrada
+// voice/call_v1 del plan es attack/expect al servidor de voz y, con su 200, el interactivo voice_call, tras el WhatsApp.
+describe('despachador · botón «Llamar a Guardia»', () => {
+  const VOZ = 'https://vanguard-voz-8080.app.github.dev';
   const TOKEN_VOZ = ['token', 'voz', 'prueba'].join('-');
   const CON_VOZ = { VOZ_URL: VOZ, VOZ_OPERATOR_TOKEN: TOKEN_VOZ };
   let voz: () => Response;
   const aVoz = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith(VOZ));
+  const deBoton = () => enviados().filter((m) => (m.interactive as { type?: string } | undefined)?.type === 'voice_call');
+  const cierres = () => de('notifications', 'update').map((o) => o.payload as Fila);
+  const filasVoz = () => filasNotif().filter((f) => f.channel === 'voice');
 
   beforeEach(() => {
     incidente = { ...incidente, severity: 'critical', rule_ids: ['CF_PATH_SCAN'], event_count: 87 };
-    voz = () => new Response(JSON.stringify({ ref: 'call-abc123', state: 'ringing' }));
+    for (const c of contactos) c.wa_last_inbound_at = new Date(Date.now() - 3600_000).toISOString();
+    voz = () => new Response(JSON.stringify({ expected: true, minutes: 30 }));
     let n = 0;
     fetchMock.mockImplementation(async (url: unknown) => (String(url).startsWith(VOZ) ? voz()
       : new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: `wamid.HBgM${++n}` }] }))));
   });
 
-  it('sin VOZ_URL ni token: ninguna llamada ni fila de voz, y la voz sale skipped', async () => {
+  it('sin VOZ_URL ni token: ni expect, ni botón, ni fila de voz; la voz sale skipped', async () => {
     const r = await avisar();
     expect(aVoz()).toHaveLength(0);
-    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([]);
+    expect(deBoton()).toHaveLength(0);
+    expect(filasVoz()).toEqual([]);
     expect(r).toEqual({ whatsapp: 'queued', voice: 'skipped' });
   });
 
-  it('critical nuevo: fila voice queued, UNA llamada después de los WhatsApp con Bearer y las 5 claves, cierre sent con el ref', async () => {
+  it('critical nuevo: fila call_button_v1 queued, expect con Bearer, contexto y ticket, y DESPUÉS el voice_call con su wamid', async () => {
     const r = await avisar(NUEVO, CON_VOZ);
     expect(r).toEqual({ whatsapp: 'queued', voice: 'queued' });
+    expect(filasVoz()).toEqual([{ org_id: ORG, incident_id: INC, channel: 'voice', template: 'call_button_v1',
+      recipient_masked: `+58•••${TEL_A.slice(-4)}`, status: 'queued' }]);
     const llamadas = aVoz();
-    expect(llamadas).toHaveLength(1);
-    // La voz va al final: todas las peticiones a Kapso salen antes.
-    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe(`${VOZ}/operator/api/outbound/call`);
+    expect(llamadas.map((c) => String(c[0]))).toEqual([`${VOZ}/operator/api/attack/expect`]);
     const init = llamadas[0]![1] as RequestInit;
     expect(new Headers(init.headers).get('authorization')).toBe(`Bearer ${TOKEN_VOZ}`);
-    expect(JSON.parse(String(init.body))).toEqual({ recipient: TEL_A.slice(1), context: { tipo: 'un escaneo de rutas',
-      host: 'demo.officialvanguard.com', ip: '186.92.x.x', eventos: '87', severidad: 'crítica' } });
+    expect(JSON.parse(String(init.body))).toEqual({ recipient: TEL_A.slice(1), ticket: 'vg:A1F3C9', context: {
+      tipo: 'un escaneo de rutas', host: 'demo.officialvanguard.com', ip: '186.92.x.x', eventos: '87', severidad: 'crítica' } });
     expect(String(init.body)).not.toContain(IP);
-    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([{ org_id: ORG, incident_id: INC, channel: 'voice',
-      template: 'call_v1', recipient_masked: `+58•••${TEL_A.slice(-4)}`, status: 'queued' }]);
-    const cierres = de('notifications', 'update').map((o) => o.payload as Fila);
-    expect(cierres).toContainEqual(expect.objectContaining({ status: 'sent', provider_id: 'call-abc123' }));
-    expect(lineas()).toContain('"voz.llamada_ok"');
+    // El botón, el último mensaje, solo al contacto con voz y con el texto fijo.
+    expect(enviados().at(-1)).toEqual({ messaging_product: 'whatsapp', recipient_type: 'individual', to: TEL_A.slice(1),
+      type: 'interactive', interactive: { type: 'voice_call',
+        body: { text: '¿Te lo explico por voz? Guardia, la asistente de IA de VanGUARD, te atiende ahora.' },
+        action: { name: 'voice_call', parameters: { display_text: 'Llamar a Guardia', ttl_minutes: 30, payload: 'vg:A1F3C9' } } } });
+    expect(deBoton()).toHaveLength(1);
+    expect(cierres()).toContainEqual(expect.objectContaining({ status: 'sent', provider_id: expect.stringMatching(/^wamid\./) }));
+    expect(lineas()).toContain('"voz.boton_enviado"');
     expect(lineas()).not.toContain(TEL_A);
   });
 
-  it('409 ocupado → failed ocupado; 409 sin permiso → failed sin_permiso', async () => {
-    voz = () => new Response(JSON.stringify({ detail: 'Ocupado: ya hay una llamada en curso' }), { status: 409 });
-    expect(await avisar(NUEVO, CON_VOZ)).toEqual({ whatsapp: 'queued', voice: 'failed' });
-    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'ocupado' });
-    doble.ops.length = 0;
-    voz = () => new Response(JSON.stringify({ detail: 'call permission not granted' }), { status: 409 });
-    await avisar(NUEVO, CON_VOZ);
-    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'sin_permiso' });
+  it('expect falla (503, expected:false, red) → failed voz_no_disponible, sin botón y sin reintento', async () => {
+    const fallos = [() => new Response('{}', { status: 503 }), () => new Response(JSON.stringify({ expected: false })),
+      () => { throw new TypeError('red'); }];
+    for (const f of fallos) {
+      voz = f;
+      fetchMock.mockClear();
+      doble.ops.length = 0;
+      expect((await avisar(NUEVO, CON_VOZ)).voice).toBe('failed');
+      expect(aVoz()).toHaveLength(1);
+      expect(deBoton()).toHaveLength(0);
+      expect(cierres()).toContainEqual({ status: 'failed', error: 'voz_no_disponible' });
+    }
   });
 
-  it('502 o red → failed desconocido y NUNCA un reintento (el teléfono pudo sonar)', async () => {
-    voz = () => new Response('{}', { status: 502 });
+  it('ventana de 24 h cerrada → failed window_closed sin expect ni Kapso para el botón', async () => {
+    for (const c of contactos) c.wa_last_inbound_at = new Date(Date.now() - 30 * 3600_000).toISOString();
     await avisar(NUEVO, CON_VOZ);
-    expect(aVoz()).toHaveLength(1);
-    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'desconocido' });
-    expect(lineas()).toContain('"voz.llamada_desconocida"');
+    expect(aVoz()).toHaveLength(0);
+    expect(deBoton()).toHaveLength(0);
+    expect(filasVoz()).toEqual([expect.objectContaining({ template: 'call_button_v1', status: 'failed', error: 'window_closed' })]);
+  });
+
+  it('Kapso rechaza el botón → failed con su código; high no lo ofrece; fuera de producción dry_run; tope lleno skipped_cap', async () => {
+    fetchMock.mockImplementation(async (url: unknown) => (String(url).startsWith(VOZ) ? voz()
+      : new Response(JSON.stringify({ error: { code: 131047 } }), { status: 400 })));
+    await avisar(NUEVO, CON_VOZ);
+    expect(cierres()).toContainEqual({ status: 'failed', error: '131047' });
+
     fetchMock.mockClear();
-    voz = () => { throw new TypeError('red'); };
-    await avisar(NUEVO, CON_VOZ);
-    expect(aVoz()).toHaveLength(1);
-  });
-
-  it('high no llama; fuera de producción deja failed dry_run sin llamar; tope de voz lleno → skipped_cap sin llamar', async () => {
+    doble.ops.length = 0;
     incidente = { ...incidente, severity: 'high' };
     await avisar(NUEVO, CON_VOZ);
     expect(aVoz()).toHaveLength(0);
+    expect(filasVoz()).toEqual([]);
+
     incidente = { ...incidente, severity: 'critical' };
     doble.ops.length = 0;
     expect(await avisar(NUEVO, { ...CON_VOZ, VG_ENV: 'local' })).toEqual({ whatsapp: 'skipped', voice: 'skipped' });
     expect(aVoz()).toHaveLength(0);
-    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([expect.objectContaining({ status: 'failed', error: 'dry_run' })]);
+    expect(filasVoz()).toEqual([expect.objectContaining({ status: 'failed', error: 'dry_run' })]);
+
     doble.ops.length = 0;
     usadas = 2;   // TOPES_AVISOS.normal.voice = 2 (el doble da el mismo uso a los dos canales)
     await avisar(NUEVO, CON_VOZ);
     expect(aVoz()).toHaveLength(0);
-    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([expect.objectContaining({ status: 'skipped_cap', error: 'cap' })]);
+    expect(filasVoz()).toEqual([expect.objectContaining({ status: 'skipped_cap', error: 'cap' })]);
   });
 
-  it('una VOZ_URL fuera de *.onrender.com no sale (egress) y no cuenta como llamada', async () => {
+  it('una VOZ_URL fuera de la lista de salida no sale (egress): failed voz_no_disponible, sin botón', async () => {
     const r = await avisar(NUEVO, { ...CON_VOZ, VOZ_URL: 'https://evil.example' });
     expect(fetchMock.mock.calls.filter((c) => String(c[0]).startsWith('https://evil.example'))).toHaveLength(0);
     expect(r.voice).toBe('failed');
-    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'sin_config' });
+    expect(deBoton()).toHaveLength(0);
+    expect(cierres()).toContainEqual({ status: 'failed', error: 'voz_no_disponible' });
   });
 });

@@ -481,7 +481,7 @@ describe('despachador · 2.º mensaje «Modo bajo ataque»', () => {
 
 // Llamada de Guardia (asignaciones/llamada-ataque.md §B1): la entrada voice/call_v1 del plan, después del WhatsApp.
 describe('despachador · llamada de Guardia', () => {
-  const VOZ = 'https://vanguard-voz.up.railway.app';
+  const VOZ = 'https://vanguard-voz.onrender.com';
   const TOKEN_VOZ = ['token', 'voz', 'prueba'].join('-');
   const CON_VOZ = { VOZ_URL: VOZ, VOZ_OPERATOR_TOKEN: TOKEN_VOZ };
   let voz: () => Response;
@@ -560,7 +560,7 @@ describe('despachador · llamada de Guardia', () => {
     expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([expect.objectContaining({ status: 'skipped_cap', error: 'cap' })]);
   });
 
-  it('una VOZ_URL fuera de *.up.railway.app no sale (egress) y no cuenta como llamada', async () => {
+  it('una VOZ_URL fuera de *.onrender.com no sale (egress) y no cuenta como llamada', async () => {
     const r = await avisar(NUEVO, { ...CON_VOZ, VOZ_URL: 'https://evil.example' });
     expect(fetchMock.mock.calls.filter((c) => String(c[0]).startsWith('https://evil.example'))).toHaveLength(0);
     expect(r.voice).toBe('failed');

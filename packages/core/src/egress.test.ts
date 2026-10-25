@@ -29,15 +29,16 @@ describe('assertAllowedUrl', () => {
     expect(() => assertAllowedUrl('https://objects.githubusercontent.com/x')).toThrow('EGRESS_BLOCKED');
     expect(() => assertAllowedUrl('https://raw.githubusercontent.com.evil.example/acme/web')).toThrow('EGRESS_BLOCKED');
   });
-  it('servidor de voz: un subdominio de una etiqueta de up.railway.app pasa; anidados, sufijos y http no', () => {
-    expect(assertAllowedUrl('https://vanguard-voz-production.up.railway.app/operator/api/outbound/call').hostname)
-      .toBe('vanguard-voz-production.up.railway.app');
-    expect(() => assertAllowedUrl('https://a.b.up.railway.app/')).toThrow('EGRESS_BLOCKED');
-    expect(() => assertAllowedUrl('https://up.railway.app/')).toThrow('EGRESS_BLOCKED');
-    expect(() => assertAllowedUrl('https://x.up.railway.app.evil.example/')).toThrow('EGRESS_BLOCKED');
-    expect(() => assertAllowedUrl('https://x-up.railway.app/')).toThrow('EGRESS_BLOCKED');
-    expect(() => assertAllowedUrl('http://x.up.railway.app/')).toThrow('EGRESS_BLOCKED');
-    expect(() => assertAllowedUrl('https://-x.up.railway.app/')).toThrow('EGRESS_BLOCKED');
+  it('servidor de voz: un subdominio de una etiqueta de onrender.com pasa; anidados, sufijos, http y Railway no', () => {
+    expect(assertAllowedUrl('https://vanguard-voz.onrender.com/operator/api/outbound/call').hostname)
+      .toBe('vanguard-voz.onrender.com');
+    expect(() => assertAllowedUrl('https://a.b.onrender.com/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://onrender.com/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x.onrender.com.evil.example/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x-onrender.com/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('http://x.onrender.com/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://-x.onrender.com/')).toThrow('EGRESS_BLOCKED');
+    expect(() => assertAllowedUrl('https://x.up.railway.app/')).toThrow('EGRESS_BLOCKED');
   });
   it('el error no repite la URL (podría llevar un secreto en la query)', () => {
     expect(() => assertAllowedUrl('https://evil.example/?token=SECRETO123')).toThrow(/^EGRESS_BLOCKED:host$/);

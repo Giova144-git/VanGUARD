@@ -16,9 +16,9 @@ export const HOSTS_SALIDA: readonly string[] = [
   'api.twilio.com',                  // P1: plan B de voz (S15 15.10)
 ];
 const PERMITIDOS = new Set(HOSTS_SALIDA);
-// Servidor de voz (apps/voz en Railway, asignaciones/llamada-ataque.md): su host sale de VOZ_URL y no se conoce aquí. Solo
-// un subdominio de UNA etiqueta de up.railway.app (nada de sufijos engañosos ni subdominios anidados).
-export const HOST_VOZ = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.up\.railway\.app$/;
+// Servidor de voz (apps/voz en Render, asignaciones/llamada-ataque.md): su host sale de VOZ_URL y no se conoce aquí. Solo
+// un subdominio de UNA etiqueta de onrender.com (nada de sufijos engañosos ni subdominios anidados).
+export const HOST_VOZ = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.onrender\.com$/;
 
 /** Lanza si la URL no puede salir del Worker; si puede, devuelve la URL ya parseada. El mensaje nunca lleva la URL
  *  (podría traer un secreto en la query). */

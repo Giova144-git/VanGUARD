@@ -1,5 +1,6 @@
 import { housekeeping } from './engine/housekeeping.ts';
 import { log } from './lib/log.ts';
+import { CADA_PING_MIN, pingVoz } from './notify/voz.ts';
 
 // Los 3 crons de S15 15.7 (de los 5 de la cuenta en Free). El monitor por minuto corre directo aquí, sin cola
 // (A7.4: con cola se irían ~13.000 operaciones/día de las 10.000 del plan).
@@ -15,6 +16,8 @@ export async function onCron(cron: string, env: CloudflareBindings, now = new Da
       const h = await housekeeping(env, now);
       log(h.error ? 'warn' : 'info', 'monitor.minuto', { minuto: now.getUTCMinutes(), trabajos: 1, subpeticiones: h.subpeticiones,
         resueltos: h.resueltos, housekeeping: h.modo, vigilante: h.vigilante, interrumpidas: h.interrumpidas, error: h.error });
+      // Keepalive del servidor de voz en Render (notify/voz.ts): 1 subpetición cada 10 min, solo con VOZ_URL.
+      if (now.getUTCMinutes() % CADA_PING_MIN === 0) await pingVoz(env);
       return;
     }
     case CRON_HORA:

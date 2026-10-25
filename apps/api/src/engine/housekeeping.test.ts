@@ -652,6 +652,28 @@ describe('cron por minuto', () => {
       housekeeping: 'rpc', vigilante: 'rpc', interrumpidas: { wiki: 0, scans: 0 }, error: null }]);
   });
 
+  it('keepalive de la voz: con VOZ_URL, cada 10 min un GET /healthz de 5 s sin reintento; sin VOZ_URL u otro minuto, nada', async () => {
+    const VOZ = 'https://vanguard-voz.onrender.com';
+    const pings = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith(VOZ));
+    await onCron(CRON_MINUTO, envDoble().env, AHORA);                                       // minuto 30 sin VOZ_URL
+    expect(pings()).toHaveLength(0);
+    await onCron(CRON_MINUTO, envDoble({ VOZ_URL: VOZ }).env, new Date(AHORA.getTime() + 60_000));   // minuto 31
+    expect(pings()).toHaveLength(0);
+    await onCron(CRON_MINUTO, envDoble({ VOZ_URL: VOZ }).env, AHORA);
+    expect(pings().map((c) => [String(c[0]), (c[1] as RequestInit).method])).toEqual([[`${VOZ}/healthz`, 'GET']]);
+    const ev = () => logs.mock.calls.map((a) => JSON.parse(String(a[0])) as Record<string, unknown>);
+    expect(ev().at(-1)).toEqual({ level: 'info', event: 'voz.ping_ok', status: 200 });
+    // Dormido o caído: un solo intento, solo un log, y el cron no lanza.
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async (u: unknown) => {
+      if (String(u).startsWith(VOZ)) throw new DOMException('plazo', 'TimeoutError');
+      return new Response('{}', { status: 200 });
+    });
+    await expect(onCron(CRON_MINUTO, envDoble({ VOZ_URL: VOZ }).env, AHORA)).resolves.toBeUndefined();
+    expect(pings()).toHaveLength(1);
+    expect(ev().at(-1)).toEqual({ level: 'warn', event: 'voz.ping_fallido', status: null });
+  });
+
   it('si housekeeping falla, la línea sale en warn con el código y el cron no lanza', async () => {
     estado.rpc = () => ({ error: { code: '57014' } });
     await expect(onCron(CRON_MINUTO, envDoble().env, AHORA)).resolves.toBeUndefined();

@@ -128,15 +128,15 @@ describe('acciones desde WhatsApp y repo silenciado', () => {
     const a = (whatsapp_action: unknown, whatsapp_action_at: string | null = '2026-10-24T19:22:05.000Z') =>
       chipAccionWhatsapp({ whatsapp_action: whatsapp_action as never, whatsapp_action_at }, AHORA);
     expect(a('fix_sent')).toEqual({ texto: 'Arreglo enviado por WhatsApp · 15:22', rol: 'info' });
-    expect(a('issue_created')).toEqual({ texto: 'Issue creado desde WhatsApp · 15:22', rol: 'bien' });
-    expect(a('muted')).toEqual({ texto: 'Silenciado 1 h desde WhatsApp · 15:22', rol: 'neutra' });
+    expect(a('issue_created')).toEqual({ texto: 'Issue creado por WhatsApp · 15:22', rol: 'bien' });
+    expect(a('muted')).toEqual({ texto: 'Silenciado 1 h por WhatsApp · 15:22', rol: 'neutra' });
     expect(a('pr_reopened')?.texto).toBe('PR reabierto por WhatsApp · 15:22');
     expect(a('pr_reopened', null)?.texto).toBe('PR reabierto por WhatsApp');
     expect(a('fix_sent', 'no-es-fecha')?.texto).toBe('Arreglo enviado por WhatsApp');
     expect(a(null)).toBeNull();
     expect(a(undefined)).toBeNull();
     expect(chipAccionWhatsapp(alerta({}), AHORA)).toBeNull();   // BACK de antes del anexo: el campo no viene
-    for (const k of RAROS.filter((x) => x !== null)) expect(a(k)?.texto).toBe('Acción desde WhatsApp · 15:22');
+    for (const k of RAROS.filter((x) => x !== null)) expect(a(k)?.texto).toBe('Acción por WhatsApp · 15:22');
   });
   it('«Silenciado hasta hh:mm» solo con muted_until en el futuro', () => {
     expect(textoSilenciado({ muted_until: '2026-10-24T20:30:00.000Z' }, AHORA)).toBe('Silenciado hasta 16:30');

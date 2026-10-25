@@ -104,13 +104,13 @@ export function chipAviso(a: CodeReview['alert']): Chip | null {
 // el BACK sume después sale con el texto por defecto.
 const ACCION_WHATSAPP: Record<string, Chip> = {
   fix_sent: { texto: 'Arreglo enviado por WhatsApp', rol: 'info' },
-  issue_created: { texto: 'Issue creado desde WhatsApp', rol: 'bien' },
-  muted: { texto: 'Silenciado 1 h desde WhatsApp', rol: 'neutra' },
+  issue_created: { texto: 'Issue creado por WhatsApp', rol: 'bien' },
+  muted: { texto: 'Silenciado 1 h por WhatsApp', rol: 'neutra' },
   pr_reopened: { texto: 'PR reabierto por WhatsApp', rol: 'neutra' },
 };
 export function chipAccionWhatsapp(a: Pick<CodeReview['alert'], 'whatsapp_action' | 'whatsapp_action_at'>, ahora = new Date()): Chip | null {
   if (a.whatsapp_action == null) return null;
-  const c = deMapa(ACCION_WHATSAPP, a.whatsapp_action, { texto: 'Acción desde WhatsApp', rol: 'info' });
+  const c = deMapa(ACCION_WHATSAPP, a.whatsapp_action, { texto: 'Acción por WhatsApp', rol: 'info' });
   const hora = cuando(a.whatsapp_action_at, ahora);
   return hora === SIN_DATO ? c : { ...c, texto: `${c.texto} · ${hora}` };
 }

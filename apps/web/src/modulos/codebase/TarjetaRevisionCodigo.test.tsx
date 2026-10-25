@@ -173,9 +173,9 @@ describe('TarjetaRevisionCodigo · acciones desde WhatsApp', () => {
     expect(tarjeta(ADMIN, conAccion('fix_sent'))).toContain('Arreglo enviado por WhatsApp · 15:22');
     expect(tarjeta(VIEWER, conAccion('pr_reopened'))).toContain('PR reabierto por WhatsApp · 15:22');
     const rara = tarjeta(ADMIN, conAccion('__proto__'));
-    expect(rara).toContain('Acción desde WhatsApp · 15:22');
+    expect(rara).toContain('Acción por WhatsApp · 15:22');
     expect(rara).not.toContain('__proto__');
-    expect(tarjeta(ADMIN, ESPERANDO)).not.toContain('desde WhatsApp');   // BACK sin el anexo: nada
+    expect(tarjeta(ADMIN, ESPERANDO)).not.toMatch(/(Arreglo enviado|Issue creado|Silenciado 1 h|PR reabierto|Acción) por WhatsApp/);   // BACK sin el anexo: nada
   });
 
   it('«Silenciado hasta hh:mm» (hora de Caracas) solo con muted_until en el futuro', () => {

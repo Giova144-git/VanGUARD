@@ -57,7 +57,7 @@ const FALLOS: [string, Error][] = [
   ...zodDe('en el delta de un push', { ...TODO, recent: [{ ...PUSH, delta: { ...PUSH.delta!, open: -1 } }] }),
 ];
 const TEXTOS_DE_LA_FUNCION = ['Revisión automática de código', 'Bloquear merges con críticos', 'Check “VanGUARD”', 'siguen abiertos',
-  'desde WhatsApp', 'Silenciado hasta', 'Reintentar', 'req_tarjeta_500', 'Sin conexión con VanGUARD', 'Algo falló', 'no cumple el contrato'];
+  'Arreglo enviado por WhatsApp', 'Silenciado hasta', 'Reintentar', 'req_tarjeta_500', 'Sin conexión con VanGUARD', 'Algo falló', 'no cumple el contrato'];
 
 type Estado = CodeReviewState | { error: Error; data?: CodeReviewState } | 'cargando';
 const clave = (id: string) => ['org', ORG, 'revision', id];

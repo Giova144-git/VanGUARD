@@ -16,6 +16,7 @@ import { overview } from './overview.ts';
 import { perf } from './perf.ts';
 import { revision } from './revision.ts';
 import { scans } from './scans.ts';
+import { simular } from './simular.ts';
 import { traffic } from './traffic.ts';
 import { wiki } from './wiki.ts';
 import { health } from './health.ts';
@@ -40,6 +41,7 @@ rutas.route('/', modules);
 rutas.route('/', contacts);
 rutas.route('/', notifications);
 rutas.route('/', traffic);
+rutas.route('/', simular);     // E57 (llamada-ataque.md §B2), antes de incidents/:id
 rutas.route('/', incidents);
 rutas.route('/', actions);
 // E55–E56 (modo-bajo-ataque.md): esta línea es el interruptor del corte de §13.1 (sin ella E55 → 404 y no hay tarjeta).

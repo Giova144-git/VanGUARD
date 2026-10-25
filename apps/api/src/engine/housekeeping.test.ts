@@ -17,7 +17,9 @@ const estado = vi.hoisted(() => ({
   vigilante: (_a: unknown): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
   update: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
   vencidas: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
-  actualizar: (): { data?: unknown; error?: { code?: string } | null } => ({ data: null }),
+  huerfanas: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
+  actualizar: (_l?: { metodos: [string, ...unknown[]][] }): { data?: unknown; error?: { code?: string } | null } =>
+    ({ data: null }),
   tablas: {} as Record<string, (Record<string, unknown> & { id: string })[]>,
   errorTabla: null as { code?: string } | null,
   antesDeUpdate: null as (() => void) | null,
@@ -76,8 +78,11 @@ function cliente() {
       }
       b.then = (ok: (r: unknown) => unknown) => {
         const esUpdate = l.metodos.some(([m]) => m === 'update');
+        // La lectura de la propuesta huérfana del modo bajo ataque es la única con status 'proposed'.
+        const esHuerfana = l.metodos.some(([m, c, v]) => m === 'eq' && c === 'status' && v === 'proposed');
         const r: R = tabla === 'wiki_runs' || tabla === 'scan_runs' ? updateEnMemoria(tabla, l)
-          : tabla === 'actions' ? (esUpdate ? estado.actualizar() : estado.vencidas()) : estado.update();
+          : tabla === 'actions' ? (esUpdate ? estado.actualizar(l) : esHuerfana ? estado.huerfanas() : estado.vencidas())
+          : estado.update();
         return Promise.resolve({ data: r.data ?? null, error: r.error ?? null }).then(ok);
       };
       return b;
@@ -111,6 +116,7 @@ beforeEach(() => {
   estado.antesDeUpdate = null;
   estado.update = () => ({ data: [{ id: 'i3' }] });
   estado.vencidas = () => ({ data: [] });
+  estado.huerfanas = () => ({ data: [] });
   estado.actualizar = () => ({ data: null });
   cred.withSecret.mockReset().mockImplementation(async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn(TOKEN));
   fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
@@ -174,11 +180,12 @@ describe('housekeeping · caducidad de «Bloquear IP» (§08.8)', () => {
       .mockImplementationOnce(async () => new Response('{}', { status: 404 }));
     const r = await housekeeping(envDoble(PROD).env, AHORA);
     expect(r).toMatchObject({ resueltos: 2, error: null, deshechos: 3, fallidos: 0 });
-    expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 2 + 2);       // rpc · vigilante · select · sobre (2) · 2 DELETE · undone por id y por regla
+    // rpc · vigilante · select · sobre (2) · 2 DELETE · undone por id y por regla · lectura de la huérfana (gastó ≤ 15)
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 2 + 2 + 1);
 
     const [sel, up, porRegla] = llamadaActions();
     expect(sel!.metodos).toEqual([
-      ['select', 'id, org_id, provider_ref, previous'], ['eq', 'status', 'executed'], ['eq', 'kind', 'block_ip'],
+      ['select', 'id, org_id, kind, provider_ref, previous'], ['eq', 'status', 'executed'], ['in', 'kind', ['block_ip', 'under_attack_on']],
       ['lt', 'expires_at', AHORA.toISOString()], ['order', 'expires_at'], ['limit', CANDIDATOS_CADUCIDAD],
     ]);
     expect(fetchMock.mock.calls.map((c) => [String(c[0]), (c[1] as RequestInit).method])).toEqual([
@@ -195,7 +202,8 @@ describe('housekeeping · caducidad de «Bloquear IP» (§08.8)', () => {
       .mockImplementationOnce(async () => new Response('{}', { status: 503 }));
     const r = await housekeeping(envDoble(PROD).env, AHORA);
     expect(r).toMatchObject({ deshechos: 0, fallidos: 1, error: null });
-    expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 2 + 2);       // rpc · vigilante · select · sobre · 2 DELETE · una escritura por fila
+    // rpc · vigilante · select · sobre · 2 DELETE · una escritura por fila · lectura de la huérfana
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 2 + 2 + 1);
     expect(updates().map((u) => u.metodos)).toEqual([
       [['update', { status: 'failed', previous: { ...PREV, intentos: 1, deshacer_error: 'sin_permiso' } }],
         ['eq', 'id', 'a1'], ['eq', 'org_id', ORG], ['eq', 'status', 'executed']],
@@ -258,6 +266,116 @@ describe('housekeeping · caducidad de «Bloquear IP» (§08.8)', () => {
 
     estado.vencidas = () => ({ error: { code: '57014' } });
     expect(await housekeeping(envDoble(PROD).env, AHORA)).toMatchObject({ resueltos: 2, error: '57014', deshechos: 0 });
+  });
+});
+
+describe('housekeeping · modo bajo ataque: caducidad por tipo y propuesta huérfana (modo-bajo-ataque.md §8)', () => {
+  const RS = 'b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6';
+  const REF = 'vg_ua_' + 'a'.repeat(32);
+  const CF = `https://api.cloudflare.com/client/v4/zones/${ZONA}`;
+  const EP = `${CF}/rulesets/phases/http_config_settings/entrypoint`;
+  const conn = (i: number) => `c0aa0000-0000-4000-8000-00000000000${i}`;
+  const modo = (id: string, o: Record<string, unknown> = {}) => ({ id, org_id: ORG, kind: 'under_attack_on',
+    provider_ref: `${id}${'d'.repeat(32)}`.slice(0, 32), previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ruleset_id: RS },
+    ...o });
+  const borrados = () => fetchMock.mock.calls.filter((c) => (c[1] as RequestInit).method === 'DELETE').map((c) => String(c[0]));
+  const actions = () => estado.llamadas.filter((l) => l.tabla === 'actions');
+  const leeHuerfana = () => actions().some((l) => l.metodos.some(([m, c, v]) => m === 'eq' && c === 'status' && v === 'proposed'));
+
+  it('un under_attack_on vencido se retira con DELETE de su regla de configuración (nunca access_rules) y queda undone', async () => {
+    estado.vencidas = () => ({ data: [modo('u1')] });
+    const r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(r).toMatchObject({ deshechos: 1, fallidos: 0, error: null });
+    expect(borrados()).toEqual([`${CF}/rulesets/${RS}/rules/${modo('u1').provider_ref}`]);
+    const up = actions().find((l) => l.metodos.some(([m]) => m === 'update'))!;
+    expect(up.metodos).toEqual([['update', { status: 'undone', undone_at: AHORA.toISOString() }], ['in', 'id', ['u1']],
+      ['in', 'org_id', [ORG]], ['eq', 'kind', 'under_attack_on'], ['in', 'status', ['executed', 'failed']]]);
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 1 + 1 + 1);    // rpc · vigilante · select · sobre · DELETE · undone · huérfana
+  });
+
+  it('con 3 vencidos de bajo ataque solo se procesan 2 (y los bloqueos completan hasta 5)', async () => {
+    estado.vencidas = () => ({ data: [modo('u1'), modo('u2'), modo('u3'), vencida('a1'), vencida('a2'), vencida('a3'), vencida('a4')] });
+    const r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(r).toMatchObject({ deshechos: 5 });
+    const urls = borrados();
+    expect(urls.filter((u) => u.includes('/rulesets/'))).toHaveLength(2);
+    expect(urls.filter((u) => u.includes('/access_rules/'))).toHaveLength(3);
+    expect(urls.some((u) => u.includes(modo('u3').provider_ref))).toBe(false);
+  });
+
+  it('un fallo permanente al retirar un modo bajo ataque → failed con deshacer_error y su propia línea de error', async () => {
+    estado.vencidas = () => ({ data: [modo('u1')] });
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 403 }));
+    expect(await housekeeping(envDoble(PROD).env, AHORA)).toMatchObject({ deshechos: 0, fallidos: 1 });
+    const up = actions().find((l) => l.metodos.some(([m]) => m === 'update'))!;
+    expect(up.metodos[0]).toEqual(['update', { status: 'failed', previous: { ...modo('u1').previous, intentos: 1, deshacer_error: 'sin_permiso' } }]);
+    expect(logs.mock.calls.map((a) => String(a[0])).join(' ')).toContain('"bajo_ataque.caducidad_fallida"');
+  });
+
+  it('propuesta huérfana de 3 min con la regla presente → DELETE por su ref y failed con huerfana retirada', async () => {
+    estado.huerfanas = () => ({ data: [{ id: 'h1', org_id: ORG, expires_at: new Date(AHORA.getTime() + 27 * 60_000).toISOString(),
+      previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF } }] });
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => (init.method === 'GET' && url === EP
+      ? new Response(JSON.stringify({ result: { id: RS, rules: [{ id: 'e'.repeat(32), ref: REF }] } })) : new Response(null, { status: 200 })));
+    const r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(borrados()).toEqual([`${CF}/rulesets/${RS}/rules/${'e'.repeat(32)}`]);
+    const [lectura] = actions().filter((l) => l.metodos.some(([m, c, v]) => m === 'eq' && c === 'status' && v === 'proposed'));
+    expect(lectura!.metodos).toContainEqual(['lt', 'created_at', new Date(AHORA.getTime() - 120_000).toISOString()]);
+    const up = actions().find((l) => l.metodos.some(([m]) => m === 'update'))!;
+    expect(up.metodos).toEqual([['update', { status: 'failed', previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF,
+      huerfana: 'retirada' } }], ['eq', 'id', 'h1'], ['eq', 'org_id', ORG], ['eq', 'status', 'proposed']]);
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 6);                // rpc · vigilante · caducidad (lectura) · huérfana
+  });
+
+  it('si la caducidad gastó más de 15 subpeticiones no se lee la huérfana; el peor caso del minuto queda ≤ 29', async () => {
+    // 5 bloqueos en 5 conexiones distintas, todos retirados: 1 + 5 × 2 + 5 + 2 = 18 > 15.
+    estado.vencidas = () => ({ data: [1, 2, 3, 4, 5].map((i) => vencida(`a${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, existed: false } })) });
+    let r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(r.subpeticiones).toBe(1 + 1 + 18);
+    expect(leeHuerfana()).toBe(false);
+
+    // Peor caso: 3 bloqueos y 2 modos, cada uno en su conexión, con fallos que suman una escritura por fila (caducidad 22).
+    estado.llamadas = [];
+    estado.vencidas = () => ({ data: [
+      ...[1, 2, 3].map((i) => vencida(`a${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, existed: false } })),
+      ...[4, 5].map((i) => modo(`u${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, scope: 'host', ruleset_id: RS } })),
+    ] });
+    let n = 0;
+    fetchMock.mockImplementation(async () => new Response('{}', { status: [200, 503, 403, 200, 503][n++ % 5] }));
+    r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(r).toMatchObject({ deshechos: 2, error: null });
+    expect(r.subpeticiones).toBe(1 + 1 + 22);
+    expect(r.subpeticiones).toBeLessThanOrEqual(29);
+    expect(leeHuerfana()).toBe(false);
+
+    // Con la caducidad barata (≤ 15) sí corre la huérfana y el minuto sigue ≤ 29.
+    estado.llamadas = [];
+    fetchMock.mockReset().mockImplementation(async () => new Response(null, { status: 200 }));
+    estado.vencidas = () => ({ data: [vencida('a1'), modo('u1')] });
+    estado.huerfanas = () => ({ data: [{ id: 'h1', org_id: ORG, expires_at: AHORA.toISOString(),
+      previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF } }] });
+    r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(leeHuerfana()).toBe(true);
+    expect(r.subpeticiones).toBeLessThanOrEqual(29);
+  });
+
+  it('si una función de deshacer lanza (falla su undone), lo que ya gastó cuenta y no se lee la huérfana', async () => {
+    // 3 bloqueos y 2 modos, cada uno en su conexión, todos retirados: caducidad real 1 + (3 × 2 + 3 + 2) + (2 × 2 + 2 + 1)
+    // = 19 > 15.
+    estado.vencidas = () => ({ data: [
+      ...[1, 2, 3].map((i) => vencida(`a${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, existed: false } })),
+      ...[4, 5].map((i) => modo(`u${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, scope: 'host', ruleset_id: RS } })),
+    ] });
+    estado.actualizar = (l) => (l?.metodos.some(([m, c, v]) => m === 'eq' && c === 'kind' && v === 'under_attack_on')
+      ? { error: { code: '57014' } } : { data: null });
+    estado.huerfanas = () => ({ data: [{ id: 'h1', org_id: ORG, expires_at: AHORA.toISOString(),
+      previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF } }] });
+    const r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(r.error).toBe('internal');
+    expect(leeHuerfana()).toBe(false);
+    // rpc · vigilante · lectura · bloqueos (11, los suyos) · bajo ataque: su tope 2 × 2 + 2 + 2 = 8 (real 7) al lanzar.
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 11 + 8);
+    expect(r.subpeticiones).toBeGreaterThanOrEqual(1 + 1 + 19);
   });
 });
 

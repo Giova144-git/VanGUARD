@@ -39,6 +39,8 @@ export * from './templates/revision.ts';
 export * from './engine/edge.ts';
 export * from './engine/incidente.ts';
 export * from './engine/notify-plan.ts';
+// «Modo bajo ataque» (asignaciones/modo-bajo-ataque.md §7): la regla que lo ofrece, las guardas y la Configuration Rule.
+export * from './bajo-ataque.ts';
 
 // IA (S11 11.12): precios, peor caso, costo real y filtro de salida.
 export * from './ai.ts';

@@ -9,7 +9,7 @@ vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
 vi.mock('../lib/credentials.ts', () => ({
   withSecret: async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn('tok-de-prueba'),
 }));
-const { pasoCloudflare, reglasZona, zonaParaAuditar } = await import('./cloudflare.ts');
+const { pasoCloudflare, probarCloudflareAcciones, REF_SONDA, reglasZona, zonaParaAuditar } = await import('./cloudflare.ts');
 
 const ZONA = 'a'.repeat(32);
 const CONN = 'c0000000-0000-4000-8000-000000000002';
@@ -129,5 +129,83 @@ describe('pasoCloudflare', () => {
     await expect(pasoCloudflare(env, m)).rejects.toMatchObject({ code: 'invalid' });
     expect(fetchs).toEqual([]);
     expect(detalle()).toBeUndefined();
+  });
+});
+
+// Sonda de Zone · Config Rules · Edit del token de acciones (modo-bajo-ataque.md §5, E8/E9): dry_run por mutarEnSeco,
+// nunca escribe; solo un 403 guarda config_rules_edit:false.
+describe('probarCloudflareAcciones · sonda config_rules_edit', () => {
+  const RS = 'b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6';
+  const CF = `https://api.cloudflare.com/client/v4/zones/${ZONA}`;
+  const EP = `${CF}/rulesets/phases/http_config_settings/entrypoint`;
+  const lectura = { estado: 'ok' as const, faltan: [], checks: [], capabilities: {}, scopes: [], label: 'Cloudflare · demo.com',
+    expiresAt: null, meta: { zone_id: ZONA, zone_name: 'demo.com', plan: 'free', cf_cursor: 'x' } };
+  let cf: Record<string, () => Response>;
+  let llamadas: { url: string; method: string; body: unknown }[];
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  beforeEach(() => {
+    llamadas = [];
+    cf = {
+      [`GET ${CF}/firewall/access_rules/rules?per_page=5`]: () => json({ result: [] }),
+      [`GET ${EP}`]: () => json({ result: { id: RS, rules: [] } }),
+      [`POST ${CF}/rulesets/${RS}/rules?dry_run=true`]: () => json({ success: true, result: null }),
+      [`POST ${CF}/rulesets?dry_run=true`]: () => json({ success: true, result: null }),
+    };
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
+      llamadas.push({ url: String(url), method: init.method ?? 'GET', body: init.body });
+      return (cf[`${init.method ?? 'GET'} ${url}`] ?? (() => json({}, 500)))();
+    }));
+  });
+  const probar = () => probarCloudflareAcciones(PAT, ZONA, lectura);
+  const config = (s: Awaited<ReturnType<typeof probar>>) => s.checks.find((c) => c.permission === 'config_rules_edit');
+
+  it('entrypoint 200 + dry_run 200 (result null) → config_rules_edit:true, la misma regla de E21 con su caducidad', async () => {
+    const s = await probar();
+    expect(s.estado).toBe('ok');
+    expect(config(s)).toEqual({ permission: 'config_rules_edit', ok: true, required: false });
+    expect(s.capabilities).toEqual({ firewall_read: true, config_rules_edit: true });
+    const seco = llamadas.find((l) => l.method === 'POST')!;
+    expect(seco.url).toBe(`${CF}/rulesets/${RS}/rules?dry_run=true`);
+    expect(JSON.parse(String(seco.body))).toMatchObject({ ref: REF_SONDA, action: 'set_config',
+      expression: expect.stringMatching(/^\(http\.host eq "vanguard-sonda\.demo\.com" and http\.request\.timestamp\.sec lt \d{10}\)$/) });
+    expect(s.meta).not.toHaveProperty('cf_cursor');
+  });
+
+  it('sin ruleset en la fase (404) → dry_run en /rulesets → true; todo fetch no GET lleva dry_run=true', async () => {
+    cf[`GET ${EP}`] = () => json({}, 404);
+    expect((await probar()).capabilities).toEqual({ firewall_read: true, config_rules_edit: true });
+    const mutaciones = llamadas.filter((l) => l.method !== 'GET');
+    expect(mutaciones.map((l) => l.url)).toEqual([`${CF}/rulesets?dry_run=true`]);
+    expect(mutaciones.every((l) => new URL(l.url).searchParams.get('dry_run') === 'true')).toBe(true);
+  });
+
+  it('403 en el entrypoint o en el dry_run → config_rules_edit:false; el token sigue conectando (required:false)', async () => {
+    cf[`POST ${CF}/rulesets/${RS}/rules?dry_run=true`] = () => json({ success: false }, 403);
+    let s = await probar();
+    expect([s.estado, s.capabilities]).toEqual(['ok', { firewall_read: true, config_rules_edit: false }]);
+    expect(config(s)).toMatchObject({ ok: false, error_code: 'forbidden', required: false });
+    cf[`GET ${EP}`] = () => json({}, 403);
+    s = await probar();
+    expect(s.capabilities).toEqual({ firewall_read: true, config_rules_edit: false });
+    expect(llamadas.filter((l) => l.method === 'POST')).toHaveLength(1);   // el segundo no llega al dry_run
+  });
+
+  it('dry_run 5xx, red o 4xx de validación → capabilities SIN la clave config_rules_edit (un fallo pasajero no esconde el botón)', async () => {
+    for (const r of [() => json({}, 502), () => { throw new TypeError('network'); }, () => json({ errors: [{ code: 20021 }] }, 400)]) {
+      cf[`POST ${CF}/rulesets/${RS}/rules?dry_run=true`] = r;
+      const s = await probar();
+      expect(s.estado).toBe('ok');
+      expect(s.capabilities).toEqual({ firewall_read: true });
+    }
+    cf[`GET ${EP}`] = () => json({}, 503);
+    expect((await probar()).capabilities).toEqual({ firewall_read: true });
+  });
+
+  it('una escritura colada en la sonda se borra al instante y no cuenta como permiso', async () => {
+    cf[`POST ${CF}/rulesets/${RS}/rules?dry_run=true`] = () => json({ success: true, result: { id: RS, rules: [{ id: 'e'.repeat(32), ref: REF_SONDA }] } });
+    cf[`DELETE ${CF}/rulesets/${RS}/rules/${'e'.repeat(32)}`] = () => new Response(null, { status: 200 });
+    const s = await probar();
+    expect(s.capabilities).toEqual({ firewall_read: true });
+    expect(llamadas.at(-1)).toMatchObject({ method: 'DELETE', url: `${CF}/rulesets/${RS}/rules/${'e'.repeat(32)}` });
   });
 });

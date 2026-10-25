@@ -323,6 +323,9 @@ export async function deshacerBloqueos(env: CloudflareBindings, acciones: readon
   for (const a of acciones) {
     const prev = obj(a.previous);
     const conn = uuid(prev.connection_id), zone = str(prev.zone_id), ref = str(a.provider_ref);
+    // previous.scope = fila de bajo ataque (modo-bajo-ataque.md D10): su regla no es una access rule; un DELETE aquí daría
+    // 404, la daría por deshecha y la regla seguiría en Cloudflare. Sin tocar nada: la retira deshacerBajoAtaque.
+    if (prev.scope !== undefined) { resultados.set(a.id, 'invalido'); continue; }
     if (prev.existed === true) { resultados.set(a.id, 'deshecho'); continue; }
     if (!UUID.test(a.org_id) || !conn || !zone || !ZONA.test(zone) || !ref || !ID_REGLA.test(ref)) { resultados.set(a.id, 'invalido'); continue; }
     const k = `${a.org_id}|${conn}`;

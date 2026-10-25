@@ -556,6 +556,38 @@ describe('E7, E9 y E10', () => {
       expect(doble.ops.some((o) => o.action === 'delete')).toBe(false);
     });
 
+    it('un modo bajo ataque vivo va a deshacerBajoAtaque (DELETE de la regla de configuración), un bloqueo a deshacerBloqueos', async () => {
+      const RS = 'b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6';
+      const REGLA = 'd'.repeat(32);
+      bloqueos = [
+        { id: 'a1', org_id: ORG, kind: 'block_ip', provider_ref: REF, previous: { connection_id: CONN, zone_id: ZONA, existed: false } },
+        { id: 'u1', org_id: ORG, kind: 'under_attack_on', provider_ref: REGLA,
+          previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ruleset_id: RS, ref: 'vg_ua_' + 'a'.repeat(32) } },
+      ];
+      const r = await borrar();
+      expect(r.status).toBe(204);
+      const sel = doble.ops.find((o) => o.table === 'actions' && o.action === 'select')!;
+      expect(sel.columns).toBe('id, org_id, kind, provider_ref, previous');
+      expect(fetchMock.mock.calls.map((c) => `${(c[1] as RequestInit).method} ${String(c[0])}`)).toEqual([
+        `DELETE https://api.cloudflare.com/client/v4/zones/${ZONA}/firewall/access_rules/rules/${REF}`,
+        `DELETE https://api.cloudflare.com/client/v4/zones/${ZONA}/rulesets/${RS}/rules/${REGLA}`,
+      ]);
+      // Por id (deshacerBloqueos además pasa a undone por provider_ref): primero el bloqueo, luego el modo bajo ataque.
+      const undone = doble.ops.filter((o) => o.table === 'actions' && o.action === 'update' && o.filters.some(([c]) => c === 'id'));
+      expect(undone.map((o) => o.filters.find(([c]) => c === 'id')![2])).toEqual([['a1'], ['u1']]);
+      expect(undone[1]!.filters).toContainEqual(['kind', 'eq', 'under_attack_on']);
+    });
+
+    it('si el modo bajo ataque no se puede retirar (403 de Config Rules) → 409 y no borra la conexión', async () => {
+      bloqueos = [{ id: 'u1', org_id: ORG, kind: 'under_attack_on', provider_ref: 'd'.repeat(32),
+        previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ruleset_id: 'b'.repeat(32) } }];
+      fetchMock.mockImplementation(async () => new Response('{}', { status: 403 }));
+      const r = await borrar();
+      expect([r.status, (await error(r)).details?.reason]).toEqual([409, 'unblock_failed']);
+      expect(fetchMock.mock.calls.every((c) => String(c[0]).includes('/rulesets/'))).toBe(true);
+      expect(doble.ops.some((o) => o.action === 'delete')).toBe(false);
+    });
+
     it('fuera del host de producción con bloqueos → 409 sin tocar Cloudflare ni borrar; sin bloqueos borra igual', async () => {
       const r = await borrar({});
       expect(r.status).toBe(409);

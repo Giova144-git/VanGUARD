@@ -75,9 +75,10 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Antes de gastar nada te decimos cuánto costará. Si ese mismo commit ya tiene wiki, verla es gratis.',
     'Lo que escribe la IA se muestra como texto: nunca ejecutamos nada de lo que traiga el documento.',
   ] },
-  performance: { titulo: '¿Cómo leer este módulo?', pasos: [
-    'Medimos tu web con Lighthouse (el mismo de PageSpeed Insights) y la comparamos con la medición anterior.',
-    'Si una métrica empeora frente a la anterior, la marcamos en ámbar para que sepas qué cambio la causó.',
+  performance: { titulo: '¿Cómo leer este módulo?', pasos: [   // los tres pasos de S10 §10.10
+    'Escribe la URL de cualquier web pública con https:// (no medimos IPs, localhost ni webs de VanGUARD).',
+    'Elige móvil o escritorio y pulsa «Medir ahora»: Lighthouse (el mismo de PageSpeed Insights) suele tardar menos de un minuto.',
+    'Mira qué empeoró frente a la medición anterior (en ámbar) y copia el arreglo para tu IA.',
   ] },
   audit: { titulo: '¿Cómo funciona la auditoría?', pasos: [
     'Un botón revisa todo tu ecosistema por pasos: Supabase, Cloudflare y tu repo.',

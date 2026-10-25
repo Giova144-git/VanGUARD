@@ -7,14 +7,16 @@ export class ApiError extends Error {
   readonly code: string;
   readonly requestId?: string;
   readonly details?: Record<string, unknown>;
+  readonly retryAfter?: number;                          // segundos de la cabecera Retry-After de un 429, si vino
 
-  constructor(status: number, code: string, message: string, requestId?: string, details?: Record<string, unknown>) {
+  constructor(status: number, code: string, message: string, requestId?: string, details?: Record<string, unknown>, retryAfter?: number) {
     super(typeof message === 'string' ? sinBidi(message) : message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.requestId = typeof requestId === 'string' ? sinBidi(requestId) : requestId;
     this.details = details;
+    this.retryAfter = retryAfter;
   }
 }
 

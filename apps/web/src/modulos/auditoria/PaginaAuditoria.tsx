@@ -1,10 +1,13 @@
 // /o/:orgId/audit[/:scanId] (S14 §14.14). Los cambios de scan_runs llegan por Realtime y useScan consulta de respaldo
 // cada 10 s mientras queued|running. El puntaje se pinta en cuanto `score` no es null, aunque siga `running`, y va debajo
-// de los pasos: así no los empuja a mitad de la corrida (L7).
+// de los pasos: así no los empuja a mitad de la corrida (L7). Una medición de «Medir ahora» (kind 'lighthouse', F-17) usa
+// esta misma pantalla con sus textos: sin puntaje de blindaje ni resumen de IA, y al terminar relee Rendimiento.
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ChevronRight, KeyRound, ShieldCheck } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { ChevronRight, Gauge, KeyRound, ShieldCheck } from 'lucide-react';
 import type { Finding, Module, ScanRun, Severity } from '@vanguard/contracts';
+import { Button } from '@/componentes/ui/button';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
@@ -16,6 +19,7 @@ import { ErrorBloque } from '@/componentes/vg/Vacio';
 import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
+import { invalidarPerf } from '@/modulos/rendimiento/medir';
 import { useDeltaAuditoria, useHallazgos, useOverview, useScan } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
@@ -26,7 +30,7 @@ import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
 import { useRepoDeConexion } from '@/lib/repos';
 import { Cambios } from './Cambios';
-import { PINTA_PASO, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
+import { PINTA_PASO, esMedicion, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
 const ORDEN_SEV: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -185,29 +189,38 @@ function Corrida({ id }: { id: string }) {
   const { auditar, ocupado, error } = useLanzarYNavegar();
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   // «Nuevo» en «Hallazgos abiertos»: nuevo frente a la auditoría anterior (E51; sin foto o con 404, sin etiqueta).
-  const delta = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded').data;
+  const delta = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded' && !esMedicion(q.data.kind)).data;
   const nuevos = useMemo(() => new Set(delta?.available && !delta.first ? delta.new.items.map((i) => i.finding_id) : []), [delta]);
   const run = q.data;
+  const qc = useQueryClient();
+  // Medición cerrada (bien o mal): al volver a Rendimiento, el histórico y el estado del módulo se releen.
+  const medicionCerrada = esMedicion(run?.kind) && (run?.status === 'succeeded' || run?.status === 'failed');
+  useEffect(() => { if (medicionCerrada) void invalidarPerf(qc, org.id); }, [medicionCerrada, qc, org.id]);
   if (!esId(id) || (q.isError && esApiError(q.error) && q.error.status === 404))
     return <NoEncontrada texto="Esta auditoría no existe o no es de esta organización" />;
   if (q.isError && !run) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   if (!run) return <p className="text-texto-3" aria-busy="true">—</p>;
   const est = estadoScan(run.status);
   // `in` también da true con «__proto__» o «constructor»: textoPaso usa Object.hasOwn y, si no, el texto crudo.
-  const actual = textoPasoActual(run.step);
+  const actual = textoPasoActual(run.step, run.kind);
   const terminada = run.status === 'succeeded';
-  const ordenados = [...(hallazgos.data ?? [])].sort((a, b) => orden(a.severity) - orden(b.severity));
+  const medicion = esMedicion(run.kind);
+  const nombre = medicion ? 'medición' : 'auditoría';
+  // En una medición, solo los hallazgos de Rendimiento (PF_*): el resto no es de esta corrida.
+  const ordenados = [...(hallazgos.data ?? [])].filter((f) => !medicion || f.module === 'performance')
+    .sort((a, b) => orden(a.severity) - orden(b.severity));
+  const aRendimiento = `/o/${org.id}/performance`;
 
   return (
     <div className="flex flex-col gap-6">
-      <BarraModulo titulo="Auditoría" descripcion={`Lanzada ${cuando(run.created_at)}`} extra={<Etiqueta texto={est.texto} rol={est.rol} />} />
+      <BarraModulo titulo={medicion ? 'Medición de rendimiento' : 'Auditoría'} descripcion={`Lanzada ${cuando(run.created_at)}`} extra={<Etiqueta texto={est.texto} rol={est.rol} />} />
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Progreso">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-          <span className="font-medium">{terminada ? 'Auditoría terminada' : actual ? `Paso actual: ${actual}` : 'Preparando…'}</span>
+          <span className="font-medium">{terminada ? (medicion ? 'Medición terminada' : 'Auditoría terminada') : actual ? `Paso actual: ${actual}` : 'Preparando…'}</span>
           <span className="text-muted-foreground">Tiempo: <Transcurrido run={run} /></span>
           <span className="ml-auto font-mono tabular-nums">{run.progress} %</span>
         </div>
-        <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={run.progress} aria-label="Progreso de la auditoría">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={run.progress} aria-label={`Progreso de la ${nombre}`}>
           <div className="h-full bg-info transition-[width]" style={{ width: `${run.progress}%` }} />
         </div>
         <p className="sr-only" aria-live="polite">{actual ? `Paso actual: ${actual}` : ''} {est.texto}</p>
@@ -215,20 +228,27 @@ function Corrida({ id }: { id: string }) {
       {run.status === 'failed' ? (
         <div className="flex flex-col gap-3">
           {/* ApiError para que mensajeDe muestre el `run.error` del servidor (con un Error suelto saldría «Algo falló»). */}
-          <ErrorBloque error={new ApiError(0, 'run_failed', textoFallo(run.error))} />
-          <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>
+          <ErrorBloque error={new ApiError(0, 'run_failed', textoFallo(run.error, run.kind))} />
+          {/* Una medición se repite desde Rendimiento (URL y estrategia); «Reintentar auditoría» lanzaría un full_audit. */}
+          {medicion ? <Button asChild variant="principal" size="grande" className="w-fit"><Link to={aRendimiento}><Gauge />Volver a Rendimiento</Link></Button>
+            : <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>}
           {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
         </div>
       ) : null}
       <Pasos run={run} />
-      {run.score != null && run.coverage ? (
+      {!medicion && run.score != null && run.coverage ? (
         // La banda la decide el servidor (L1): la de la corrida; si es vieja y no la trae, la del overview si es esta misma; si no, neutra.
         <section className="rounded-xl border bg-card p-5"><PuntajeBlindaje score={run.score}
           band={run.band ?? (overview.data?.last_scan?.id === run.id ? overview.data.band : null)}
           coverage={run.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} /></section>
       ) : null}
-      {terminada ? <Cambios scanId={run.id} /> : null}
-      {terminada ? <Resumen run={run} porId={porId} /> : null}
+      {terminada && !medicion ? <Cambios scanId={run.id} /> : null}
+      {terminada && medicion ? (
+        <section className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-5" aria-label="Resultado">
+          <p className="min-w-0 flex-1 basis-64 text-[15px] text-muted-foreground">Medición guardada: el histórico, la comparación con la anterior y las causas están en Rendimiento.</p>
+          <Button asChild variant="principal" size="grande"><Link to={aRendimiento}><Gauge />Ver en Rendimiento</Link></Button>
+        </section>
+      ) : terminada ? <Resumen run={run} porId={porId} /> : null}
       {terminada && ordenados.length ? (
         <section className="flex flex-col gap-3" aria-labelledby="hallazgos-abiertos">
           <h3 id="hallazgos-abiertos" className="text-[17px] font-semibold">Hallazgos abiertos</h3>

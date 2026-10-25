@@ -86,12 +86,13 @@ export const useFixPrompt = (org: string, id: string, habilitado: boolean) => us
   queryFn: () => api(`/api/orgs/${org}/findings/${id}/fix-prompt`, { method: 'POST', body: {}, esquema: FixPromptResponse }),
 });
 
-// Mientras queued|running: 10 s de respaldo (los pasos llegan por el evento de scan_runs). En fixtures, sin cupo que
-// cuidar, 1 s, para ver avanzar la simulación de 12 s.
+// Mientras queued|running: 10 s de respaldo (los pasos llegan por el evento de scan_runs); una medición de «Medir ahora»
+// (kind lighthouse, una pasada de PSI, ~10 s), cada 2 s (S10 §10.10). En fixtures, sin cupo que cuidar, 1 s, para ver avanzar la simulación.
 export const useScan = (org: string, id: string | undefined) => useQuery({
   queryKey: ['org', org, 'scan', id], enabled: esId(id), refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/scans/${id}`, { esquema: ScanRun }),
-  refetchInterval: (q) => !es404(q) && ['queued', 'running'].includes(q.state.data?.status ?? 'queued') ? (USA_FIXTURES ? 1_000 : 10_000) : false,
+  refetchInterval: (q) => !es404(q) && ['queued', 'running'].includes(q.state.data?.status ?? 'queued')
+    ? (USA_FIXTURES ? 1_000 : q.state.data?.kind === 'lighthouse' ? 2_000 : 10_000) : false,
 });
 
 // Incidentes (E16–E17). `estado = 'all'` no manda status: el BACK devuelve las últimas 24 h.

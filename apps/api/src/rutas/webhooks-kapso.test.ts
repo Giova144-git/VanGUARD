@@ -729,3 +729,161 @@ describe('E31 · botones ok/no/blk: respuesta del canje (§12.9)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// Anexo de botones (asignaciones/avisos-whatsapp-botones.md): fix y rvs de punta a punta por la ruta, con approvals en
+// memoria y la semántica de vg_redeem_approval; iss, rpr y uat registradas → «llega pronto».
+describe('E31 · botones del anexo: fix, rvs, iss, rpr y uat', () => {
+  const ORG_A = '0f6c0000-0000-4000-8000-00000000000a';
+  const ORG_B = '0f6c0000-0000-4000-8000-00000000000b';
+  const REV = 'c4a1e9f0-0000-4000-8000-000000000011';
+  const CFG = 'cf000000-0000-4000-8000-000000000021';
+  const NONCE_RVS = 'Qw8rTy6Ui4Op2As0' + 'Df1gHj';
+  type Fila = Record<string, unknown>;
+  let aprobaciones: Map<string, Fila>;
+  let contacto: Fila | null;
+  let config: Fila;
+  let marcas: Fila[];
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let rlWa: ReturnType<typeof vi.fn>;
+  const envBoton = () => ({ KAPSO_API_KEY: ['kapso', 'prueba'].join('-'), KAPSO_PHONE_NUMBER_ID: '1234567890',
+    APP_ORIGIN: 'https://officialvanguard.com', RL_WA: { limit: rlWa } as unknown as RateLimit });
+
+  async function sembrar(nonce: string, extra: Fila = {}) {
+    aprobaciones.set(`\\x${await sha256Hex(nonce)}`, { id: crypto.randomUUID(), org_id: ORG_A, incident_id: null,
+      code_review_id: REV, action_kind: 'send_fix', channel: 'whatsapp', recipient: TEL, used_at: null,
+      expires_at: new Date(Date.now() + 600_000).toISOString(), ...extra });
+  }
+  beforeEach(() => {
+    aprobaciones = new Map();
+    contacto = { id: 'c1', verified_at: '2026-10-24T14:00:00+00:00' };
+    config = { id: CFG, org_id: ORG_A, muted_until: null };
+    marcas = [];
+    let usos = 0;
+    rlWa = vi.fn(async () => ({ success: ++usos <= 3 }));
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: 'wamid.R1' }] })));
+    vi.stubGlobal('fetch', fetchMock);
+    rpc = (name, args) => {
+      if (name !== 'vg_redeem_approval') return undefined;
+      const f = aprobaciones.get(String(args.p_nonce_hash));
+      if (!f || f.used_at || Date.parse(String(f.expires_at)) <= Date.now() || f.recipient !== args.p_recipient) return { data: [] };
+      f.used_at = new Date().toISOString();
+      return { data: [{ ...f }] };
+    };
+    tabla = (op) => {
+      if (op.table === 'code_reviews' && op.action === 'select') {
+        return { data: eqDe(op, 'id') === REV && eqDe(op, 'org_id') === ORG_A ? { id: REV, config_id: CFG, new_findings: [
+          { finding_id: 'f1', rule_id: 'CB_SECRET_STRIPE_LIVE', severity: 'critical', title: 'Clave live de Stripe en el código',
+            resource: 'src/lib/pagos.ts:3' }] } : null };
+      }
+      if (op.table === 'code_reviews' && op.action === 'update') { marcas.push(op.payload as Fila); return {}; }
+      if (op.table === 'code_review_configs' && op.action === 'update') {
+        if (eqDe(op, 'id') !== CFG || eqDe(op, 'org_id') !== config.org_id) return { data: [] };
+        Object.assign(config, op.payload);
+        return { data: [{ id: CFG }] };
+      }
+      if (op.table === 'contacts' && op.single) {
+        return { data: eqDe(op, 'org_id') === ORG_A && eqDe(op, 'phone_e164') === `+${TEL}` ? contacto : null };
+      }
+      return undefined;
+    };
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const pulsar = (id: string, clave: string) =>
+    enviar(boton(id), { evento: 'whatsapp.message.received', clave, env: envBoton() });
+  const respuestas = () => fetchMock.mock.calls.map((c) =>
+    JSON.parse(String((c[1] as RequestInit).body)) as { to: string; text: { body: string } });
+  const resultados = () => lineas().filter((l) => l.includes('"kapso.revision_canje"'))
+    .map((l) => JSON.parse(l).resultado as string);
+
+  it('fix válido → responde al remitente (con RL_WA) los pasos fijos y el enlace; sin rutas, valores ni teléfono en el log', async () => {
+    await sembrar(NONCE);
+    await pulsar(`fix:C4A1E9:${NONCE}`, 'f1');
+    expect(doble.rpcs).toEqual([{ name: 'vg_redeem_approval',
+      args: { p_approval: null, p_nonce_hash: `\\x${await sha256Hex(NONCE)}`, p_recipient: TEL } }]);
+    expect(rlWa).toHaveBeenCalledWith({ key: `wa:${TEL}` });
+    const [r] = respuestas();
+    expect(r!.to).toBe(TEL);
+    expect(r!.text.body.split('\n')[0])
+      .toBe('Hecho: así se corrige `CB_SECRET_STRIPE_LIVE` (severidad crítica), lo más grave de esta revisión.');
+    expect(r!.text.body.endsWith(`https://officialvanguard.com/o/${ORG_A}/codebase?revision=${REV}`)).toBe(true);
+    expect(r!.text.body).not.toMatch(/pagos\.ts|src\/lib|Clave live de Stripe/);
+    expect(marcas).toEqual([{ whatsapp_action: 'fix_sent', whatsapp_action_at: expect.stringMatching(/Z$/) }]);
+    expect(resultados()).toEqual(['arreglo_enviado']);
+    expect(lineas().join('\n')).not.toContain('4141234567');
+    expect(lineas().join('\n')).not.toContain(NONCE);
+  });
+
+  it('el mismo nonce otra vez → «No se pudo: el botón venció o ya se usó…» (con RL_WA) y sin segundo efecto', async () => {
+    await sembrar(NONCE);
+    await pulsar(`fix:C4A1E9:${NONCE}`, 'r1');
+    await pulsar(`fix:C4A1E9:${NONCE}`, 'r2');
+    expect(resultados()).toEqual(['arreglo_enviado', 'sin_canje']);
+    expect(respuestas()[1]!.text.body).toBe('No se pudo: el botón venció o ya se usó. Abre officialvanguard.com');
+    expect(marcas).toHaveLength(1);
+  });
+
+  it('confirmación caducada o de otro teléfono → «venció o ya se usó» y sin efecto', async () => {
+    await sembrar(NONCE, { expires_at: new Date(Date.now() - 1000).toISOString() });
+    await sembrar(NONCE_RVS, { recipient: '584249998877', action_kind: 'mute_repo' });
+    await pulsar(`fix:C4A1E9:${NONCE}`, 'c1');
+    await pulsar(`rvs:C4A1E9:${NONCE_RVS}`, 'c2');
+    expect(resultados()).toEqual(['sin_canje', 'sin_canje']);
+    expect(config.muted_until).toBeNull();
+    expect(marcas).toHaveLength(0);
+  });
+
+  it('remitente no verificado o aprobación de otra org → sin efecto y sin respuesta', async () => {
+    await sembrar(NONCE);
+    contacto = { id: 'c1', verified_at: null };
+    await pulsar(`fix:C4A1E9:${NONCE}`, 'n1');
+    await sembrar(NONCE_RVS, { org_id: ORG_B, action_kind: 'mute_repo' });
+    await pulsar(`rvs:C4A1E9:${NONCE_RVS}`, 'n2');
+    expect(resultados()).toEqual(['no_contacto', 'no_contacto']);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(config.muted_until).toBeNull();
+    expect(marcas).toHaveLength(0);
+  });
+
+  it('rvs válido → muted_until = ahora + 1 h en la config y «Hecho: …» con la hora de fin en Caracas', async () => {
+    await sembrar(NONCE_RVS, { action_kind: 'mute_repo' });
+    const antes = Date.now();
+    await pulsar(`rvs:C4A1E9:${NONCE_RVS}`, 's1');
+    const hasta = Date.parse(String(config.muted_until)) - antes;
+    expect(hasta).toBeGreaterThanOrEqual(3_600_000 - 50);
+    expect(hasta).toBeLessThan(3_600_000 + 5_000);
+    expect(resultados()).toEqual(['silenciado']);
+    expect(respuestas()[0]!.text.body)
+      .toMatch(/^Hecho: no te mandaré avisos de revisión de este repo hasta las \d{2}:\d{2} \(hora de Caracas\)\./);
+    expect(marcas).toEqual([{ whatsapp_action: 'muted', whatsapp_action_at: expect.stringMatching(/Z$/) }]);
+  });
+
+  it('iss, rpr y uat → «Esta acción llega pronto» (con RL_WA), sin canje ni lecturas', async () => {
+    for (const [i, a] of ['iss', 'rpr', 'uat'].entries()) await pulsar(`${a}:C4A1E9:${NONCE}`, `p${i}`);
+    expect(doble.rpcs).toHaveLength(0);
+    expect(doble.ops.some((o) => o.table === 'approvals' || o.table === 'code_reviews')).toBe(false);
+    expect(respuestas().map((r) => r.text.body))
+      .toEqual(Array(3).fill('Esta acción llega pronto. Mientras tanto, la tienes en la app de VanGUARD.'));
+    expect(lineas().filter((l) => l.includes('"kapso.boton_pronto"')).map((l) => JSON.parse(l).accion))
+      .toEqual(['iss', 'rpr', 'uat']);
+  });
+
+  it('ids inválidos de las acciones nuevas → desconocido: ni canje ni respuesta', async () => {
+    const malos = [`fix:c4a1e9:${NONCE}`, `rvs:C4A1E9:corto`, `fixx:C4A1E9:${NONCE}`, `uat:C4A1E9:${NONCE}:ok`];
+    for (const [i, id] of malos.entries()) await pulsar(id, `i${i}`);
+    expect(doble.rpcs).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(lineas().filter((l) => l.includes('"kapso.boton"')).map((l) => JSON.parse(l).accion))
+      .toEqual(Array(4).fill('desconocido'));
+    expect(resumenKapso('whatsapp.message.received', boton(`rvs:C4A1E9:${NONCE}`)).items[0]!.button).toBe('rvs');
+  });
+
+  it('sin presupuesto para el peor caso de fix/rvs, ni canje ni respuesta', async () => {
+    await sembrar(NONCE);
+    const { procesarKapso } = await import('./webhooks-kapso.ts');
+    await procesarKapso(envDoble(envBoton()).env, 'whatsapp.message.received', boton(`fix:C4A1E9:${NONCE}`), 'rid-x',
+      { quedan: 6, omitidos: 0 });
+    expect(doble.rpcs).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

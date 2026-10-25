@@ -10,8 +10,9 @@ vi.mock('./block-ip.ts', async (original) => ({ ...await original<typeof import(
 
 const {
   aBytea, canjearBotonAlerta, canjearBotonBloqueo, elegirConexion, filasBotones, hashNonce, nuevoNonce, parsearBoton, textoPropuesta,
-  VIDA_BOTON_MS,
+  VIDA_BOTON_MS, canjearBotonRevision, COSTE_BOTON_REVISION, filasBotonesRevision, peorHallazgo, SILENCIO_REPO_MS,
 } = await import('./approvals.ts');
+const { ACCIONES_BOTON, TEXTO_BOTON_VENCIDO } = await import('@vanguard/core');
 
 describe('parsearBoton (regex de S15 15.10)', () => {
   const nonce = 'Zx9kQm2Lp0Ab7Yt4cD3eFg';
@@ -27,6 +28,19 @@ describe('parsearBoton (regex de S15 15.10)', () => {
       'VERIFICAR 1A2B3C', `ack:A1F3C9:${nonce}:extra`]) {
       expect(parsearBoton(p)).toBeNull();
     }
+  });
+
+  it('anexo de botones: fix, iss, rvs, rpr y uat con código y nonce válidos; inválidos → null', () => {
+    for (const accion of ['fix', 'iss', 'rvs', 'rpr', 'uat'] as const) {
+      expect(parsearBoton(`${accion}:C4A1E9:${nonce}`)).toEqual({ accion, codigo: 'C4A1E9', nonce });
+      for (const malo of [`${accion}:c4a1e9:${nonce}`, `${accion}:C4A1E:${nonce}`, `${accion}:C4A1E9:corto`,
+        `${accion}x:C4A1E9:${nonce}`, `${accion.toUpperCase()}:C4A1E9:${nonce}`, ` ${accion}:C4A1E9:${nonce}`,
+        `${accion}:C4A1E9:${'x'.repeat(44)}`]) {
+        expect(parsearBoton(malo)).toBeNull();
+      }
+    }
+    // La regex del webhook acepta exactamente las acciones de core (TITULOS_BOTON): no se pueden desalinear.
+    for (const accion of ACCIONES_BOTON) expect(parsearBoton(`${accion}:A1F3C9:${nonce}`)?.accion).toBe(accion);
   });
 });
 
@@ -306,5 +320,161 @@ describe('canjearBotonBloqueo (E31 ok/no/blk)', () => {
     expect((await pulsar('ack')).resultado).toBe('tipo_distinto');
     expect((await pulsar('ok', PROD, '123')).resultado).toBe('remitente_invalido');
     expect(doble.rpcs).toHaveLength(0);
+  });
+});
+
+describe('botones del aviso de revisión: filas y canje (E31 fix/rvs)', () => {
+  const ORG = '0f6c0000-0000-4000-8000-000000000001';
+  const ORG_B = '0f6c0000-0000-4000-8000-00000000000b';
+  const REV = 'c4a1e9f0-0000-4000-8000-000000000011';
+  const CFG = 'cf000000-0000-4000-8000-000000000021';
+  const TEL = '58' + '4141234567';
+  const NONCE = 'Zx9kQm2Lp0Ab7Yt4' + 'cD3eFg';
+  const AHORA = Date.parse('2026-10-24T23:40:00.000Z');
+  type Fila = Record<string, unknown>;
+  let canje: Resp;
+  let revision: Fila | null;
+  let contacto: Fila | null;
+  let silencio: Resp;
+  let doble: ReturnType<typeof dbDoble>;
+
+  const filaCanjeada = (action_kind: string, o: Fila = {}) => ({ id: 'w1', org_id: ORG, incident_id: null, code_review_id: REV,
+    action_kind, channel: 'whatsapp', recipient: TEL, params: {}, ...o });
+
+  beforeEach(() => {
+    canje = { data: [filaCanjeada('send_fix')] };
+    revision = { id: REV, config_id: CFG, new_findings: [
+      { finding_id: 'f1', rule_id: 'CB_GITIGNORE_NO_ENV', severity: 'medium', title: 'El .gitignore no excluye .env',
+        resource: '.gitignore' },
+      { finding_id: 'f2', rule_id: 'CB_SECRET_GITHUB_PAT', severity: 'critical', title: 'Token de GitHub en el código',
+        resource: 'scripts/deploy.sh:12' }] };
+    contacto = { id: 'c1', verified_at: '2026-10-24T14:00:00+00:00' };
+    silencio = { data: [{ id: CFG }] };
+    doble = dbDoble({
+      rpc: () => canje,
+      tabla: (op: Op) => {
+        if (op.table === 'code_reviews' && op.action === 'select') return { data: revision };
+        if (op.table === 'contacts') return { data: contacto };
+        if (op.table === 'code_review_configs') return silencio;
+        return undefined;
+      },
+    });
+    estado.client = doble.client;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const pulsar = (accion: 'fix' | 'rvs' | 'ack' | 'iss', o: { remitente?: string; codigo?: string } = {}) =>
+    canjearBotonRevision(envDoble({ APP_ORIGIN: 'https://officialvanguard.com/' }).env,
+      { accion, codigo: o.codigo ?? 'C4A1E9', nonce: NONCE }, o.remitente ?? TEL, 'rid-1', AHORA);
+  const escrituras = () => doble.ops.filter((o) => o.action === 'update');
+
+  it('filasBotonesRevision: send_fix y mute_repo colgadas de la revisión, whatsapp, sin +, solo el hash y 10 min', async () => {
+    const nonces = { fix: nuevoNonce(), rvs: nuevoNonce() };
+    const filas = await filasBotonesRevision({ org_id: ORG, code_review_id: REV, recipient: TEL, nonces, ahora: AHORA });
+    expect(filas).toEqual([
+      { org_id: ORG, code_review_id: REV, action_kind: 'send_fix', channel: 'whatsapp', recipient: TEL,
+        nonce_hash: await hashNonce(nonces.fix), expires_at: '2026-10-24T23:50:00.000Z', params: {} },
+      { org_id: ORG, code_review_id: REV, action_kind: 'mute_repo', channel: 'whatsapp', recipient: TEL,
+        nonce_hash: await hashNonce(nonces.rvs), expires_at: '2026-10-24T23:50:00.000Z', params: {} },
+    ]);
+    expect(JSON.stringify(filas)).not.toContain(nonces.fix);
+    const solo = await filasBotonesRevision({ org_id: ORG, code_review_id: REV, recipient: TEL, nonces: { rvs: nonces.rvs } });
+    expect(solo.map((f) => f.action_kind)).toEqual(['mute_repo']);
+  });
+
+  it('peorHallazgo: la severidad más alta (a igualdad, la primera); filas ilegibles se saltan', () => {
+    expect(peorHallazgo(revision!.new_findings)).toEqual({ rule_id: 'CB_SECRET_GITHUB_PAT', severity: 'critical' });
+    expect(peorHallazgo([{ rule_id: 'CB_A', severity: 'high' }, { rule_id: 'CB_B', severity: 'high' }])?.rule_id).toBe('CB_A');
+    expect(peorHallazgo([{ rule_id: 'CB_A', severity: 'grave' }, { severity: 'high' }, 'x'])).toBeNull();
+    expect(peorHallazgo(null)).toBeNull();
+  });
+
+  it('fix válido → canje del sha256 con el remitente, pasos de la regla más grave + url, y whatsapp_action fix_sent', async () => {
+    const r = await pulsar('fix');
+    expect(doble.rpcs).toEqual([{ name: 'vg_redeem_approval',
+      args: { p_approval: null, p_nonce_hash: await hashNonce(NONCE), p_recipient: TEL } }]);
+    expect(r.resultado).toBe('arreglo_enviado');
+    expect(r.texto!.split('\n')[0])
+      .toBe('Hecho: así se corrige `CB_SECRET_GITHUB_PAT` (severidad crítica), lo más grave de esta revisión.');
+    expect(r.texto).toContain('en GitHub: revoca el token en Settings → Developer settings');
+    expect(r.texto!.endsWith(`está en el panel: https://officialvanguard.com/o/${ORG}/codebase?revision=${REV}`)).toBe(true);
+    for (const prohibido of ['deploy.sh', 'scripts/', 'Token de GitHub en el código', '.gitignore no excluye']) {
+      expect(r.texto).not.toContain(prohibido);
+    }
+    const lectura = doble.ops.find((o) => o.table === 'code_reviews' && o.action === 'select')!;
+    expect([eqDe(lectura, 'id'), eqDe(lectura, 'org_id')]).toEqual([REV, ORG]);
+    const [marca] = escrituras();
+    expect(marca!.table).toBe('code_reviews');
+    expect(marca!.payload).toEqual({ whatsapp_action: 'fix_sent', whatsapp_action_at: '2026-10-24T23:40:00.000Z' });
+    expect([eqDe(marca!, 'id'), eqDe(marca!, 'org_id')]).toEqual([REV, ORG]);
+    expect(doble.ops.length + doble.rpcs.length).toBeLessThanOrEqual(COSTE_BOTON_REVISION);
+  });
+
+  it('rvs válido → muted_until = ahora + 1 h en la config (id y org), whatsapp_action muted y la hora de fin', async () => {
+    canje = { data: [filaCanjeada('mute_repo')] };
+    const r = await pulsar('rvs');
+    expect(r).toEqual({ resultado: 'silenciado', texto: 'Hecho: no te mandaré avisos de revisión de este repo hasta las 20:40 '
+      + '(hora de Caracas). Las revisiones siguen y las ves en la app.' });
+    const [cfg, marca] = escrituras();
+    expect(cfg!.table).toBe('code_review_configs');
+    expect(cfg!.payload).toEqual({ muted_until: new Date(AHORA + SILENCIO_REPO_MS).toISOString() });
+    expect([eqDe(cfg!, 'id'), eqDe(cfg!, 'org_id')]).toEqual([CFG, ORG]);
+    expect(marca!.payload).toMatchObject({ whatsapp_action: 'muted' });
+    expect(doble.ops.length + doble.rpcs.length).toBeLessThanOrEqual(COSTE_BOTON_REVISION);
+  });
+
+  it('nonce reusado, vencido o de otro teléfono (0 filas) → «No se pudo: el botón venció…» sin leer ni escribir nada', async () => {
+    canje = { data: [] };
+    expect(await pulsar('fix')).toEqual({ resultado: 'sin_canje', texto: TEXTO_BOTON_VENCIDO });
+    expect(doble.ops).toHaveLength(0);
+  });
+
+  it('remitente que ya no es contacto verificado (o de otra org) → sin efecto y SIN respuesta', async () => {
+    contacto = { id: 'c1', verified_at: null };
+    expect(await pulsar('fix')).toEqual({ resultado: 'no_contacto', texto: null });
+    // Aprobación de otra org: el contacto y la revisión se buscan con la org de la fila canjeada.
+    contacto = null;
+    canje = { data: [filaCanjeada('mute_repo', { org_id: ORG_B })] };
+    expect(await pulsar('rvs')).toEqual({ resultado: 'no_contacto', texto: null });
+    const lecturas = doble.ops.filter((o) => o.action === 'select');
+    expect(lecturas.slice(-2).map((o) => eqDe(o, 'org_id'))).toEqual([ORG_B, ORG_B]);
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  it('nonce de otra acción, de un incidente o código de otra revisión → «No se pudo: …» y nada escrito', async () => {
+    canje = { data: [filaCanjeada('mute_repo')] };
+    expect(await pulsar('fix')).toEqual({ resultado: 'tipo_distinto', texto: 'No se pudo: ese botón no corresponde a esta acción.' });
+    canje = { data: [filaCanjeada('ack', { code_review_id: null, incident_id: 'i1' })] };
+    expect((await pulsar('fix')).resultado).toBe('tipo_distinto');
+    canje = { data: [filaCanjeada('send_fix')] };
+    expect(await pulsar('fix', { codigo: 'FFFFFF' }))
+      .toEqual({ resultado: 'otra_revision', texto: 'No se pudo: no encontré esa revisión.' });
+    revision = null;
+    expect((await pulsar('fix')).resultado).toBe('otra_revision');
+    expect(escrituras()).toHaveLength(0);
+  });
+
+  it('fix de una revisión sin hallazgos nuevos y rvs sin config → «No se pudo: …»; error al silenciar → lo dice', async () => {
+    revision!.new_findings = [];
+    expect(await pulsar('fix')).toEqual({ resultado: 'sin_hallazgos',
+      texto: 'No se pudo: esta revisión no trae hallazgos nuevos que arreglar.' });
+    canje = { data: [filaCanjeada('mute_repo')] };
+    silencio = { data: [] };
+    expect((await pulsar('rvs')).resultado).toBe('sin_config');
+    silencio = { error: { code: '42703' } };
+    expect(await pulsar('rvs')).toEqual({ resultado: 'error', texto: 'No se pudo: no pude guardarlo, inténtalo desde la app.' });
+    expect(escrituras().filter((o) => o.table === 'code_reviews')).toHaveLength(0);
+  });
+
+  it('remitente ilegible o acción que no es fix/rvs → sin canje (no quema el nonce); error del canje → sin respuesta', async () => {
+    expect((await pulsar('fix', { remitente: '123' })).resultado).toBe('remitente_invalido');
+    expect((await pulsar('ack')).resultado).toBe('tipo_distinto');
+    expect((await pulsar('iss')).resultado).toBe('tipo_distinto');
+    expect(doble.rpcs).toHaveLength(0);
+    canje = { error: { code: '57014' } };
+    expect(await pulsar('fix')).toEqual({ resultado: 'error', texto: null });
+    estado.client = { rpc: () => { throw new Error('boom'); } };
+    expect(await pulsar('fix')).toEqual({ resultado: 'error', texto: null });
   });
 });

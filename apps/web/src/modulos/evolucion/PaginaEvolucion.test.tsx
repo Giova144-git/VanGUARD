@@ -57,7 +57,7 @@ describe('PaginaEvolucion', () => {
     expect(t).toContain('5 comprobados');
     expect(t).toContain('1 d 19 h');
     expect(t).toContain('mediana 2 d · 5 hallazgos');
-    expect(html).toMatch(/role="img" aria-label="Puntaje por auditoría: mar\.? 20 · 14:02 20, mié\.? 21 · 14:03 20, jue\.? 22 · 14:02 42, vie\.? 23 · 14:04 57, [^"]+ 20"/);
+    expect(html).toMatch(/role="img" aria-label="Puntaje por auditoría: 20-10 14:02 20, 21-10 14:03 20, 22-10 14:02 42, 23-10 14:04 57, [^"]+ 20"/);
     expect(t).toContain('Puntaje por auditoría');
     expect(t).not.toContain('últimas');
     expect(t).toContain('Anterior al historial');
@@ -70,7 +70,7 @@ describe('PaginaEvolucion', () => {
 
   it('nuevos y corregidos: solo las versiones con anterior, en valores absolutos', () => {
     const html = pintar(EVO);
-    expect(html).toMatch(/role="img" aria-label="Nuevos y corregidos por auditoría: jue\.? 22 · 14:02 0 nuevos y 2 corregidos, vie\.? 23 · 14:04 1 nuevos y 2 corregidos, [^"]+ 7 nuevos y 2 corregidos"/);
+    expect(html).toMatch(/role="img" aria-label="Nuevos y corregidos por auditoría: 22-10 14:02 0 nuevos y 2 corregidos, 23-10 14:04 1 nuevos y 2 corregidos, [^"]+ 7 nuevos y 2 corregidos"/);
     expect(texto(html)).toContain('Corregidos (hacia abajo)');
   });
 
@@ -94,7 +94,7 @@ describe('PaginaEvolucion', () => {
 
   it('abiertos por severidad (versiones con foto) y el filtro por módulo sin Rendimiento', () => {
     const html = pintar(EVO);
-    expect(html).toMatch(/role="img" aria-label="Abiertos por severidad: mié\.? 21 · 14:03 1 crítica, 3 alta, 3 media, 4 baja e info; /);
+    expect(html).toMatch(/role="img" aria-label="Abiertos por severidad: 21-10 14:03 1 crítica, 3 alta, 3 media, 4 baja e info; /);
     const grupo = html.match(/<div[^>]*role="group" aria-label="Módulo">([\s\S]*?)<\/div>/)?.[1] ?? '';
     expect(texto(grupo)).toBe('TodoSupabaseCloudflareCodebase');
     expect(grupo).toContain('aria-pressed="true"');

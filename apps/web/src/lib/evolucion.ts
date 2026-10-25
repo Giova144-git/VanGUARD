@@ -5,7 +5,7 @@ import type {
   CodeReview, DeltaItem, Evolution, EvolutionIncidentDay, EvolutionPoint, MatrizHallazgos, Module, PorSeveridad, ScanKind,
   Severity,
 } from '@vanguard/contracts';
-import { SIN_DATO } from './formato';
+import { SIN_DATO, cuando } from './formato';
 import { deMapa, type Rol } from './severidad';
 
 export const SEVERIDADES = ['critical', 'high', 'medium', 'low', 'info'] as const satisfies readonly Severity[];
@@ -47,15 +47,9 @@ export function horas(h: number | null | undefined) {
   return r ? `${d} d ${r} h` : `${d} d`;
 }
 
-// «mié 21 · 14:03» en hora de Caracas: eje de las gráficas y fecha de cada versión. Por partes: hay navegadores que
-// escriben «mié.» y otros «mié».
-const PARTES = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-export function etiquetaVersion(at: string | null | undefined) {
-  const d = at ? new Date(at) : null;
-  if (!d || Number.isNaN(d.getTime())) return SIN_DATO;
-  const p = Object.fromEntries(PARTES.formatToParts(d).map((x) => [x.type, x.value]));
-  return `${(p.weekday ?? '').replace(/\.$/, '')} ${p.day} · ${p.hour}:${p.minute}`;
-}
+// Fecha de cada versión y eje de las gráficas: el mismo formato que el resto de la app (cuando: «14:03» hoy, «21-10 14:03»
+// otro día, hora de Caracas; UX P1-13).
+export const etiquetaVersion = (at: string | null | undefined) => cuando(at);
 
 // Clave = la misma regla que private.vg_es_clave: que ya no esté en el código no prueba que se rotó.
 export const esClave = (rule: unknown) => typeof rule === 'string' && (rule.startsWith('CB_SECRET_') || rule === 'CB_ENV_COMMITTED');

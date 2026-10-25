@@ -20,6 +20,7 @@ vi.mock('../lib/credentials.ts', async () => {
 });
 
 const { cierreEstadoDlq, pasoEstado, REINTENTOS_ESTADO } = await import('./estado.ts');
+const { reabrirPr } = await import('./acciones-pr.ts');
 
 const ORG = '0f6c0000-0000-4000-8000-000000000001';
 const REV = 'c4000000-0000-4000-8000-000000000022';
@@ -46,6 +47,23 @@ let entorno: ReturnType<typeof envDoble>;
 
 const cumple = (f: Fila, op: Op) => op.filters.every(([c, o, v]) =>
   o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : o === 'is' ? (f[c] ?? null) === v : true);
+// La config y las conexiones, comunes a los dobles de una y de varias revisiones.
+const otrasTablas = (op: Op): Resp | undefined => {
+  if (op.table === 'code_review_configs') {
+    const hit = config && cumple(config, op) ? config : null;
+    if (op.action === 'update' && hit) Object.assign(hit, op.payload);
+    return { data: hit };
+  }
+  if (op.table === 'connections') {
+    if (op.action === 'update') {
+      const c = conexiones.find((x) => cumple(x, op));
+      if (c) Object.assign(c, op.payload);
+      return {};
+    }
+    return { data: conexiones.filter((c) => cumple(c, op)) };
+  }
+  return undefined;
+};
 
 beforeEach(() => {
   fila = { id: REV, org_id: ORG, config_id: CFG, event: 'pull_request', pr_number: 7, status: 'done', partial: false,
@@ -80,20 +98,7 @@ beforeEach(() => {
           return { data: op.returning ? (hit ? [{ id: fila.id }] : []) : null };
         }
       }
-      if (op.table === 'code_review_configs') {
-        const hit = config && cumple(config, op) ? config : null;
-        if (op.action === 'update' && hit) Object.assign(hit, op.payload);
-        return { data: hit };
-      }
-      if (op.table === 'connections') {
-        if (op.action === 'update') {
-          const c = conexiones.find((x) => cumple(x, op));
-          if (c) Object.assign(c, op.payload);
-          return {};
-        }
-        return { data: conexiones.filter((c) => cumple(c, op)) };
-      }
-      return undefined;
+      return otrasTablas(op);
     },
   });
   estado.client = doble.client;
@@ -437,6 +442,232 @@ describe('paso estado · cierre del PR con críticos (anexo)', () => {
     expect(await correr(REINTENTOS_ESTADO + 1)).toBe('ack');
     expect(fila).toMatchObject({ gate_pr_action: 'close_failed', gate_pr_error: 'red' });
   });
+});
+
+describe('paso estado · el estado de commit falla y el PR se cierra igual', () => {
+  const responde = (status: number) => {
+    gh[`POST ${GH}/statuses/${HEAD}`] = () => new Response('{"message":"x"}', { status });
+  };
+  const CIERRE = [`POST ${GH}/statuses/${HEAD}`, `POST ${GH}/issues/7/comments`, `PATCH ${GH}/pulls/7`];
+  const cerrados = () => lineas().match(/"event":"gate\.pr_cerrado"/g) ?? [];
+
+  it('422 → comenta y cierra; gate_error limite registrado como siempre y la config intacta', async () => {
+    responde(422);
+    expect(await correr()).toBe('ack');
+    expect(llamadas()).toEqual(CIERRE);
+    expect(cuerpoDe(`POST ${GH}/issues/7/comments`)).toEqual({ body: textoCierrePr(1, 'critical', URL_REV) });
+    expect(fila).toMatchObject({ gate_error: 'limite', gate_state: null, gate_pr_action: 'closed', gate_pr_error: null });
+    expect(de('code_review_configs', 'update')).toEqual([]);
+    expect(lineas()).toContain('"event":"gate.no_publicado"');
+    expect(cerrados()).toHaveLength(1);
+  });
+
+  it('403 sin límite → cierra igual; forbidden en la revisión y en la config', async () => {
+    responde(403);
+    expect(await correr()).toBe('ack');
+    expect(llamadas()).toEqual(CIERRE);
+    expect([fila.gate_error, config!.gate_last_error, fila.gate_pr_action]).toEqual(['forbidden', 'forbidden', 'closed']);
+  });
+
+  it('5xx → cierra en el 1.er intento y solo el estado se reintenta (sin otro comentario ni PATCH); a la 3.ª, red',
+    async () => {
+      responde(502);
+      expect(await correr(1)).toEqual({ retry: 10 });
+      expect(llamadas()).toEqual(CIERRE);
+      expect(fila).toMatchObject({ gate_pr_action: 'closed', gate_error: null });
+      fetchMock.mockClear();
+      expect(await correr(2)).toEqual({ retry: 20 });
+      expect(await correr(REINTENTOS_ESTADO + 1)).toBe('ack');
+      expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `POST ${GH}/statuses/${HEAD}`]);
+      expect(fila).toMatchObject({ gate_error: 'red', gate_pr_action: 'closed' });
+      expect(cerrados()).toHaveLength(1);
+    });
+
+  it('5xx o sin respuesta en el último intento → cierra igual y queda gate_error red', async () => {
+    const sinRed = () => { throw new TypeError('fetch failed'); };
+    for (const fallar of [() => responde(503), () => { gh[`POST ${GH}/statuses/${HEAD}`] = sinRed; }]) {
+      Object.assign(fila, { gate_error: null, gate_pr_action: null, gate_pr_at: null });
+      fallar();
+      fetchMock.mockClear();
+      expect(await correr(REINTENTOS_ESTADO + 1)).toBe('ack');
+      expect(llamadas()).toEqual(CIERRE);
+      expect(fila).toMatchObject({ gate_error: 'red', gate_state: null, gate_pr_action: 'closed' });
+    }
+  });
+
+  it('estado y cierre fallan de paso → un solo retry; la reentrega publica, cierra sin repetir el comentario y anota',
+    async () => {
+      responde(502);
+      gh[`PATCH ${GH}/pulls/7`] = () => new Response('x', { status: 503 });
+      expect(await correr(1)).toEqual({ retry: 10 });
+      expect(fila).toMatchObject({ gate_state: null, gate_pr_action: null });
+      expect(typeof fila.gate_pr_at).toBe('string');
+      responde(201);
+      gh[`PATCH ${GH}/pulls/7`] = () => new Response('{}', { status: 200 });
+      fetchMock.mockClear();
+      expect(await correr(2)).toBe('ack');
+      expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `PATCH ${GH}/pulls/7`]);
+      expect(fila).toMatchObject({ gate_state: 'failure', gate_pr_action: 'closed' });
+    });
+
+  it('presupuesto: el peor caso del paso cabe en las 40 subpeticiones (estado rechazado o aceptado, con el cierre)',
+    async () => {
+      // pedir sigue ≤ 3 saltos por escritura (4 fetch); withSecret (aquí un doble) lee el secreto 1 + llaves ≤ 2 en frío.
+      const SALTOS = 4, SECRETO = 3;
+      const medir = async (intento = 1) => {
+        const ops = doble.ops.length, gets = fetchMock.mock.calls.length;
+        await correr(intento);
+        return { ops: doble.ops.length - ops, gh: fetchMock.mock.calls.length - gets,
+          total: doble.ops.length - ops + (fetchMock.mock.calls.length - gets) * SALTOS + SECRETO };
+      };
+      // 403: revisión, config, conexiones, historial, reclamo, config marcada, gate_error y anotación del cierre.
+      responde(403);
+      const rechazado = await medir();
+      expect([rechazado.ops, rechazado.gh]).toEqual([8, 3]);
+      expect(rechazado.total).toBeLessThanOrEqual(40);
+      // 201 con gate_last_error que limpiar: lo mismo con gate_state y la config limpia.
+      Object.assign(fila, { gate_error: null, gate_pr_action: null, gate_pr_at: null });
+      config!.gate_last_error = 'forbidden';
+      responde(201);
+      const aceptado = await medir();
+      expect([aceptado.ops, aceptado.gh]).toEqual([8, 3]);
+      expect(aceptado.total).toBeLessThanOrEqual(40);
+      // Reintento de un cierre ya reclamado: sin reclamo ni comentario.
+      Object.assign(fila, { gate_pr_action: null });
+      const reintento = await medir(2);
+      expect([reintento.ops, reintento.gh]).toEqual([6, 2]);
+    });
+});
+
+describe('paso estado · un cierre reclamado (gate_pr_at) en dos revisiones del mismo PR', () => {
+  const R1 = REV, R2 = OTRA_REV;
+  const HEAD2 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4';
+  const SIN_NUEVOS = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  let filas: Fila[];   // revisiones del PR #7, de la más nueva a la más vieja
+  let anotacionFalla: boolean;
+  const rev = (id: string) => filas.find((f) => f.id === id)!;
+  const correrDe = (id: string, intento = 1) => pasoEstado(entorno.env, { ...msg, review_id: id }, intento);
+  const comentarios = () => llamadas().filter((l) => l === `POST ${GH}/issues/7/comments`);
+  const admin = () => doble.client as unknown as Parameters<typeof reabrirPr>[1];
+
+  beforeEach(() => {
+    const base: Fila = { org_id: ORG, config_id: CFG, event: 'pull_request', pr_number: 7, partial: false,
+      error_code: null, gate_blocking: 1, gate_findings: [STRIPE], gate_override_at: null, gate_state: null,
+      gate_error: null, gate_pr_action: null, gate_pr_error: null, gate_pr_at: null };
+    filas = [
+      // 2.º push: ya no ve la clave como nueva (0013) y aún está en curso cuando la 1.ª cierra.
+      { ...base, id: R2, status: 'running', head_sha: HEAD2, counts: SIN_NUEVOS },
+      { ...base, id: R1, status: 'done', head_sha: HEAD, counts: { ...SIN_NUEVOS, critical: 1 } },
+    ];
+    anotacionFalla = false;
+    gh[`POST ${GH}/statuses/${HEAD2}`] = () => new Response('{"id":3}', { status: 201 });
+    doble = dbDoble({
+      tabla: (op): Resp | undefined => {
+        if (op.table !== 'code_reviews') return otrasTablas(op);
+        const hits = filas.filter((f) => cumple(f, op));
+        if (op.action === 'select') return { data: op.orden ? hits : hits[0] ?? null };
+        if (op.action === 'update') {
+          if (anotacionFalla && 'gate_pr_action' in (op.payload as Fila)) return { error: { code: '08006' } };
+          for (const f of hits) Object.assign(f, op.payload);
+          return { data: op.returning ? hits.map((f) => ({ id: f.id })) : null };
+        }
+        return undefined;
+      },
+    });
+    estado.client = doble.client;
+  });
+
+  // R1 reclama, comenta y su PATCH da 503 (GitHub pudo cerrarlo igual: plazo); R2 termina sin nuevos con GitHub ya sano;
+  // luego llega el reintento de R1.
+  const r1CaeR2TerminaR1Reintenta = async () => {
+    gh[`PATCH ${GH}/pulls/7`] = () => new Response('x', { status: 503 });
+    expect(await correrDe(R1, 1)).toEqual({ retry: 10 });
+    expect(rev(R1)).toMatchObject({ gate_state: 'failure', gate_pr_action: null });
+    expect(typeof rev(R1).gate_pr_at).toBe('string');
+    gh[`PATCH ${GH}/pulls/7`] = () => new Response('{}', { status: 200 });
+    rev(R2).status = 'done';
+    expect(await correrDe(R2)).toBe('ack');
+    expect(await correrDe(R1, 2)).toBe('ack');
+  };
+
+  it('PATCH de R1 en 5xx: R2 sin nuevos no comenta ni cierra; el reintento de R1 cierra y anota closed aunque ya no sea '
+    + 'la última', async () => {
+    await r1CaeR2TerminaR1Reintenta();
+    expect(llamadas()).toEqual([
+      `POST ${GH}/statuses/${HEAD}`, `POST ${GH}/issues/7/comments`, `PATCH ${GH}/pulls/7`,   // R1: el PATCH da 503
+      `POST ${GH}/statuses/${HEAD2}`,                                                       // R2: ya atendido
+      `POST ${GH}/statuses/${HEAD}`, `PATCH ${GH}/pulls/7`,                                  // reintento de R1
+    ]);
+    expect(rev(R2)).toMatchObject({ gate_state: 'failure', gate_pr_action: null, gate_pr_at: null });
+    expect(lineas()).toContain('"motivo":"ya_atendido"');
+    expect(rev(R1)).toMatchObject({ gate_pr_action: 'closed', gate_pr_error: null });
+    expect(lineas()).toContain(`"event":"gate.pr_cerrado","review":"${R1}"`);
+  });
+
+  it('R1 cierra pero no puede anotarlo: R2 sin nuevos no repite; el reintento de R1 lo anota por CAS y avisa una vez',
+    async () => {
+      anotacionFalla = true;
+      expect(await correrDe(R1, 1)).toEqual({ retry: 10 });
+      expect(rev(R1).gate_pr_action).toBeNull();
+      rev(R2).status = 'done';
+      expect(await correrDe(R2)).toBe('ack');
+      anotacionFalla = false;
+      expect(await correrDe(R1, 2)).toBe('ack');
+      expect(comentarios()).toHaveLength(1);
+      expect(llamadas().filter((l) => l === `PATCH ${GH}/pulls/7`)).toHaveLength(2);   // cerrar lo cerrado no cambia nada
+      expect([rev(R1).gate_pr_action, rev(R2).gate_pr_action]).toEqual(['closed', null]);
+      const anotacion = de('code_reviews', 'update').filter((o) => 'gate_pr_action' in (o.payload as Fila)).at(-1)!;
+      expect(eqDe(anotacion, 'id')).toBe(R1);
+      expect(anotacion.filters).toContainEqual(['gate_pr_action', 'is', null]);   // CAS: solo desde null
+      expect(lineas().match(/"event":"gate\.pr_cerrado"/g)).toHaveLength(1);
+    });
+
+  it('E54 «Reabrir el PR» sobre la que cerró funciona tras el reintento (antes, 409 no_cerrado)', async () => {
+    await r1CaeR2TerminaR1Reintenta();
+    fetchMock.mockClear();
+    expect(await reabrirPr(entorno.env, admin(), ORG, R1)).toEqual({ ok: true, numero: 7 });
+    expect(cuerpoDe(`PATCH ${GH}/pulls/7`)).toEqual({ state: 'open' });
+    expect(rev(R1).gate_pr_action).toBe('reopened');
+  });
+
+  it('reapertura a mano tras un reintento: E47 la reconoce desde closed, E54 responde ya_abierto y nada vuelve a cerrar',
+    async () => {
+      filas = [rev(R1)];   // R1 es la cabeza del PR: E47 busca ahí al reabrir sin commits nuevos
+      anotacionFalla = true;
+      expect(await correrDe(R1, 1)).toEqual({ retry: 10 });
+      anotacionFalla = false;
+      expect(await correrDe(R1, 2)).toBe('ack');
+      expect(rev(R1).gate_pr_action).toBe('closed');
+      // La escritura de E47 (webhooks-github.ts; la ruta entera la prueba webhooks-github.test.ts): CAS desde 'closed'.
+      const { data } = await doble.client.from('code_reviews').update({ gate_pr_action: 'reopened_by_human' })
+        .eq('id', R1).eq('org_id', ORG).eq('gate_pr_action', 'closed').select('id');
+      expect(data).toEqual([{ id: R1 }]);
+      expect(await reabrirPr(entorno.env, admin(), ORG, R1)).toEqual({ ok: false, motivo: 'ya_abierto' });
+      fetchMock.mockClear();
+      expect(await correrDe(R1, 1)).toBe('ack');   // p. ej. otro estado tras «Deshacer»
+      expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`]);
+    });
+
+  it('el reintento de un cierre reclamado no cierra si una revisión MÁS NUEVA del PR consta reabierta o aprobada',
+    async () => {
+      rev(R1).gate_pr_at = '2026-10-24T22:00:00Z';   // el intento anterior comentó y cayó antes de anotar
+      for (const nueva of [{ gate_pr_action: 'reopened_by_human' }, { gate_pr_action: 'reopened' },
+        { gate_override_at: '2026-10-24T22:01:00Z' }]) {
+        Object.assign(rev(R2), { status: 'done', gate_pr_action: null, gate_override_at: null }, nueva);
+        fetchMock.mockClear();
+        expect(await correrDe(R1, 2)).toBe('ack');
+        expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`]);
+        expect(rev(R1).gate_pr_action).toBeNull();
+      }
+      expect(lineas()).toContain('"motivo":"reabierto"');
+      // Una reapertura MÁS VIEJA no lo frena: commits nuevos con un crítico nuevo vuelven a cerrar (punto 4).
+      filas = [rev(R1), { ...rev(R2), id: 'c4000000-0000-4000-8000-000000000021', gate_pr_action: 'reopened_by_human',
+        gate_override_at: null }];
+      fetchMock.mockClear();
+      expect(await correrDe(R1, 2)).toBe('ack');
+      expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `PATCH ${GH}/pulls/7`]);
+      expect(rev(R1).gate_pr_action).toBe('closed');
+    });
 });
 
 describe('cierreEstadoDlq', () => {

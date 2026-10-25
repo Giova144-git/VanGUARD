@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0018 (todas las de la noche: 0014b, 0015, 0016, 0017, 0018 y 0019).
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0026 (0024_fix_requests, 0024_evolucion_sin_zip, 0025_historial_hallazgos y 0026_sandbox_demo).
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -832,17 +832,22 @@ export type Database = {
           first_seen_at: string
           fix_model: string | null
           fix_prompt: string | null
+          fixed_at: string | null
           id: string
+          ignored_at: string | null
           last_seen_at: string
           module: string
           org_id: string
           origin: string
+          reopen_count: number
+          reopened_at: string | null
           resource: string
           rule_id: string
           scan_run_id: string | null
           severity: string
           severity_rank: number | null
           status: string
+          status_changed_at: string
           status_reason: string | null
           suspected_injection: boolean
           title: string
@@ -856,17 +861,22 @@ export type Database = {
           first_seen_at?: string
           fix_model?: string | null
           fix_prompt?: string | null
+          fixed_at?: string | null
           id?: string
+          ignored_at?: string | null
           last_seen_at?: string
           module: string
           org_id: string
           origin?: string
+          reopen_count?: number
+          reopened_at?: string | null
           resource: string
           rule_id: string
           scan_run_id?: string | null
           severity: string
           severity_rank?: number | null
           status?: string
+          status_changed_at?: string
           status_reason?: string | null
           suspected_injection?: boolean
           title: string
@@ -880,17 +890,22 @@ export type Database = {
           first_seen_at?: string
           fix_model?: string | null
           fix_prompt?: string | null
+          fixed_at?: string | null
           id?: string
+          ignored_at?: string | null
           last_seen_at?: string
           module?: string
           org_id?: string
           origin?: string
+          reopen_count?: number
+          reopened_at?: string | null
           resource?: string
           rule_id?: string
           scan_run_id?: string | null
           severity?: string
           severity_rank?: number | null
           status?: string
+          status_changed_at?: string
           status_reason?: string | null
           suspected_injection?: boolean
           title?: string
@@ -1179,6 +1194,7 @@ export type Database = {
           id: string
           incident_id: string | null
           org_id: string
+          preview: string | null
           provider_id: string | null
           read_at: string | null
           recipient_masked: string
@@ -1195,6 +1211,7 @@ export type Database = {
           id?: string
           incident_id?: string | null
           org_id: string
+          preview?: string | null
           provider_id?: string | null
           read_at?: string | null
           recipient_masked: string
@@ -1211,6 +1228,7 @@ export type Database = {
           id?: string
           incident_id?: string | null
           org_id?: string
+          preview?: string | null
           provider_id?: string | null
           read_at?: string | null
           recipient_masked?: string
@@ -1274,32 +1292,52 @@ export type Database = {
       orgs: {
         Row: {
           ai_daily_cap_usd: number
+          cierra_en: string | null
           created_at: string
+          creator_ip_hash: string | null
           daily_audit: boolean
           id: string
           is_demo: boolean
+          last_seen_at: string | null
           name: string
+          sandbox_of: string | null
           slug: string
         }
         Insert: {
           ai_daily_cap_usd?: number
+          cierra_en?: string | null
           created_at?: string
+          creator_ip_hash?: string | null
           daily_audit?: boolean
           id?: string
           is_demo?: boolean
+          last_seen_at?: string | null
           name: string
+          sandbox_of?: string | null
           slug: string
         }
         Update: {
           ai_daily_cap_usd?: number
+          cierra_en?: string | null
           created_at?: string
+          creator_ip_hash?: string | null
           daily_audit?: boolean
           id?: string
           is_demo?: boolean
+          last_seen_at?: string | null
           name?: string
+          sandbox_of?: string | null
           slug?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "orgs_sandbox_of_fkey"
+            columns: ["sandbox_of"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       perf_runs: {
         Row: {
@@ -1760,6 +1798,26 @@ export type Database = {
           p_secret: Json
         }
         Returns: undefined
+      }
+      vg_sandbox_cerrando: {
+        Args: { p_org: string; p_user: string }
+        Returns: boolean
+      }
+      vg_sandbox_join: {
+        Args: { p_ip_hash: string; p_user: string }
+        Returns: string
+      }
+      vg_sandbox_latido: {
+        Args: { p_org: string; p_user: string }
+        Returns: boolean
+      }
+      vg_sandbox_replay: {
+        Args: { p_org: string; p_user: string }
+        Returns: string
+      }
+      vg_sandbox_salir: {
+        Args: { p_org: string; p_user: string }
+        Returns: Json
       }
       vg_snapshot_audit: {
         Args: { p_org: string; p_scan: string }

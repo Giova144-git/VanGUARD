@@ -8,6 +8,9 @@ import {
   TEXTO_CODIGO_VENCIDO, textoBloqueada, textoCodigoBloqueo, textoSeguro, textoTormenta, TITULOS_BOTON,
   ACCIONES_BOTON, botonesRevision, codigoRevision, MOTIVOS_NO_SE_PUDO, PASOS_ARREGLO_GENERICO, pasosArreglo,
   TEXTO_ACCION_PRONTO, TEXTO_BOTON_VENCIDO, textoArreglo, textoNoSePudo, textoRepoSilenciado, TITULOS_CONFIRMACION,
+  botonesPrCerrado, botonOfertaBajoAtaque, issueDeRevision, TEXTO_CONFIRMAR_ISSUE, textoBajoAtaqueActivo,
+  textoConfirmarBajoAtaque, textoConfirmarReabrir, textoIssueCreado, textoOfertaBajoAtaque, textoPrCerrado,
+  textoPrReabierto, TEXTOS_CANCELADO,
 } from './whatsapp.ts';
 
 const HOST = 'demo.officialvanguard.com';
@@ -284,5 +287,92 @@ describe('botones de la revisión de código', () => {
     for (const m of Object.keys(MOTIVOS_NO_SE_PUDO) as (keyof typeof MOTIVOS_NO_SE_PUDO)[]) {
       expect(textoNoSePudo(m)).toMatch(/^No se pudo: [^\n]{5,80}\.$/);
     }
+  });
+});
+
+// Botones que escriben en sistemas del cliente (anexo de botones, regla 2) y los avisos nuevos: textos FIJOS del anexo.
+describe('iss, rpr y uat: avisos, confirmaciones y respuestas', () => {
+  const BOTON_TODAS = /^(ack|snz|ok|no|blk|fix|iss|rvs|rpr|uat):([A-Z0-9]{6}):([A-Za-z0-9_-]{16,43})$/;
+  const URL = 'https://officialvanguard.com/o/0f6c0000-0000-4000-8000-000000000001/codebase?revision='
+    + 'c4a1e9f0-0000-4000-8000-000000000011';
+
+  it('botonesRevision con iss: fix, iss y rvs en ese orden (≤ 3, títulos ≤ 20); sin hallazgos, solo rvs', () => {
+    const tres = botonesRevision('C4A1E9', { fix: N1, iss: N2, rvs: N3 });
+    expect(tres.map((b) => b.title)).toEqual(['Enviarme el arreglo', 'Crear issue', 'Silenciar repo 1 h']);
+    expect(tres.map((b) => b.id.split(':')[0])).toEqual(['fix', 'iss', 'rvs']);
+    for (const b of tres) expect(b.id).toMatch(BOTON_TODAS);
+    expect(botonesRevision('C4A1E9', { fix: null, iss: null, rvs: N3 }).map((b) => b.title)).toEqual(['Silenciar repo 1 h']);
+    expect(() => botonesRevision('C4A1E9', { fix: N1, iss: N1, rvs: N3 })).toThrow('BOTON_NONCE_REPETIDO');
+  });
+
+  it('botonesPrCerrado: «Reabrir el PR», «Enviarme el arreglo» (si hay nonce) y «Silenciar repo 1 h»; uat solo', () => {
+    expect(botonesPrCerrado('C4A1E9', { rpr: N1, fix: N2, rvs: N3 }).map((b) => [b.id.split(':')[0], b.title])).toEqual([
+      ['rpr', 'Reabrir el PR'], ['fix', 'Enviarme el arreglo'], ['rvs', 'Silenciar repo 1 h']]);
+    expect(botonesPrCerrado('C4A1E9', { rpr: N1, rvs: N3 }).map((b) => b.title)).toEqual(['Reabrir el PR', 'Silenciar repo 1 h']);
+    expect(botonOfertaBajoAtaque('A1F3C9', N1)).toEqual([{ id: `uat:A1F3C9:${N1}`, title: 'Modo bajo ataque' }]);
+    expect(() => botonOfertaBajoAtaque('a1f3c9', N1)).toThrow('BOTON_CODIGO');
+    const titulos = { iss: 'Sí, crear', rpr: 'Sí, reabrir', uat: 'Sí, activar' } as const;
+    for (const a of ['iss', 'rpr', 'uat'] as const) {
+      expect(botonesAprobacion('C4A1E9', { ok: N1, no: N2 }, a).map((b) => b.title)).toEqual([titulos[a], 'Cancelar']);
+    }
+  });
+
+  it('textoPrCerrado: el texto fijo del anexo; rama hostil → «la rama vigilada»; PR no válido → RangeError', () => {
+    expect(textoPrCerrado(7, 'main', 1)).toBe('VanGUARD cerró el PR #7 hacia main: 1 crítico nuevo. Corrige, rota las claves '
+      + 'y vuelve a abrirlo.');
+    expect(textoPrCerrado(12, 'release-2', 3)).toContain(': 3 críticos nuevos.');
+    expect(textoPrCerrado(12, 'main', 2, 'high')).toContain(': 2 críticos o altos nuevos.');
+    for (const rama of ['pagos.evil.com/login', 'feat/x', 'main\nhola', 'x'.repeat(41), 7]) {
+      expect(textoPrCerrado(7, rama, 1)).toContain('hacia la rama vigilada:');
+    }
+    for (const n of [0, -1, 1.5, Number.NaN, 2 ** 31]) expect(() => textoPrCerrado(n, 'main', 1)).toThrow('PR_NUMERO');
+  });
+
+  it('textoOfertaBajoAtaque: «Ataque desde {n} IPs en {host}…»; host no canónico o una sola IP → RangeError', () => {
+    expect(textoOfertaBajoAtaque(3, HOST)).toBe(`Ataque desde 3 IPs en ${HOST}. Puedes poner ese host en modo bajo ataque 30 min.`);
+    for (const h of ['Tienda Demo', 'evil.com/x', '186.92.14.7', `${HOST} `]) {
+      expect(() => textoOfertaBajoAtaque(3, h)).toThrow('HOST_BAJO_ATAQUE');
+    }
+    expect(() => textoOfertaBajoAtaque(1, HOST)).toThrow('IPS_BAJO_ATAQUE');
+  });
+
+  it('confirmaciones y respuestas: textos fijos; «Hecho: issue #n <url>» solo con la url de un issue de github.com', () => {
+    expect(TEXTO_CONFIRMAR_ISSUE).toContain('sin el valor');
+    expect(textoConfirmarReabrir(7)).toBe('¿Reabro el PR #7? El ✗ de VanGUARD se queda hasta que lo corrijas. Vence en 10 min.');
+    expect(textoConfirmarBajoAtaque(HOST)).toMatch(/^¿Activo el modo bajo ataque en demo\.officialvanguard\.com durante 30 min\?/);
+    expect(() => textoConfirmarBajoAtaque('no es host')).toThrow('HOST_BAJO_ATAQUE');
+    const gh = 'https://github.com/acme/tienda/issues/12';
+    expect(textoIssueCreado(12, gh)).toBe(`Hecho: issue #12 ${gh}`);
+    expect(textoIssueCreado(12, 'https://evil.example/acme/tienda/issues/12'))
+      .toBe('Hecho: issue #12 creado en GitHub con la etiqueta vanguard. Lo ves en el repo.');
+    expect(textoIssueCreado(null)).toBe('Hecho: issue creado en GitHub con la etiqueta vanguard. Lo ves en el repo.');
+    expect(textoPrReabierto(7)).toBe('Hecho: PR #7 reabierto. El ✗ de VanGUARD se queda hasta que lo corrijas.');
+    expect(textoBajoAtaqueActivo(HOST, '2026-10-25T02:12:00.000Z')).toBe(`Hecho: modo bajo ataque activo en ${HOST} hasta `
+      + 'las 22:12 (hora de Caracas). Se quita solo a esa hora; para quitarlo antes, pulsa «Desactivar ahora» en el '
+      + 'incidente, en la app.');
+    expect(textoBajoAtaqueActivo(HOST, '2026-10-25T02:12:00.000Z', true)).toContain('ya estaba activo en');
+    expect(Object.values(TEXTOS_CANCELADO).every((t) => t.startsWith('Cancelado: '))).toBe(true);
+  });
+
+  it('issueDeRevision: regla, severidad, archivo y línea, pasos y enlace; nunca el valor ni el título del hallazgo', () => {
+    const { titulo, cuerpo } = issueDeRevision({ rule_id: 'CB_SECRET_STRIPE_LIVE', severity: 'critical',
+      resource: 'src/lib/pagos.ts:3' }, URL, 2);
+    expect(titulo).toBe('VanGUARD: hallazgo de severidad crítica en un cambio (CB_SECRET_STRIPE_LIVE)');
+    expect(cuerpo).toContain('- Regla: `CB_SECRET_STRIPE_LIVE`');
+    expect(cuerpo).toContain('- Archivo y línea: `src/lib/pagos.ts:3`');
+    expect(cuerpo).toContain('- La misma revisión trae 2 hallazgos nuevos más: están en el panel.');
+    expect(cuerpo).toContain('\n1. Rota la credencial antes que nada');
+    expect(cuerpo).toContain(`Detalle en VanGUARD (pide sesión): ${URL}`);
+    expect(cuerpo).not.toMatch(/sk_live|Clave live/);
+    // Ruta con caracteres raros, con `..`, con forma de secreto o sin línea → «míralos en el panel»; regla rara → neutra.
+    const llave = ['ghp', 'A'.repeat(36)].join('_');
+    for (const resource of ['src/`x`/a.ts:3', '../../etc/passwd:1', `lib/${llave}/a.ts:2`, 'src/a.ts', null]) {
+      const t = issueDeRevision({ rule_id: 'CB_SECRET_STRIPE_LIVE', severity: 'critical', resource }, URL).cuerpo;
+      expect(t).toContain('- Archivo y línea: míralos en el panel de VanGUARD');
+      expect(t).not.toContain(llave);
+    }
+    const raro = issueDeRevision({ rule_id: '`; rm -rf /', severity: 'constructor' }, 'javascript:alert(1)');
+    expect(raro.titulo).toBe('VanGUARD: hallazgo en un cambio');
+    expect(raro.cuerpo).not.toMatch(/rm -rf|javascript:/);
   });
 });

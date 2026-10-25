@@ -33,7 +33,8 @@ let avisadas: number;
 let notifs: Fila[];
 let config: Fila | null;          // code_review_configs de la revisión (muted_until del botón rvs)
 let aprobaciones: Fila[];         // approvals escritas (una por botón)
-let errores: { lectura?: boolean; cierre?: boolean; approvals?: boolean; silencio?: boolean };
+let conexiones: Fila[];           // connections de GitHub de la org (el token de escritura del bloqueo, botón iss)
+let errores: { lectura?: boolean; cierre?: boolean; approvals?: boolean; silencio?: boolean; conexiones?: boolean };
 let linea: string[];   // orden de escrituras y envíos
 let doble: ReturnType<typeof dbDoble>;
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -59,6 +60,7 @@ beforeEach(() => {
   notifs = [];
   config = { id: CFG, org_id: ORG, muted_until: null };
   aprobaciones = [];
+  conexiones = [];
   errores = {};
   linea = [];
   doble = dbDoble({
@@ -95,6 +97,9 @@ beforeEach(() => {
         return {};
       }
       if (op.table === 'alert_prefs') return { data: prefs };
+      if (op.table === 'connections') {
+        return errores.conexiones ? { error: { code: '08006' } } : { data: conexiones.filter((c) => cumple(c, op)) };
+      }
       // El canje de un botón busca UN contacto por teléfono y org; el aviso lee la lista.
       if (op.table === 'contacts' && op.single) return { data: contactos.find((c) => cumple(c, op)) ?? null };
       if (op.table === 'contacts') return { data: contactos };
@@ -387,7 +392,7 @@ describe('aviso · repo silenciado (botón rvs) y botones de punta a punta', () 
     expect(rev).toMatchObject({ alert_state: 'not_sent', alert_reason: 'silenciado', voice_pending: false });
     const lectura = doble.ops.find((o) => o.table === 'code_review_configs')!;
     expect([eqDe(lectura, 'id'), eqDe(lectura, 'org_id')]).toEqual([CFG, ORG]);
-    expect(lectura.columns).toBe('muted_until');
+    expect(lectura.columns).toBe('muted_until, connection_id');
 
     Object.assign(rev, { alert_state: 'pending', alert_reason: null });
     config!.muted_until = new Date(Date.now() - 1000).toISOString();
@@ -444,5 +449,69 @@ describe('aviso · repo silenciado (botón rvs) y botones de punta a punta', () 
     }
     expect(rev).toMatchObject({ whatsapp_action: 'fix_sent' });
     expect(config!.muted_until).toBeNull();               // fix no silencia nada
+  });
+});
+
+// «Crear issue» (anexo de botones): solo con el token de escritura del bloqueo del MISMO repo y «Issues: Read and write»
+// (capabilities.issues, que sondea E53 al conectarlo); sin llamar a GitHub al avisar.
+describe('aviso · botón «Crear issue» (iss)', () => {
+  const LECTURA = 'c0000000-0000-4000-8000-000000000001';
+  const ACCION = 'c0000000-0000-4000-8000-000000000006';
+  const conToken = (caps: Fila, repo = 'Acme/Tienda', repo_id = 42) => {
+    config = { id: CFG, org_id: ORG, muted_until: null, connection_id: LECTURA };
+    conexiones = [
+      { id: LECTURA, org_id: ORG, provider: 'github', kind: 'read', status: 'active',
+        meta: { repo_full_name: 'acme/tienda', repo_id: 42 } },
+      { id: ACCION, org_id: ORG, provider: 'github', kind: 'action', status: 'active', capabilities: caps,
+        meta: { repo_full_name: repo, repo_id } },
+    ];
+  };
+
+  it('token del mismo repo con Issues: Read and write → «Enviarme el arreglo», «Crear issue» y «Silenciar repo 1 h»', async () => {
+    conToken({ statuses: true, pull_requests: true, issues: true });
+    await avisar();
+    const botones = botonesDe(enviados()[0]);
+    expect(botones.map((b) => b.title)).toEqual(['Enviarme el arreglo', 'Crear issue', 'Silenciar repo 1 h']);
+    const iss = parsearBoton(botones[1]!.id)!;
+    expect([iss.accion, iss.codigo]).toEqual(['iss', 'C40000']);
+    // Su fila es la de PEDIR (etapa proponer): el issue solo se crea tras «Sí, crear».
+    const fila = aprobaciones.find((a) => a.action_kind === 'create_issue')!;
+    expect(fila).toMatchObject({ org_id: ORG, code_review_id: REV, channel: 'whatsapp', recipient: TEL_A.slice(1),
+      action_kind: 'create_issue', nonce_hash: await hashNonce(iss.nonce), params: { etapa: 'proponer' } });
+    expect(aprobaciones.map((a) => a.action_kind)).toEqual(['send_fix', 'create_issue', 'mute_repo']);
+    // Una sola lectura de conexiones, por org; ni una llamada a GitHub (solo Kapso).
+    const lectura = doble.ops.filter((o) => o.table === 'connections');
+    expect(lectura).toHaveLength(1);
+    expect([eqDe(lectura[0]!, 'org_id'), eqDe(lectura[0]!, 'provider')]).toEqual([ORG, 'github']);
+    expect(fetchMock.mock.calls.every((c) => String(c[0]).startsWith('https://api.kapso.ai/'))).toBe(true);
+  });
+
+  it('sin Issues, token de otro repo, sin token o con la lectura caída → sin «Crear issue» (el aviso sale igual)', async () => {
+    const casos: (() => void)[] = [
+      () => conToken({ statuses: true, pull_requests: true }),
+      () => conToken({ statuses: true, issues: true }, 'otra/cosa', 99),
+      () => { conToken({ issues: true }); conexiones = conexiones.slice(0, 1); },
+      () => { conToken({ issues: true }); errores.conexiones = true; },
+    ];
+    for (const preparar of casos) {
+      Object.assign(rev, { alert_state: 'pending', alert_reason: null });
+      notifs = [];
+      aprobaciones = [];
+      errores = {};
+      fetchMock.mockClear();
+      preparar();
+      expect(await avisar()).toBe('ack');
+      expect(botonesDe(enviados()[0]).map((b) => b.title)).toEqual(['Enviarme el arreglo', 'Silenciar repo 1 h']);
+      expect(rev).toMatchObject({ alert_state: 'sent' });
+    }
+  });
+
+  it('revisión sin hallazgos nuevos (parcial) → ni «Crear issue» ni lectura de conexiones', async () => {
+    conToken({ issues: true });
+    Object.assign(rev, { partial: true, max_severity: null, counts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+      new_findings: [] });
+    await avisar();
+    expect(botonesDe(enviados()[0]).map((b) => b.title)).toEqual(['Silenciar repo 1 h']);
+    expect(doble.ops.some((o) => o.table === 'connections')).toBe(false);
   });
 });

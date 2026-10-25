@@ -321,6 +321,30 @@ describe('canjearBotonBloqueo (E31 ok/no/blk)', () => {
     expect((await pulsar('ok', PROD, '123')).resultado).toBe('remitente_invalido');
     expect(doble.rpcs).toHaveLength(0);
   });
+
+  it('ok/no de una fila de iss, rpr o uat → a `confirmar` con la fila ya canjeada; sin él, tipo_distinto', async () => {
+    const confirmar = vi.fn(async () => ({ resultado: 'issue_creado' as const, texto: 'Hecho: issue #12' }));
+    for (const action_kind of ['create_issue', 'reopen_pr', 'under_attack_on']) {
+      canje = { data: [filaCanjeada('confirmar', { action_kind })] };
+      const r = await canjearBotonBloqueo(envDoble(PROD).env, { accion: 'ok', codigo: 'A1F3C9', nonce: NONCE }, TEL, 'rid-1',
+        Date.parse('2026-10-24T19:02:00.000Z'), confirmar);
+      expect(r).toEqual({ resultado: 'issue_creado', texto: 'Hecho: issue #12' });
+      expect((confirmar.mock.calls.at(-1) as unknown[])[1]).toMatchObject({ id: 'w1', action_kind });
+      // Sin la función (otra llamada antigua): la fila no es block_ip → tipo_distinto, sin tocar el bloqueo.
+      expect((await pulsar('ok')).resultado).toBe('tipo_distinto');
+    }
+    expect(doble.rpcs).toHaveLength(6);
+    expect(confirmar).toHaveBeenCalledTimes(3);
+    // block_ip nunca delega, y blk tampoco aunque llegue una fila de escritura.
+    canje = { data: [filaCanjeada('confirmar')] };
+    await canjearBotonBloqueo(envDoble(PROD).env, { accion: 'ok', codigo: 'A1F3C9', nonce: NONCE }, TEL, 'rid-1', undefined,
+      confirmar);
+    canje = { data: [filaCanjeada('proponer', { action_kind: 'create_issue' })] };
+    expect((await canjearBotonBloqueo(envDoble(PROD).env, { accion: 'blk', codigo: 'A1F3C9', nonce: NONCE }, TEL, 'rid-1',
+      undefined, confirmar)).resultado).toBe('tipo_distinto');
+    expect(confirmar).toHaveBeenCalledTimes(3);
+    expect(bloqueo.executeBlock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('botones del aviso de revisión: filas y canje (E31 fix/rvs)', () => {
@@ -384,6 +408,16 @@ describe('botones del aviso de revisión: filas y canje (E31 fix/rvs)', () => {
     const solo = await filasBotonesRevision({ org_id: ORG, code_review_id: REV, recipient: TEL, nonces: { rvs: nonces.rvs } });
     expect(solo.map((f) => f.action_kind)).toEqual(['mute_repo']);
   });
+
+  it('filasBotonesRevision con iss y rpr: create_issue y reopen_pr de la revisión, con etapa proponer (pedir, no escribir)',
+    async () => {
+      const nonces = { rpr: nuevoNonce(), fix: nuevoNonce(), iss: nuevoNonce(), rvs: nuevoNonce() };
+      const filas = await filasBotonesRevision({ org_id: ORG, code_review_id: REV, recipient: TEL, nonces, ahora: AHORA });
+      expect(filas.map((f) => [f.action_kind, f.params])).toEqual([['reopen_pr', { etapa: 'proponer' }], ['send_fix', {}],
+        ['create_issue', { etapa: 'proponer' }], ['mute_repo', {}]]);
+      expect(filas[2]).toMatchObject({ code_review_id: REV, channel: 'whatsapp', recipient: TEL,
+        nonce_hash: await hashNonce(nonces.iss), expires_at: '2026-10-24T23:50:00.000Z' });
+    });
 
   it('peorHallazgo: la severidad más alta (a igualdad, la primera); filas ilegibles se saltan', () => {
     expect(peorHallazgo(revision!.new_findings)).toEqual({ rule_id: 'CB_SECRET_GITHUB_PAT', severity: 'critical' });

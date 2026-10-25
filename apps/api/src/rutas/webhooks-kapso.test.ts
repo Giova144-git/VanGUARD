@@ -13,6 +13,25 @@ vi.mock('../actions/approvals.ts', async (orig) => {
   return { ...real, canjearBotonBloqueo: (...a: Parameters<typeof real.canjearBotonBloqueo>) =>
     (estado.bloqueo ? estado.bloqueo(...a) : real.canjearBotonBloqueo(...a)) };
 });
+// Las acciones reales de iss, rpr y uat (GitHub y Cloudflare) se prueban en acciones-pr.test.ts, under-attack.test.ts y
+// bajo-ataque.test.ts: aquí, reales salvo que una prueba ponga su doble (sin red en ningún caso).
+const acciones = vi.hoisted(() => ({ crearIssue: null as null | ((...a: unknown[]) => unknown),
+  reabrirPr: null as null | ((...a: unknown[]) => unknown), proponerUat: null as null | ((...a: unknown[]) => unknown),
+  ejecutarUat: null as null | ((...a: unknown[]) => unknown) }));
+vi.mock('../revision/acciones-pr.ts', async (orig) => {
+  const real = await orig<typeof import('../revision/acciones-pr.ts')>();
+  return { ...real,
+    crearIssue: ((...a: unknown[]) => (acciones.crearIssue ?? (real.crearIssue as (...x: unknown[]) => unknown))(...a)),
+    reabrirPr: ((...a: unknown[]) => (acciones.reabrirPr ?? (real.reabrirPr as (...x: unknown[]) => unknown))(...a)) };
+});
+vi.mock('../actions/under-attack.ts', async (orig) => {
+  const real = await orig<typeof import('../actions/under-attack.ts')>();
+  return { ...real,
+    proponerBajoAtaque: ((...a: unknown[]) =>
+      (acciones.proponerUat ?? (real.proponerBajoAtaque as (...x: unknown[]) => unknown))(...a)),
+    executeUnderAttack: ((...a: unknown[]) =>
+      (acciones.ejecutarUat ?? (real.executeUnderAttack as (...x: unknown[]) => unknown))(...a)) };
+});
 // getKeys de mentira: FPK de bytes conocidos (0x11…) para recalcular los códigos con node:crypto; cuenta las llamadas.
 const llaves = vi.hoisted(() => ({ llamadas: 0 }));
 vi.mock('../lib/keyring.ts', () => ({
@@ -28,6 +47,8 @@ const { app } = await import('../app.ts');
 const { codigoError, nombreParaMensaje, resumenKapso, TEXTO_BAJA, TEXTO_CODIGO_NO_VALIDO, textoListo } =
   await import('./webhooks-kapso.ts');
 const { textoEnlace } = await import('../lib/verificacion.ts');
+const { parsearBoton } = await import('../actions/approvals.ts');
+const { refBajoAtaque, TEXTO_CONFIRMAR_ISSUE } = await import('@vanguard/core');
 
 const enc = new TextEncoder();
 // Secreto y nonce armados en tiempo de ejecución: ningún literal con forma de secreto real.
@@ -873,20 +894,22 @@ describe('E31 · botones del anexo: fix, rvs, iss, rpr y uat', () => {
     expect(marcas).toEqual([{ whatsapp_action: 'muted', whatsapp_action_at: expect.stringMatching(/Z$/) }]);
   });
 
-  it('iss, rpr y uat → «Esta acción llega pronto» (con RL_WA) al verificado, sin canje ni aprobaciones', async () => {
+  it('iss, rpr y uat fuera de producción → dry_run: ni canje ni aprobaciones ni respuesta (ya no «llega pronto»)', async () => {
     for (const [i, a] of ['iss', 'rpr', 'uat'].entries()) await pulsar(`${a}:C4A1E9:${NONCE}`, `p${i}`);
     expect(doble.rpcs).toHaveLength(0);
     expect(doble.ops.some((o) => o.table === 'approvals' || o.table === 'code_reviews')).toBe(false);
-    expect(respuestas().map((r) => r.text.body))
-      .toEqual(Array(3).fill('Esta acción llega pronto. Mientras tanto, la tienes en la app de VanGUARD.'));
-    expect(lineas().filter((l) => l.includes('"kapso.boton_pronto"')).map((l) => JSON.parse(l).accion))
-      .toEqual(['iss', 'rpr', 'uat']);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(lineas().filter((l) => l.includes('"kapso.escritura_canje"')).map((l) => JSON.parse(l).resultado))
+      .toEqual(['dry_run', 'dry_run', 'dry_run']);
   });
 
-  it('iss, rpr o uat de quien hizo BAJA → sin respuesta (respeta la baja)', async () => {
+  it('iss, rpr o uat vencido de quien hizo BAJA → canje sin filas y SIN respuesta (respeta la baja)', async () => {
     contacto = { id: 'c1', verified_at: null };
     await pulsar(`uat:C4A1E9:${NONCE}`, 'q1');
-    expect(lineas().filter((l) => l.includes('"kapso.boton_pronto"'))).toHaveLength(1);
+    await enviar(boton(`iss:C4A1E9:${NONCE}`), { evento: 'whatsapp.message.received', clave: 'q2',
+      env: { ...envBoton(), VG_ENV: 'production' } });
+    expect(lineas().filter((l) => l.includes('"kapso.escritura_canje"')).map((l) => JSON.parse(l).resultado))
+      .toEqual(['dry_run', 'sin_canje']);
     expect(rlWa).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -906,6 +929,353 @@ describe('E31 · botones del anexo: fix, rvs, iss, rpr y uat', () => {
     const { procesarKapso } = await import('./webhooks-kapso.ts');
     await procesarKapso(envDoble(envBoton()).env, 'whatsapp.message.received', boton(`fix:C4A1E9:${NONCE}`), 'rid-x',
       { quedan: 6, omitidos: 0 });
+    expect(doble.rpcs).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// Botones que ESCRIBEN en sistemas del cliente (regla 2 del anexo): iss, rpr y uat piden; su «Sí, …» (ok) hace la acción
+// real y su «Cancelar» (no) la anula. De punta a punta por la ruta, con approvals en memoria y la semántica de
+// vg_redeem_approval; crearIssue, reabrirPr, proponerBajoAtaque y executeUnderAttack con sus dobles.
+describe('E31 · botones que escriben: iss, rpr y uat con su confirmación', () => {
+  const ORG_A = '0f6c0000-0000-4000-8000-00000000000a';
+  const REV = 'c4a1e9f0-0000-4000-8000-000000000011';
+  const INC = '9e0b0000-0000-4000-8000-000000000001';
+  const CONN = 'c0aa0000-0000-4000-8000-000000000002';
+  const ZONA = '023e105f4ecef8ad9ca31a8372d0c353';
+  const HOST = 'demo.officialvanguard.com';
+  const ISSUE = 'https://github.com/acme/tienda/issues/12';
+  type Fila = Record<string, unknown>;
+  type Enviado = { to: string; type: string; text?: { body: string }; interactive?: { header?: { text: string };
+    body: { text: string }; footer?: { text: string }; action: { buttons: { reply: { id: string; title: string } }[] } } };
+  let filas: Fila[];
+  let contacto: Fila | null;
+  let revision: Fila;
+  let marcas: Fila[];
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let rlWa: ReturnType<typeof vi.fn>;
+  let crear: ReturnType<typeof vi.fn>;
+  let reabrir: ReturnType<typeof vi.fn>;
+  let proponer: ReturnType<typeof vi.fn>;
+  let ejecutar: ReturnType<typeof vi.fn>;
+  const envProd = (extra: Partial<CloudflareBindings> = {}) => ({ VG_ENV: 'production' as const,
+    KAPSO_API_KEY: ['kapso', 'prueba'].join('-'), KAPSO_PHONE_NUMBER_ID: '1234567890', APP_ORIGIN: 'https://officialvanguard.com',
+    RL_WA: { limit: rlWa } as unknown as RateLimit, ...extra });
+  const casa = (f: Fila, op: Op) => op.filters.every(([c, o, v]) => {
+    const x = c === 'params->>group' ? (f.params as Fila | undefined)?.group : f[c];
+    if (o === 'is') return v === null ? x == null : x === v;
+    if (o === 'eq') return x === v;
+    if (o === 'in') return (v as unknown[]).includes(x);
+    if (o === 'gt') return Date.parse(String(x)) > Date.parse(String(v));
+    return true;
+  });
+  async function sembrar(nonce: string, extra: Fila = {}) {
+    const f = { id: crypto.randomUUID(), org_id: ORG_A, incident_id: null, code_review_id: REV, action_kind: 'create_issue',
+      channel: 'whatsapp', recipient: TEL, used_at: null, expires_at: new Date(Date.now() + 600_000).toISOString(),
+      params: { etapa: 'proponer' }, nonce_hash: `\\x${await sha256Hex(nonce)}`, ...extra };
+    filas.push(f);
+    return f;
+  }
+  const paramsUat = (group: string, etapa: string) => ({ scope: 'host', target: HOST, zone_id: ZONA,
+    zone_name: 'officialvanguard.com', connection_id: CONN, incident_id: INC, incident_code: 'A1F3C9', ttl_s: 1800, group,
+    ref: refBajoAtaque(group), etapa });
+
+  beforeEach(() => {
+    filas = [];
+    contacto = { id: 'c1', verified_at: '2026-10-24T14:00:00+00:00' };
+    revision = { id: REV, config_id: 'cf000000-0000-4000-8000-000000000021', event: 'pull_request', pr_number: 7,
+      gate_pr_action: 'closed', new_findings: [{ finding_id: 'f1', rule_id: 'CB_SECRET_STRIPE_LIVE', severity: 'critical',
+        title: 'Clave live de Stripe en el código', resource: 'src/lib/pagos.ts:3' }] };
+    marcas = [];
+    let usos = 0;
+    rlWa = vi.fn(async () => ({ success: ++usos <= 3 }));
+    let k = 0;
+    fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: `wamid.C${++k}` }] })));
+    vi.stubGlobal('fetch', fetchMock);
+    crear = vi.fn(async () => ({ ok: true, numero: 12, url: ISSUE }));
+    reabrir = vi.fn(async () => ({ ok: true, numero: 7 }));
+    proponer = vi.fn(async () => ({ ok: true, respuesta: {}, recipient_masked: '+58•••4567' }));
+    ejecutar = vi.fn(async () => ({ tipo: 'ejecutado', action_id: 'act-1', en: '2026-10-25T01:42:00.000Z', resultado: 'x',
+      repetido: false, expires_at: '2026-10-25T02:12:00.000Z' }));
+    Object.assign(acciones, { crearIssue: crear, reabrirPr: reabrir, proponerUat: proponer, ejecutarUat: ejecutar });
+    rpc = (name, args) => {
+      if (name !== 'vg_redeem_approval') return undefined;
+      const f = filas.find((x) => x.nonce_hash === args.p_nonce_hash);
+      const vencida = !f || Date.parse(String(f.expires_at)) <= Date.now();
+      if (!f || f.used_at || vencida || f.recipient !== args.p_recipient) return { data: [] };
+      f.used_at = new Date().toISOString();
+      return { data: [{ ...f }] };
+    };
+    tabla = (op) => {
+      if (op.table === 'approvals' && op.action === 'insert') {
+        for (const f of [op.payload].flat() as Fila[]) filas.push({ ...f, used_at: null });
+        return {};
+      }
+      if (op.table === 'approvals' && op.action === 'update') {
+        const hits = filas.filter((f) => casa(f, op));
+        for (const f of hits) Object.assign(f, op.payload);
+        return { data: hits.map((f) => ({ id: f.id })) };
+      }
+      if (op.table === 'approvals' && op.action === 'delete') {
+        filas = filas.filter((f) => !casa(f, op));
+        return {};
+      }
+      if (op.table === 'code_reviews' && op.action === 'select') {
+        return { data: eqDe(op, 'id') === REV && eqDe(op, 'org_id') === ORG_A ? revision : null };
+      }
+      if (op.table === 'code_reviews' && op.action === 'update') { marcas.push(op.payload as Fila); return {}; }
+      if (op.table === 'incidents' && op.action === 'select') {
+        return { data: eqDe(op, 'id') === INC && eqDe(op, 'org_id') === ORG_A ? { id: INC, code: 'A1F3C9',
+          rule_ids: ['CF_IP_FLOOD'], severity: 'critical', resource: 'ip:186.92.14.7', status: 'open', details: { host: HOST } }
+          : null };
+      }
+      if (op.table === 'contacts' && op.single) {
+        return { data: eqDe(op, 'org_id') === ORG_A && eqDe(op, 'phone_e164') === `+${TEL}` ? contacto : null };
+      }
+      if (op.table === 'contacts' && op.action === 'select') return { data: contacto ? [contacto] : [] };
+      return undefined;
+    };
+  });
+  afterEach(() => {
+    Object.assign(acciones, { crearIssue: null, reabrirPr: null, proponerUat: null, ejecutarUat: null });
+    vi.unstubAllGlobals();
+  });
+
+  let n = 0;
+  const pulsar = (id: string, env: Partial<CloudflareBindings> = envProd()) =>
+    enviar(boton(id), { evento: 'whatsapp.message.received', clave: `e${++n}`, env });
+  const enviados = () => fetchMock.mock.calls.map((c) => JSON.parse(String((c[1] as RequestInit).body)) as Enviado);
+  const textos = () => enviados().filter((m) => m.type === 'text').map((m) => m.text!.body);
+  const interactivos = () => enviados().filter((m) => m.type === 'interactive');
+  const idsDe = (m: Enviado) => m.interactive!.action.buttons.map((b) => b.reply.id);
+  const resultados = (evento: string) => lineas().filter((l) => l.includes(`"${evento}"`)).map((l) => JSON.parse(l).resultado);
+
+  it('iss → «Sí, crear» / «Cancelar» (ok/no del mismo group) → ok → crearIssue con texto fijo → «Hecho: issue #n <url>»',
+    async () => {
+      await sembrar(NONCE);
+      await pulsar(`iss:C4A1E9:${NONCE}`);
+      expect(doble.rpcs[0]).toEqual({ name: 'vg_redeem_approval',
+        args: { p_approval: null, p_nonce_hash: `\\x${await sha256Hex(NONCE)}`, p_recipient: TEL } });
+      const nuevas = filas.slice(1);
+      expect(nuevas.map((f) => (f.params as Fila).etapa)).toEqual(['confirmar', 'cancelar']);
+      expect(new Set(nuevas.map((f) => (f.params as Fila).group)).size).toBe(1);
+      for (const f of nuevas) {
+        expect(f).toMatchObject({ org_id: ORG_A, code_review_id: REV, action_kind: 'create_issue', channel: 'whatsapp',
+          recipient: TEL });
+      }
+      const [m] = interactivos();
+      expect(m!.to).toBe(TEL);
+      expect(m!.interactive!.header!.text).toBe('Crear issue · GitHub');
+      expect(m!.interactive!.body.text).toBe(TEXTO_CONFIRMAR_ISSUE);
+      expect(m!.interactive!.footer!.text).toBe('Revisión #C4A1E9 · VanGUARD');
+      expect(m!.interactive!.action.buttons.map((b) => b.reply.title)).toEqual(['Sí, crear', 'Cancelar']);
+      const [ok, no] = idsDe(m!).map((id) => parsearBoton(id)!);
+      expect([ok!.accion, ok!.codigo, no!.accion, no!.codigo]).toEqual(['ok', 'C4A1E9', 'no', 'C4A1E9']);
+      expect(nuevas[0]!.nonce_hash).toBe(`\\x${await sha256Hex(ok!.nonce)}`);
+      expect(JSON.stringify(filas)).not.toContain(ok!.nonce);
+      expect(textos()).toEqual([]);                          // la respuesta es el propio interactivo
+      expect(crear).not.toHaveBeenCalled();                  // pedir no escribe en GitHub
+
+      await pulsar(idsDe(m!)[0]!);
+      expect(crear).toHaveBeenCalledOnce();
+      const [, , org, rev, issue, o] = crear.mock.calls[0]! as [unknown, unknown, string, string, Fila, Fila];
+      expect([org, rev, o.via]).toEqual([ORG_A, REV, 'whatsapp']);
+      expect(issue.titulo).toBe('VanGUARD: hallazgo de severidad crítica en un cambio (CB_SECRET_STRIPE_LIVE)');
+      expect(issue.cuerpo).toContain('- Archivo y línea: `src/lib/pagos.ts:3`');
+      expect(issue.cuerpo).toContain(`https://officialvanguard.com/o/${ORG_A}/codebase?revision=${REV}`);
+      expect(issue.cuerpo).not.toContain('Clave live de Stripe');
+      expect(textos()).toEqual([`Hecho: issue #12 ${ISSUE}`]);
+      expect(rlWa).toHaveBeenCalledWith({ key: `wa:${TEL}` });
+      expect(marcas).toEqual([{ whatsapp_action: 'issue_created', whatsapp_action_at: expect.stringMatching(/Z$/) }]);
+      expect(nuevas[1]!.used_at).toEqual(expect.any(String));      // la hermana «Cancelar» ya no sirve
+      expect(resultados('kapso.escritura_canje')).toEqual(['propuesto']);
+      expect(resultados('kapso.bloqueo_canje')).toEqual(['issue_creado']);
+      const txt = lineas().join('\n');
+      expect(txt).not.toContain('4141234567');
+      expect(txt).not.toContain(NONCE);
+      expect(txt).not.toContain(ok!.nonce);
+    });
+
+  it('nonce reusado: el mismo iss → «venció o ya se usó»; el mismo «Sí, crear» → «Código vencido…»; un solo issue', async () => {
+    await sembrar(NONCE);
+    await pulsar(`iss:C4A1E9:${NONCE}`);
+    await pulsar(`iss:C4A1E9:${NONCE}`);
+    const ok = idsDe(interactivos()[0]!)[0]!;
+    await pulsar(ok);
+    await pulsar(ok);
+    expect(resultados('kapso.escritura_canje')).toEqual(['propuesto', 'sin_canje']);
+    expect(resultados('kapso.bloqueo_canje')).toEqual(['issue_creado', 'sin_canje']);
+    expect(textos()).toEqual(['No se pudo: el botón venció o ya se usó. Abre officialvanguard.com', `Hecho: issue #12 ${ISSUE}`,
+      'Código vencido o ya usado. Abre officialvanguard.com']);
+    expect(interactivos()).toHaveLength(1);
+    expect(crear).toHaveBeenCalledOnce();
+  });
+
+  it('remitente no verificado (o que hizo BAJA) → ni confirmación, ni acción, ni respuesta', async () => {
+    await sembrar(NONCE);
+    const G = crypto.randomUUID();
+    await sembrar('Qw8rTy6Ui4Op2As0' + 'Df1gHj', { params: { etapa: 'confirmar', group: G } });
+    contacto = { id: 'c1', verified_at: null };
+    await pulsar(`iss:C4A1E9:${NONCE}`);
+    await pulsar(`ok:C4A1E9:${'Qw8rTy6Ui4Op2As0' + 'Df1gHj'}`);
+    expect(resultados('kapso.escritura_canje')).toEqual(['no_contacto']);
+    expect(resultados('kapso.bloqueo_canje')).toEqual(['no_contacto']);
+    expect(filas).toHaveLength(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(crear).not.toHaveBeenCalled();
+  });
+
+  it('confirmación caducada (más de 10 min) → «Código vencido o ya usado» y ningún issue', async () => {
+    await sembrar(NONCE, { params: { etapa: 'confirmar', group: crypto.randomUUID() },
+      expires_at: new Date(Date.now() - 1000).toISOString() });
+    await pulsar(`ok:C4A1E9:${NONCE}`);
+    expect(resultados('kapso.bloqueo_canje')).toEqual(['sin_canje']);
+    expect(textos()).toEqual(['Código vencido o ya usado. Abre officialvanguard.com']);
+    expect(crear).not.toHaveBeenCalled();
+  });
+
+  it('«Cancelar» → «Cancelado: no creé el issue.», la hermana queda usada y el «Sí, crear» ya no sirve', async () => {
+    await sembrar(NONCE);
+    await pulsar(`iss:C4A1E9:${NONCE}`);
+    const [ok, no] = idsDe(interactivos()[0]!);
+    await pulsar(no!);
+    await pulsar(ok!);
+    expect(textos()).toEqual(['Cancelado: no creé el issue.', 'Código vencido o ya usado. Abre officialvanguard.com']);
+    expect(filas.slice(1).every((f) => (f.result as Fila | undefined)?.canceled === true)).toBe(true);
+    expect(crear).not.toHaveBeenCalled();
+    expect(marcas).toEqual([]);
+  });
+
+  it('GitHub falla (403, sin permiso de Issues, red) → «No se pudo: <motivo corto>» y sin marca en la revisión', async () => {
+    const casos: [string, string][] = [['forbidden', 'GitHub no dio permiso para hacerlo'],
+      ['sin_permiso_issues', 'el token de escritura no tiene «Issues: Read and write»'],
+      ['red', 'GitHub no respondió; inténtalo de nuevo en un rato']];
+    rlWa.mockImplementation(async () => ({ success: true }));
+    for (const [motivo, texto] of casos) {
+      crear.mockResolvedValueOnce({ ok: false, motivo });
+      await sembrar(`${motivo.padEnd(16, 'x')}Ab12Cd`.slice(0, 22), { params: { etapa: 'confirmar', group: crypto.randomUUID() } });
+      await pulsar(`ok:C4A1E9:${`${motivo.padEnd(16, 'x')}Ab12Cd`.slice(0, 22)}`);
+      expect(textos().at(-1)).toBe(`No se pudo: ${texto}.`);
+    }
+    expect(marcas).toEqual([]);
+  });
+
+  it('fuera de producción: iss y su «Sí, crear» no canjean (dry_run) ni contestan; la acción tampoco escribe', async () => {
+    await sembrar(NONCE);
+    await sembrar('Qw8rTy6Ui4Op2As0' + 'Df1gHj', { params: { etapa: 'confirmar', group: crypto.randomUUID() } });
+    await pulsar(`iss:C4A1E9:${NONCE}`, envProd({ VG_ENV: undefined }));
+    await pulsar(`ok:C4A1E9:${'Qw8rTy6Ui4Op2As0' + 'Df1gHj'}`, envProd({ VG_ENV: 'local' }));
+    expect(resultados('kapso.escritura_canje')).toEqual(['dry_run']);
+    expect(resultados('kapso.bloqueo_canje')).toEqual(['dry_run']);
+    expect(doble.rpcs).toHaveLength(0);
+    expect(filas.every((f) => f.used_at === null)).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(crear).not.toHaveBeenCalled();
+  });
+
+  it('rpr: PR cerrado por VanGUARD → «Sí, reabrir» → reabrirPr → «Hecho: PR #7 reabierto»; reabierto a mano → no se ofrece',
+    async () => {
+      await sembrar(NONCE, { action_kind: 'reopen_pr' });
+      await pulsar(`rpr:C4A1E9:${NONCE}`);
+      const [m] = interactivos();
+      expect(m!.interactive!.header!.text).toBe('Reabrir el PR · GitHub');
+      expect(m!.interactive!.body.text).toBe('¿Reabro el PR #7? El ✗ de VanGUARD se queda hasta que lo corrijas. Vence en 10 min.');
+      expect(m!.interactive!.action.buttons.map((b) => b.reply.title)).toEqual(['Sí, reabrir', 'Cancelar']);
+      expect(filas.slice(1).every((f) => f.action_kind === 'reopen_pr')).toBe(true);
+      await pulsar(idsDe(m!)[0]!);
+      expect(reabrir).toHaveBeenCalledOnce();
+      expect((reabrir.mock.calls[0]! as unknown[]).slice(2, 4)).toEqual([ORG_A, REV]);
+      expect(textos()).toEqual(['Hecho: PR #7 reabierto. El ✗ de VanGUARD se queda hasta que lo corrijas.']);
+      expect(marcas).toEqual([{ whatsapp_action: 'pr_reopened', whatsapp_action_at: expect.stringMatching(/Z$/) }]);
+
+      // Respeto a la decisión humana (anexo, punto 4): reabierto a mano → ni filas ni interactivo, «ya está abierto».
+      revision.gate_pr_action = 'reopened_by_human';
+      const N2 = 'Qw8rTy6Ui4Op2As0' + 'Df1gHj';
+      await sembrar(N2, { action_kind: 'reopen_pr' });
+      const antes = filas.length;
+      await pulsar(`rpr:C4A1E9:${N2}`);
+      expect(filas).toHaveLength(antes);
+      expect(textos().at(-1)).toBe('No se pudo: ese PR ya está abierto.');
+      expect(reabrir).toHaveBeenCalledOnce();
+    });
+
+  it('uat → proponerBajoAtaque por WhatsApp al que pulsó; su «Sí, activar» → executeUnderAttack → la hora de fin', async () => {
+    await sembrar(NONCE, { action_kind: 'under_attack_on', code_review_id: null, incident_id: INC });
+    await pulsar(`uat:A1F3C9:${NONCE}`);
+    expect(proponer).toHaveBeenCalledOnce();
+    expect(proponer.mock.calls[0]![1]).toMatchObject({ orgId: ORG_A, scope: 'host', entrega: 'whatsapp', telefono: TEL,
+      incidente: { id: INC, code: 'A1F3C9', details: { host: HOST } } });
+    expect(textos()).toEqual([]);                            // la confirmación la manda proponerBajoAtaque
+
+    const G = crypto.randomUUID();
+    const N2 = 'Qw8rTy6Ui4Op2As0' + 'Df1gHj';
+    await sembrar(N2, { action_kind: 'under_attack_on', code_review_id: null, incident_id: INC,
+      params: paramsUat(G, 'confirmar') });
+    await pulsar(`ok:A1F3C9:${N2}`);
+    expect(ejecutar).toHaveBeenCalledOnce();
+    expect(ejecutar.mock.calls[0]![1]).toMatchObject({ org_id: ORG_A, action_kind: 'under_attack_on', channel: 'whatsapp' });
+    expect(textos()).toEqual([`Hecho: modo bajo ataque activo en ${HOST} hasta las 22:12 (hora de Caracas). Se quita solo a esa `
+      + 'hora; para quitarlo antes, pulsa «Desactivar ahora» en el incidente, en la app.']);
+  });
+
+  it('uat: Cloudflare caído o sin permiso → «No se pudo: …»; propuesta rechazada (sin Modo blindaje) → lo dice', async () => {
+    rlWa.mockImplementation(async () => ({ success: true }));
+    ejecutar.mockResolvedValueOnce({ tipo: 'caido', action_id: 'act-1', status: 503 })
+      .mockResolvedValueOnce({ tipo: 'rechazado', action_id: 'act-2', status: 403, error: 'x' });
+    for (const [i, nonce] of ['Qw8rTy6Ui4Op2As0Df1gH1', 'Qw8rTy6Ui4Op2As0Df1gH2'].entries()) {
+      await sembrar(nonce, { action_kind: 'under_attack_on', code_review_id: null, incident_id: INC,
+        params: paramsUat(crypto.randomUUID(), 'confirmar') });
+      await pulsar(`ok:A1F3C9:${nonce}`);
+      expect(textos()[i]).toBe(i === 0 ? 'No se pudo: Cloudflare no respondió; vuelve a intentarlo desde la app.'
+        : 'No se pudo: al token de Modo blindaje le falta Zone · Config Rules · Edit.');
+    }
+    proponer.mockResolvedValueOnce({ ok: false, motivo: 'no_action_connection', host: HOST, zona: null });
+    await sembrar(NONCE, { action_kind: 'under_attack_on', code_review_id: null, incident_id: INC });
+    await pulsar(`uat:A1F3C9:${NONCE}`);
+    expect(textos().at(-1)).toBe('No se pudo: falta el token de acciones de Cloudflare (Modo blindaje).');
+  });
+
+  it('uat «Cancelar» → «Cancelado: no activé…»; si su «Sí, activar» ya se canjeó → «No cancelé…», nunca un falso cancelado',
+    async () => {
+      rlWa.mockImplementation(async () => ({ success: true }));
+      const base = { action_kind: 'under_attack_on', code_review_id: null, incident_id: INC };
+      const G1 = crypto.randomUUID(), G2 = crypto.randomUUID();
+      await sembrar('Qw8rTy6Ui4Op2As0Df1gH1', { ...base, params: paramsUat(G1, 'confirmar') });
+      await sembrar('Qw8rTy6Ui4Op2As0Df1gH2', { ...base, params: paramsUat(G1, 'cancelar') });
+      await pulsar('no:A1F3C9:Qw8rTy6Ui4Op2As0Df1gH2');
+      await pulsar('ok:A1F3C9:Qw8rTy6Ui4Op2As0Df1gH1');
+      expect(textos()).toEqual(['Cancelado: no activé el modo bajo ataque.',
+        'Código vencido o ya usado. Abre officialvanguard.com']);
+      expect(ejecutar).not.toHaveBeenCalled();
+
+      await sembrar('Qw8rTy6Ui4Op2As0Df1gH3', { ...base, params: paramsUat(G2, 'confirmar') });
+      await sembrar('Qw8rTy6Ui4Op2As0Df1gH4', { ...base, params: paramsUat(G2, 'cancelar') });
+      await pulsar('ok:A1F3C9:Qw8rTy6Ui4Op2As0Df1gH3');      // el doble de executeUnderAttack no marca las hermanas
+      await pulsar('no:A1F3C9:Qw8rTy6Ui4Op2As0Df1gH4');
+      expect(textos().at(-1)).toBe('No cancelé: esa acción ya estaba confirmada. Mira su resultado en la app.');
+      expect(resultados('kapso.bloqueo_canje')).toEqual(['cancelado', 'sin_canje', 'bajo_ataque_activo', 'ya_confirmado']);
+    });
+
+  it('el código debe ser el de su revisión/incidente y el prefijo el de su etapa; ids inválidos → desconocido', async () => {
+    rlWa.mockImplementation(async () => ({ success: true }));
+    await sembrar(NONCE);
+    await pulsar(`iss:FFFFFF:${NONCE}`);                       // otra revisión
+    await sembrar('Qw8rTy6Ui4Op2As0Df1gH1');
+    await pulsar('rpr:C4A1E9:Qw8rTy6Ui4Op2As0Df1gH1');          // un nonce de iss como rpr
+    expect(textos()).toEqual(['No se pudo: no encontré esa revisión.', 'No se pudo: ese botón no corresponde a esta acción.']);
+    for (const id of [`iss:c4a1e9:${NONCE}`, 'rpr:C4A1E9:corto', `uat:A1F3C9:${NONCE}x!`, `issx:C4A1E9:${NONCE}`]) await pulsar(id);
+    expect(lineas().filter((l) => l.includes('"kapso.boton"')).slice(-4).map((l) => JSON.parse(l).accion))
+      .toEqual(Array(4).fill('desconocido'));
+    expect(crear).not.toHaveBeenCalled();
+  });
+
+  it('presupuesto (E31): sin el peor caso de iss/uat o del «Sí, …» reservado, ni canje ni respuesta', async () => {
+    await sembrar(NONCE);
+    const { procesarKapso } = await import('./webhooks-kapso.ts');
+    for (const id of [`iss:C4A1E9:${NONCE}`, `ok:C4A1E9:${NONCE}`]) {
+      await procesarKapso(envDoble(envProd()).env, 'whatsapp.message.received', boton(id), 'rid-x', { quedan: 18, omitidos: 0 });
+    }
     expect(doble.rpcs).toHaveLength(0);
     expect(fetchMock).not.toHaveBeenCalled();
   });

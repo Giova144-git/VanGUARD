@@ -13,6 +13,7 @@ const cred = vi.hoisted(() => ({ withSecret: vi.fn() }));
 vi.mock('../lib/credentials.ts', () => ({ withSecret: cred.withSecret, createConnectionWithSecret: vi.fn() }));
 
 const { app } = await import('../app.ts');
+const { proponerBajoAtaque } = await import('../actions/under-attack.ts');
 
 // E55 (oferta) y E56 (propuesta con dry_run) de modo-bajo-ataque.md §5 y §10. Sin red: doble de la base y fetch simulado.
 // Ningún literal con forma de secreto, teléfono ni IP entera de un cliente: se arman en tiempo de ejecución.
@@ -365,5 +366,80 @@ describe('E56 · POST incidents/:id/under-attack/propose', () => {
     expect(aCloudflare().at(-1)).toMatchObject({ method: 'DELETE', url: `${CF}/rulesets/${RS}/rules/${'d'.repeat(32)}` });
     expect(de('approvals', 'insert')).toHaveLength(0);
     expect(lineas()).toContain('"bajo_ataque.dry_run_escribio"');
+  });
+});
+
+// Botón uat del 2.º mensaje (avisos-whatsapp-botones.md): las MISMAS guardas y el mismo dry_run que E56, pero sin código:
+// dos filas ok/no del mismo group y el interactivo «Sí, activar» / «Cancelar» al teléfono que pulsó.
+describe('botón uat · proponerBajoAtaque con entrega por WhatsApp', () => {
+  const TEL_SIN = TEL.slice(1);
+  const pedir = (env: Partial<CloudflareBindings> = PROD) => proponerBajoAtaque(envDoble(env).env, { orgId: ORG,
+    incidente: { id: INC, code: 'A1F3C9', rule_ids: ['CF_IP_FLOOD'], severity: 'critical', resource: `ip:${IP}`, status: 'open',
+      details: { ip: IP, host: HOST } }, scope: 'host', entrega: 'whatsapp', telefono: TEL_SIN, rid: 'rid-1' });
+  const aKapso = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith('https://api.kapso.ai/'))
+    .map((c) => JSON.parse(String((c[1] as RequestInit).body)) as { to: string; type: string; interactive: {
+      header: { text: string }; body: { text: string }; footer: { text: string };
+      action: { buttons: { reply: { id: string; title: string } }[] } } });
+
+  it('dry_run como E56 → dos filas ok/no (group y ref compartidos, sin código ni kid) y el interactivo al que pulsó', async () => {
+    const r = await pedir();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.respuesta).toMatchObject({ delivery: 'whatsapp', code: null, target: HOST, validado: true });
+    // Ni contacto prioritario ni org: contesta al que pulsó.
+    expect(doble.ops.some((o) => o.table === 'contacts' || o.table === 'orgs')).toBe(false);
+    expect(aCloudflare().map((c) => `${c.method} ${c.url}`)).toEqual([`GET ${EP}`, `POST ${CF}/rulesets/${RS}/rules?dry_run=true`]);
+    const filasNuevas = de('approvals', 'insert').flatMap((o) => [o.payload].flat() as Fila[]);
+    expect(filasNuevas).toHaveLength(2);
+    const group = (filasNuevas[0]!.params as Fila).group as string;
+    expect(new Set(filasNuevas.map((f) => f.id)).size).toBe(2);
+    expect(r.respuesta.approval_id).toBe(filasNuevas[0]!.id);
+    for (const [i, f] of filasNuevas.entries()) {
+      expect(f).toMatchObject({ org_id: ORG, incident_id: INC, action_kind: 'under_attack_on', channel: 'whatsapp',
+        recipient: TEL_SIN, params: { scope: 'host', target: HOST, zone_id: ZONA, zone_name: ZN, connection_id: CONN,
+          incident_id: INC, incident_code: 'A1F3C9', ttl_s: 1800, group, ref: refBajoAtaque(group), ruleset_id: RS,
+          requested_by: null, etapa: i === 0 ? 'confirmar' : 'cancelar' } });
+      expect((f.params as Fila).kid).toBeUndefined();
+    }
+    const [m] = aKapso();
+    expect(m!.to).toBe(TEL_SIN);
+    expect(m!.interactive.header.text).toBe('Modo bajo ataque · Cloudflare');
+    expect(m!.interactive.body.text).toMatch(/^¿Activo el modo bajo ataque en demo\.officialvanguard\.com durante 30 min\?/);
+    expect(m!.interactive.footer.text).toBe('Incidente #A1F3C9 · VanGUARD');
+    const botones = m!.interactive.action.buttons.map((b) => b.reply);
+    expect(botones.map((b) => b.title)).toEqual(['Sí, activar', 'Cancelar']);
+    for (const [i, b] of botones.entries()) {
+      const [accion, codigo, nonce] = b.id.split(':');
+      expect([accion, codigo]).toEqual([i === 0 ? 'ok' : 'no', 'A1F3C9']);
+      const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(nonce)));
+      expect(filasNuevas[i]!.nonce_hash).toBe('\\x' + Array.from(hash, (x) => x.toString(16).padStart(2, '0')).join(''));
+    }
+    expect(lineas()).not.toContain('4141234567');
+  });
+
+  it('fuera de producción → sin_entrega dry_run sin Cloudflare ni filas; Kapso caído → se borran las dos filas', async () => {
+    expect(await pedir({ ...PROD, VG_ENV: 'local' })).toEqual({ ok: false, motivo: 'sin_entrega', detalle: 'dry_run' });
+    expect(aCloudflare()).toEqual([]);
+    expect(de('approvals', 'insert')).toHaveLength(0);
+
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => (String(url).startsWith('https://api.kapso.ai/')
+      ? json({ error: { code: 131047 } }, 400) : (cf[`${init.method ?? 'GET'} ${url}`] ?? (() => json({}, 500)))()));
+    expect(await pedir()).toEqual({ ok: false, motivo: 'sin_entrega', detalle: 'kapso' });
+    const ids = de('approvals', 'insert').flatMap((o) => [o.payload].flat() as Fila[]).map((f) => f.id);
+    const borrado = de('approvals', 'delete')[0]!;
+    expect(borrado.filters).toEqual(expect.arrayContaining([['id', 'in', ids], ['org_id', 'eq', ORG]]));
+  });
+
+  it('las guardas de E56 valen igual: una sola IP, ya activo o sin conexión → rechazo sin filas ni interactivo', async () => {
+    ips = 1;
+    expect(await pedir()).toMatchObject({ ok: false, motivo: 'una_ip' });
+    ips = 2;
+    filas = [{ id: ACT, status: 'executed', target: HOST, created_at: hace(3), previous: {} }];
+    expect(await pedir()).toMatchObject({ ok: false, motivo: 'already_active', action_id: ACT });
+    filas = [];
+    conexiones = [];
+    expect(await pedir()).toMatchObject({ ok: false, motivo: 'no_action_connection' });
+    expect(de('approvals', 'insert')).toHaveLength(0);
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).startsWith('https://api.kapso.ai/'))).toBe(false);
   });
 });

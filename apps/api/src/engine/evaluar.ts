@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { Severity } from '@vanguard/contracts';
 import {
-  evaluarVentanaEdge, motivoAviso, normalizarFilaVentana, paramsUpsertIncidente, rank, type EdgeWindowRow,
-  type IncidenteEdgeConClave, type RespuestaUpsert,
+  evaluarVentanaEdge, motivoAviso, normalizarFilaVentana, paramsUpsertIncidente, rank, REGLAS_QUE_OFRECEN,
+  type EdgeWindowRow, type IncidenteEdgeConClave, type RespuestaUpsert,
 } from '@vanguard/core';
 import { db } from '../lib/db.ts';
 import { log } from '../lib/log.ts';
@@ -25,6 +25,11 @@ const RESERVA_INCIDENTE = 3;          // vg_ip_first_seen + vg_upsert_incident +
 /** Reserva por aviso [estimación]: el despachador lee incidente, contactos, org, uso y tormenta, y por contacto escribe
  *  notifications y approvals, llama a Kapso y cierra la fila (~18 con 2 contactos). */
 export const COSTE_AVISO = 18;
+/** Reserva extra para el 2.º mensaje de bajo ataque del despachador (ofrecerBajoAtaque: oferta 3 + fila 1 + approvals 1
+ *  + envío ≤ 2 + cierre 1), solo en los incidentes con CF_IP_FLOOD: los únicos a los que se les puede ofrecer. */
+export const COSTE_OFERTA_BAJO_ATAQUE = 8;
+const costeAviso = (inc: { rule_ids: readonly string[] }) =>
+  COSTE_AVISO + (inc.rule_ids.some((r) => REGLAS_QUE_OFRECEN.includes(r)) ? COSTE_OFERTA_BAJO_ATAQUE : 0);
 
 export type Ctx = { orgId: string; connectionId: string; rid: string };
 export type ResumenEvaluacion = {
@@ -119,7 +124,8 @@ async function evaluar(env: CloudflareBindings, ctx: Ctx): Promise<ResumenEvalua
 
   const plan = planEvaluacion(incidentes, abiertos);
   for (const [i, { inc, avisara }] of plan.entries()) {
-    if (r.subpeticiones + RESERVA_INCIDENTE + (avisara ? COSTE_AVISO : 0) > PRESUPUESTO_MOTOR) {
+    const coste = costeAviso(inc);
+    if (r.subpeticiones + RESERVA_INCIDENTE + (avisara ? coste : 0) > PRESUPUESTO_MOTOR) {
       // Si no cabe un aviso, aún pueden caber los que solo actualizan (van detrás): se salta este y se sigue.
       if (avisara) { r.pendientes++; continue; }
       r.pendientes += plan.length - i;
@@ -134,12 +140,12 @@ async function evaluar(env: CloudflareBindings, ctx: Ctx): Promise<ResumenEvalua
     if (resp.is_new) r.nuevos++;
     if (!motivoAviso(resp)) continue;
     // Un aviso no previsto (se resolvió entre la lectura y el upsert) sale solo si aún cabe; si no, queda en el log.
-    if (!avisara && r.subpeticiones + COSTE_AVISO > PRESUPUESTO_MOTOR) {
+    if (!avisara && r.subpeticiones + coste > PRESUPUESTO_MOTOR) {
       log('warn', 'motor.aviso_sin_presupuesto', { rid, incidente: resp.code });
       continue;
     }
     r.avisos++;
-    r.subpeticiones += COSTE_AVISO;
+    r.subpeticiones += coste;
     try {
       await avisarIncidente(env, orgId, resp.id, { is_new: resp.is_new, prev_severity: resp.prev_severity, reopened: resp.reopened }, rid);
     } catch (e) {

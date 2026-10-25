@@ -1,9 +1,12 @@
 import { Hono, type Context } from 'hono';
-import { redact, TEXTO_ACCION_PRONTO, textoSeguro, unaLinea } from '@vanguard/core';
+import { redact, textoSeguro, unaLinea } from '@vanguard/core';
 import {
-  canjearBotonAlerta, canjearBotonBloqueo, canjearBotonRevision, COSTE_BOTON_BLOQUEO, COSTE_BOTON_REVISION,
-  esContactoVerificado, parsearBoton, type AccionBoton, type Boton,
+  canjearBotonAlerta, canjearBotonBloqueo, canjearBotonRevision, COSTE_BOTON_BLOQUEO, COSTE_BOTON_REVISION, parsearBoton,
+  type AccionBoton, type Boton,
 } from '../actions/approvals.ts';
+import {
+  canjearBotonPropuesta, confirmarEscritura, COSTE_BOTON_CONFIRMACION, COSTE_BOTON_PROPUESTA,
+} from '../actions/botones-escritura.ts';
 import type { AppEnv } from '../env.ts';
 import { db } from '../lib/db.ts';
 import { fail } from '../lib/errors.ts';
@@ -56,9 +59,12 @@ const COSTE = {
   boton: 4,        // vg_redeem_approval + incidente y contacto + update del incidente
   verificar: 6,    // getKeys + candidatos + (update + orgs + envío·2 | orgs + RL_WA + envío·2 | RL_WA + envío·2)
   baja: 4,         // update + RL_WA + envío·2
-  bloqueo: COSTE_BOTON_BLOQUEO + 3,   // canje y executeBlock/propuesta/cancelación + RL_WA + envío·2 de la respuesta
+  bloqueo: COSTE_BOTON_BLOQUEO + 3,   // canje y propuesta de blk + RL_WA + envío·2 de la respuesta
+  // ok/no: el canje sirve al bloqueo (executeBlock o cancelación) y a la confirmación de iss/rpr/uat (crearIssue,
+  // reabrirPr o executeUnderAttack): se reserva el mayor de los dos + RL_WA + envío·2.
+  confirmacion: Math.max(COSTE_BOTON_BLOQUEO, COSTE_BOTON_CONFIRMACION) + 3,
   revision: COSTE_BOTON_REVISION + 3, // canje, revisión, contacto y escrituras de fix/rvs + RL_WA + envío·2
-  pronto: 4,       // contacto verificado en alguna org + RL_WA + envío·2 («Esta acción llega pronto»)
+  propuesta: COSTE_BOTON_PROPUESTA + 3,   // canje de iss/rpr/uat, guardas, filas ok/no e interactivo + RL_WA + envío·2
 } as const;
 function gastar(p: Presupuesto, n: number): boolean {
   if (p.quedan < n) {
@@ -172,16 +178,21 @@ const ALERTA: Accion = {
 };
 
 // ok/no/blk (§12.9, S15 15.10): ok → executeBlock (el mismo de E21), no → cancela, blk → propone con entrega por
-// WhatsApp. Hoy confirman solo el bloqueo (block_ip); el ok/no de iss, rpr y uat se engancha aquí por action_kind.
-const BLOQUEO: Accion = {
-  coste: COSTE.bloqueo,
+// WhatsApp. El ok/no de iss, rpr y uat se canjea aquí mismo y, por su action_kind, va a confirmarEscritura
+// (actions/botones-escritura.ts): «Sí, crear», «Sí, reabrir» y «Sí, activar» con sus «Cancelar».
+const BIEN_BLOQUEO = ['ejecutado', 'ya_estaba', 'cancelado', 'propuesto', 'issue_creado', 'pr_reabierto', 'bajo_ataque_activo',
+  'ya_confirmado'];
+const bloqueo = (coste: number): Accion => ({
+  coste,
   async ejecutar(env, b, remitente, rid, enmascarado) {
-    const c = await canjearBotonBloqueo(env, b, remitente, rid);
-    log(['ejecutado', 'ya_estaba', 'cancelado', 'propuesto'].includes(c.resultado) ? 'info' : 'warn', 'kapso.bloqueo_canje',
+    const c = await canjearBotonBloqueo(env, b, remitente, rid, undefined, confirmarEscritura);
+    log(BIEN_BLOQUEO.includes(c.resultado) ? 'info' : 'warn', 'kapso.bloqueo_canje',
       { rid, accion: b.accion, codigo: b.codigo, resultado: c.resultado, remitente: enmascarado });
     if (c.texto) await responderConTope(env, remitente, c.texto, `bloqueo_${b.accion}`, rid);
   },
-};
+});
+const BLOQUEO = bloqueo(COSTE.bloqueo);
+const CONFIRMACION = bloqueo(COSTE.confirmacion);
 
 // fix/rvs (anexo de botones): «Enviarme el arreglo» y «Silenciar repo 1 h» del aviso de revisión. La respuesta («Hecho: …»
 // o «No se pudo: …») solo va al remitente verificado de la org de la aprobación; sin canje, el aviso de botón vencido
@@ -196,25 +207,22 @@ const REVISION: Accion = {
   },
 };
 
-// iss («Crear issue»), rpr («Reabrir el PR») y uat («Modo bajo ataque»): registradas pero todavía sin la acción detrás
-// (ningún mensaje las ofrece) → «Esta acción llega pronto», sin canje y solo a un contacto verificado de alguna org.
-// PUNTO DE ENGANCHE: las acciones ya existen (crearIssue y reabrirPr con via 'whatsapp' en revision/acciones-pr.ts, del
-// bloqueo; executeUnderAttack en actions/under-attack.ts, de bajo ataque) pero aún no se conectan: cada una cambiará aquí
-// PRONTO por su canje (botón → propuesta con ok/no y aprobación de 10 min, como blk; título del ok en
-// TITULOS_CONFIRMACION de core), con la misma guarda del remitente verificado.
-const PRONTO: Accion = {
-  coste: COSTE.pronto,
+// iss («Crear issue»), rpr («Reabrir el PR») y uat («Modo bajo ataque»): escriben en sistemas del cliente, así que el
+// botón solo pide (regla 2 del anexo): canje y guardas y, si casan, la confirmación «Sí, …» / «Cancelar» al remitente
+// (esa es la respuesta). «No se pudo: …» o el botón vencido, solo al contacto verificado (con RL_WA).
+const PROPUESTA: Accion = {
+  coste: COSTE.propuesta,
   async ejecutar(env, b, remitente, rid, enmascarado) {
-    log('info', 'kapso.boton_pronto', { rid, accion: b.accion, remitente: enmascarado });
-    if (await esContactoVerificado(env, remitente, rid)) {
-      await responderConTope(env, remitente, TEXTO_ACCION_PRONTO, `pronto_${b.accion}`, rid);
-    }
+    const c = await canjearBotonPropuesta(env, b, remitente, rid);
+    log(c.resultado === 'propuesto' ? 'info' : 'warn', 'kapso.escritura_canje',
+      { rid, accion: b.accion, codigo: b.codigo, resultado: c.resultado, remitente: enmascarado });
+    if (c.texto) await responderConTope(env, remitente, c.texto, `escritura_${b.accion}`, rid);
   },
 };
 
 const ACCIONES: Readonly<Record<AccionBoton, Accion>> = {
-  ack: ALERTA, snz: ALERTA, ok: BLOQUEO, no: BLOQUEO, blk: BLOQUEO, fix: REVISION, rvs: REVISION,
-  iss: PRONTO, rpr: PRONTO, uat: PRONTO,
+  ack: ALERTA, snz: ALERTA, ok: CONFIRMACION, no: CONFIRMACION, blk: BLOQUEO, fix: REVISION, rvs: REVISION,
+  iss: PROPUESTA, rpr: PROPUESTA, uat: PROPUESTA,
 };
 
 async function registrarBoton(env: CloudflareBindings, m: Obj, remitente: string, rid: string, p: Presupuesto) {

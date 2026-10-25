@@ -8,8 +8,8 @@ import { envDoble, mensajeDoble } from '../test/dobles.ts';
 // supabase-js con el doble (perf_runs y scan_runs en memoria) y la cola de verdad (guarded) para reintentos y cierre.
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
-const { CAMPOS_PSI, HOSTS_PROPIOS, TOPE_CUERPO_PSI, UrlNoMedible, hostsPropios, pasoPsi, resumirLhr, urlMedible, urlPsi, uuidFrom } =
-  await import('./psi.ts');
+const { CAMPOS_PSI, HOSTS_PROPIOS, HOST_VICTIMA_DEMO, TOPE_CUERPO_PSI, UrlNoMedible, hostsPropios, pasoPsi, resumirLhr, urlMedible,
+  urlPsi, uuidFrom } = await import('./psi.ts');
 const { guarded, registrarPaso } = await import('../jobs.ts');
 const { ProviderError } = await import('../lib/http.ts');
 const { app } = await import('../app.ts');
@@ -45,6 +45,23 @@ const CUERPO = {
   },
 };
 
+// Lo que de verdad llega con la máscara: categories y audits ENTEROS (≈150 auditorías con texto, details y tablas; ≈330 KB,
+// como la medición del ORQUESTADOR con example.com). Las métricas de §10.3 son las de CUERPO.
+const cuerpoReal = () => {
+  const audits: Record<string, unknown> = { ...CUERPO.lighthouseResult.audits };
+  for (let i = 0; i < 150; i++) {
+    audits[`auditoria-${i}`] = { id: `auditoria-${i}`, title: `Auditoría ${i}`, score: 0.5, scoreDisplayMode: 'numeric',
+      description: 'Texto de ayuda de Lighthouse con un [enlace](https://developer.chrome.com/docs/lighthouse/). '.repeat(4),
+      numericValue: i * 10.5, displayValue: `${i} ms`,
+      details: { type: 'table', headings: [{ key: 'url', valueType: 'url', label: 'URL' }],
+        items: Array.from({ length: 14 }, (_, k) => ({ url: `https://tienda.example.com/estaticos/recurso-${k}.js`,
+          wastedMs: k * 12.5, totalBytes: k * 1024, wastedBytes: k * 512 })) } };
+  }
+  const categories = Object.fromEntries(Object.entries(CUERPO.lighthouseResult.categories).map(([k, c]) => [k, { ...c, id: k,
+    title: k, auditRefs: Array.from({ length: 40 }, (_, i) => ({ id: `auditoria-${i}`, weight: 1, group: 'diagnostics' })) }]));
+  return { lighthouseResult: { ...CUERPO.lighthouseResult, categories, audits } };
+};
+
 type Fila = Record<string, unknown>;
 let params: unknown;
 let steps: ScanStep[];
@@ -52,6 +69,7 @@ let estadoScan: string;
 let errorScan: string | null;
 let perf: Fila[];
 let errorInsert: { code: string } | null;
+let esDemo: boolean;                         // orgs.is_demo de ORG
 let doble: ReturnType<typeof dbDoble>;
 let salida: string[];
 let urls: string[];
@@ -66,12 +84,14 @@ beforeEach(() => {
   errorScan = null;
   perf = [];
   errorInsert = null;
+  esDemo = false;
   urls = [];
   responder = () => Response.json(CUERPO);
   doble = dbDoble({
     claims: (tok) => (tok === 'ana' ? { sub: ANA, email: 'ana@acme.dev', is_anonymous: false } : null),
     tabla: (op: Op) => {
       if (op.table === 'org_members') return { data: eqDe(op, 'org_id') === ORG ? { role: 'viewer' } : null };
+      if (op.table === 'orgs') return { data: eqDe(op, 'id') === ORG ? { is_demo: esDemo } : null };
       if (op.table === 'scan_runs' && op.action === 'select') {
         if (eqDe(op, 'org_id') !== ORG || eqDe(op, 'id') !== SCAN) return { data: null };
         if ((op.columns ?? '').includes('steps')) return { data: { id: SCAN, org_id: ORG, kind: 'lighthouse', status: estadoScan, steps } };
@@ -177,6 +197,18 @@ describe('urlMedible (E11 y el paso)', () => {
     expect(() => urlMedible('https://staging.vanguard.dev/', propios)).toThrow(UrlNoMedible);
     expect(hostsPropios({ APP_ORIGIN: 'no es url' })).toEqual([...HOSTS_PROPIOS]);
   });
+
+  it('permitidos salta SOLO la regla de host propio y solo para ese host exacto', () => {
+    const p = [HOST_VICTIMA_DEMO];
+    expect(urlMedible('https://Demo.OfficialVanguard.com./a?b=1', HOSTS_PROPIOS, p)).toBe('https://demo.officialvanguard.com/a');
+    for (const [u, motivo] of [['https://officialvanguard.com/', 'propio'], ['https://x.demo.officialvanguard.com/', 'propio'],
+      ['http://demo.officialvanguard.com/', 'https'], ['https://demo.officialvanguard.com:8443/', 'puerto'],
+      ['https://ana@demo.officialvanguard.com/', 'credenciales']] as const) {
+      let e: unknown = null;
+      try { urlMedible(u, HOSTS_PROPIOS, p); } catch (x) { e = x; }
+      expect((e as InstanceType<typeof UrlNoMedible>).motivo, u).toBe(motivo);
+    }
+  });
 });
 
 describe('petición a PSI', () => {
@@ -194,12 +226,10 @@ describe('petición a PSI', () => {
     }
   });
 
-  it('fields pide puntajes, las métricas de §10.3, versión, runtimeError y finalUrl; nada más del LHR', () => {
-    expect(CAMPOS_PSI.startsWith('lighthouseResult(')).toBe(true);
-    for (const x of ['lighthouseVersion', 'fetchTime', 'finalUrl', 'runtimeError', 'categories/*/score', 'largest-contentful-paint/numericValue',
-      'total-blocking-time/numericValue', 'cumulative-layout-shift/numericValue', 'first-contentful-paint/numericValue',
-      'speed-index/numericValue', 'metrics/details/items/timeToFirstByte']) expect(CAMPOS_PSI, x).toContain(x);
-    expect(CAMPOS_PSI).not.toMatch(/loadingExperience|i18n|fullPageScreenshot|entities|stackPacks/);
+  it('fields pide categories y audits ENTEROS (Google no deja elegir claves de un mapa), versión, runtimeError y finalUrl', () => {
+    // «audits(largest-contentful-paint/numericValue,…)» da 400 INVALID_ARGUMENT: audits es un mapa (probado por el ORQUESTADOR).
+    expect(CAMPOS_PSI).toBe('lighthouseResult(lighthouseVersion,fetchTime,finalUrl,finalDisplayedUrl,runtimeError,categories,audits)');
+    expect(CAMPOS_PSI).not.toMatch(/\/|\*|loadingExperience|i18n|fullPageScreenshot|entities|stackPacks/);
   });
 });
 
@@ -215,17 +245,18 @@ describe('resumirLhr y costo del parseo', () => {
     expect(resumirLhr({ ...CUERPO.lighthouseResult, audits: a }).metrics).toMatchObject({ ttfb_ms: 141, tbt_ms: null });
   });
 
-  it('JSON.parse + resumirLhr de la respuesta recortada por fields: < 2 ms (mediana de 300 vueltas, incluso con sangría)', () => {
-    const crudo = JSON.stringify(CUERPO, null, 2);
-    expect(crudo.length).toBeLessThan(4096);
+  it('JSON.parse + resumirLhr de una respuesta real de la máscara (≈330 KB, cabe en el tope): < 8 ms (mediana de 60 vueltas)', () => {
+    const crudo = JSON.stringify(cuerpoReal());
+    expect(crudo.length).toBeGreaterThan(250_000);
+    expect(crudo.length).toBeLessThan(TOPE_CUERPO_PSI / 2);
     const t: number[] = [];
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 60; i++) {
       const t0 = performance.now();
       resumirLhr((JSON.parse(crudo) as typeof CUERPO).lighthouseResult);
       t.push(performance.now() - t0);
     }
     t.sort((x, y) => x - y);
-    expect(t[150]!).toBeLessThan(2);
+    expect(t[30]!).toBeLessThan(8);   // el ORQUESTADOR midió ≈ 1 ms en V8; 8 deja margen con la suite en paralelo
   });
 });
 
@@ -348,14 +379,23 @@ describe('pasoPsi', () => {
     expect(salida.join('\n')).not.toContain(CLAVE);
   });
 
-  it('cuerpo gigante (Google ignoró fields) → se corta a 300 KB sin JSON.parse de 1 MB y el paso falla sin reintento', async () => {
+  it('respuesta real de la máscara (categories y audits enteros, ≈330 KB) → se parsea y da la misma fila', async () => {
+    responder = () => Response.json(cuerpoReal());
+    expect(await pasoPsi(env, msg())).toEqual({ status: 'done' });
+    expect(perf).toHaveLength(1);
+    expect(perf[0]).toMatchObject({ scores: { performance: 0.41, accessibility: 0.91, 'best-practices': 0.96, seo: 0.92 },
+      metrics: { lcp_ms: 6200, tbt_ms: 820, cls: 0.3097, ttfb_ms: 130, total_bytes: 4351870, request_count: 24 },
+      runtime_error: null, is_representative: true });
+  });
+
+  it('cuerpo gigante (Google mandó otra cosa) → se corta a 1 MB sin JSON.parse de 2 MB y el paso falla sin reintento', async () => {
     const parse = vi.spyOn(JSON, 'parse');
     const trozo = new TextEncoder().encode('x'.repeat(64 * 1024));
     let servidos = 0;
     responder = () => new Response(new ReadableStream<Uint8Array>({
-      pull(c) { if (servidos++ < 16) c.enqueue(trozo); else c.close(); } }), { status: 200 });   // 1 MB sin content-length
+      pull(c) { if (servidos++ < 32) c.enqueue(trozo); else c.close(); } }), { status: 200 });   // 2 MB sin content-length
     expect(await pasoPsi(env, msg())).toEqual({ status: 'failed', error_code: 'psi_respuesta_grande' });
-    expect(servidos).toBeLessThan(8);   // dejó de leer pasado el tope
+    expect(servidos).toBeLessThan(20);   // dejó de leer pasado el tope (16 trozos = 1 MB)
     // Con content-length ni siquiera lee.
     responder = () => new Response('{}', { status: 200, headers: { 'content-length': '1200000' } });
     expect(await pasoPsi(env, msg())).toEqual({ status: 'failed', error_code: 'psi_respuesta_grande' });
@@ -370,6 +410,25 @@ describe('pasoPsi', () => {
     params = { perf: { url: OBJETIVO, strategy: 'tablet' } };
     expect(await pasoPsi(env, msg())).toEqual({ status: 'failed', error_code: 'sin_parametros' });
     expect(f).not.toHaveBeenCalled();
+  });
+
+  it('la víctima de la demo: desde la org de demo llega a Google; otro host de VanGUARD nunca; leer la org falla → reintenta', async () => {
+    esDemo = true;
+    params = { perf: { url: 'https://www.officialvanguard.com/', strategy: 'mobile' } };
+    expect(await pasoPsi(env, msg())).toEqual({ status: 'failed', error_code: 'url_no_medible' });
+    expect(f).not.toHaveBeenCalled();
+    params = { perf: { url: 'https://demo.officialvanguard.com/', strategy: 'mobile', version_label: 'v2-regresion' } };
+    expect(await pasoPsi(env, msg())).toEqual({ status: 'done' });
+    expect(new URL(urls[0]!).searchParams.get('url')).toBe('https://demo.officialvanguard.com/');
+    expect(perf[0]).toMatchObject({ url: 'https://demo.officialvanguard.com/', version_label: 'v2-regresion' });
+    // Si no puede leer orgs.is_demo, no lo da por «no medible» (eso cerraría la medición): ProviderError y la cola reintenta.
+    perf = [];
+    const t = doble.client.from;
+    vi.spyOn(doble.client, 'from').mockImplementation(((tabla: string) => (tabla === 'orgs'
+      ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { code: '08006' } }) }) }) }
+      : t.call(doble.client, tabla))) as typeof t);
+    expect((await fallo(pasoPsi(env, msg()))).code).toBe('unavailable');
+    expect(urls).toHaveLength(1);
   });
 
   it('re-entrega con la fila ya escrita → done sin otra llamada a PSI; un 23505 al insertar también es done', async () => {

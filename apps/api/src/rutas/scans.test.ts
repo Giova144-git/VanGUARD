@@ -189,6 +189,28 @@ describe('E11 · POST /api/orgs/:org/scans con kind lighthouse («Medir ahora»,
     expect(d.enviados).toEqual([]);
   });
 
+  it('la víctima de la demo (demo.officialvanguard.com) solo se mide desde la org de demo; el resto de VanGUARD nunca', async () => {
+    const d = envDoble(PROD);
+    esDemo = true;
+    const r = await medir({ url: 'https://Demo.OfficialVanguard.com./?x=1', version_label: 'v2-regresion' }, 'ana', d);
+    expect(r.status).toBe(202);
+    const { scan_run_id } = ScanAccepted.parse(await r.json());
+    expect(fila(scan_run_id).params).toMatchObject({ perf: { url: 'https://demo.officialvanguard.com/' } });
+    // Ni siquiera desde la demo: el apex, otros subdominios, el Worker de respaldo y Supabase.
+    for (const url of ['https://officialvanguard.com/', 'https://www.officialvanguard.com/', 'https://x.demo.officialvanguard.com/',
+      'https://vanguard.giovannizm14.workers.dev/', 'https://accshmgmfrqrxubpuxcl.supabase.co/']) {
+      const e = await medir({ url }, 'ana', d);
+      expect(e.status, url).toBe(422);
+      expect((await error(e)).details?.reason, url).toBe('propio');
+    }
+    // Una org normal: 422 propio, como cualquier host de VanGUARD.
+    esDemo = false;
+    const n = await medir({ url: 'https://demo.officialvanguard.com/' }, 'ana', d);
+    expect(n.status).toBe(422);
+    expect((await error(n)).details?.reason).toBe('propio');
+    expect(d.enviados).toHaveLength(1);
+  });
+
   it('cupo diario: 10 mediciones hoy → 429 budget_exceeded con texto claro; las de ayer no cuentan; demo 20; app_config manda', async () => {
     filas = hechasHoy(10);
     const r = await medir({ url: 'https://tienda.example.com/' });

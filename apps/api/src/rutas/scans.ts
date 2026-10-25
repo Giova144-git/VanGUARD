@@ -9,7 +9,7 @@ import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
 import { requireColaPropia } from '../mw/prod-host.ts';
-import { hostsPropios, UrlNoMedible, urlMedible } from '../scans/psi.ts';
+import { hostsPropios, UrlNoMedible, urlMedibleOrg } from '../scans/psi.ts';
 import { sanearNombreZip } from '../scans/zip-paso.ts';
 
 // E11 · POST /api/orgs/:org/scans, E12 · GET /api/orgs/:org/scans/:id y E23 · POST …/scans/:id/zip-result (S15 15.4, 15.8;
@@ -66,11 +66,12 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
   const admin = db(c.env);
   const orgId = c.get('orgId');
   // lighthouse («Medir ahora», §10.4): la URL se valida antes de tocar la base (scans/psi.ts; el paso la repite). Nunca IPs,
-  // hosts internos ni los de VanGUARD; se guarda como https://host/ruta, la forma que exigen perf_runs.url y el histórico.
+  // hosts internos ni los de VanGUARD (salvo la víctima de la demo desde la org de demo); se guarda como https://host/ruta,
+  // la forma que exigen perf_runs.url y el histórico.
   let urlPerf: string | null = null;
   if (body.kind === 'lighthouse') {
     try {
-      urlPerf = urlMedible(body.url, hostsPropios(c.env));
+      urlPerf = await urlMedibleOrg(admin, orgId, body.url, hostsPropios(c.env));
     } catch (e) {
       if (!(e instanceof UrlNoMedible)) throw e;
       throw new ApiError('invalid_body', e.message, { reason: e.motivo, field_errors: { url: [e.message] } });

@@ -3,6 +3,7 @@
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AiUsage, AlertPrefs, AuditDelta, CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  UnderAttackOffer,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -110,6 +111,18 @@ export function useIncidente(org: string, id: string) {
   return useQuery({
     ...base, queryKey: ['org', org, 'incident', id], enabled: esId(id), queryFn: () => api(`/api/orgs/${org}/incidents/${id}`, { esquema: IncidentDetail }),
     refetchInterval: (q) => es404(q) ? false : USA_FIXTURES ? 2_000 : intervalo(vivo, 10_000, 60_000),   // fixtures: sin cupo, para ver llenarse los hitos
+  });
+}
+
+// «Modo bajo ataque» (E55, asignaciones/modo-bajo-ataque.md §9): solo lee la base, sin llamar a Cloudflare. Bandera: un
+// 404 (BACK sin la ruta, o quitada en el corte de §13.1) no se sondea y la tarjeta no se pinta. Validado con zod como
+// E45. Realtime de incidents también la invalida (un CF_IP_FLOOD de otra IP cambia `ips`); el sondeo es el respaldo.
+export function useOfertaBajoAtaque(org: string, incidentId: string) {
+  const vivo = useVivo();
+  return useQuery({
+    queryKey: ['org', org, 'under-attack', incidentId], enabled: esId(incidentId), refetchIntervalInBackground: false,
+    queryFn: async () => UnderAttackOffer.parse(await api(`/api/orgs/${org}/incidents/${incidentId}/under-attack`, { esquema: UnderAttackOffer })),
+    refetchInterval: (q) => (es404(q) ? false : intervalo(vivo, 15_000, 60_000)),
   });
 }
 

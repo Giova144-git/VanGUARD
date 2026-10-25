@@ -15,7 +15,7 @@ export const GUIAS_CONEXION: Record<Provider, { nombre: string; titulo: string; 
     { texto: 'Abre tus API Tokens y pulsa «Create Token» → «Create Custom Token».', enlace: { href: 'https://dash.cloudflare.com/profile/api-tokens', texto: 'Abrir API Tokens de Cloudflare' } },
     { texto: 'Permisos, todos Zone · Read: Zone, Zone Settings, DNS, Analytics, Firewall Services y Zone WAF. En Zone Resources: Include → Specific zone → tu dominio.' },
     { texto: 'Copia el Zone ID: página de tu dominio → Overview → columna «API».' },
-    { texto: 'Opcional, «Modo blindaje»: un segundo token con solo Firewall Services · Edit sobre la misma zona. Solo se usa cuando confirmas «Bloquear IP» y nunca se entrega a la IA.' },
+    { texto: 'Opcional, «Modo blindaje»: un segundo token con Zone · Firewall Services · Edit sobre la misma zona, y Zone · Config Rules · Edit si quieres activar el modo bajo ataque desde VanGUARD (puedes añadirlo cuando estés bajo ataque y quitarlo después). Firewall Services bloquea una IP; Config Rules activa el modo bajo ataque solo en el host atacado. Solo se usan cuando confirmas con tu código y nunca se entregan a la IA.' },
     { texto: 'Probamos cada permiso. Nunca te pediremos la Global API Key.' },
   ] },
   github: { nombre: 'GitHub', titulo: 'Conecta tu repositorio de GitHub', pasos: [
@@ -64,7 +64,7 @@ export const GUIAS: Record<IdNav, Guia> = {
   cloudflare: { titulo: '¿Cómo leer este módulo?', pasos: [
     'Aquí ves quién está tocando tu web: las IPs y los programas que más insisten, y los escaneos de rutas de administración.',
     'Cuando un ataque cruza el umbral abrimos un incidente y te avisamos por WhatsApp.',
-    'Con el «Modo blindaje» puedes bloquear la IP desde aquí o desde el mismo mensaje de WhatsApp, y deshacerlo con un botón.',
+    'Con el «Modo blindaje» puedes bloquear la IP desde aquí o desde el mismo mensaje de WhatsApp, y deshacerlo con un botón. Si te inundan varias IPs a la vez, puedes poner solo el host atacado en modo bajo ataque 30 min.',
   ] },
   codebase: { titulo: '¿Cómo leer este módulo?', pasos: [
     'Revisamos solo los archivos de riesgo de tu repo: .env subidos, claves en la configuración y lockfiles. Nunca el código entero.',
@@ -107,7 +107,7 @@ export const GUIAS: Record<IdNav, Guia> = {
     'El informe va redactado: los secretos nunca salen completos.',
   ] },
   connections: { titulo: '¿Qué te pedimos?', pasos: [
-    'Tokens de solo lectura: con ellos podemos mirar, nunca escribir. La única excepción es el token opcional de Modo blindaje, que solo bloquea una IP cuando tú lo confirmas.',
+    'Tokens de solo lectura: con ellos podemos mirar, nunca escribir. La única excepción es el token opcional de Modo blindaje, que solo bloquea una IP o activa el modo bajo ataque cuando tú lo confirmas.',
     'Si pegas una clave que puede escribir (como la secreta de Supabase o un token clásico de GitHub), la rechazamos sin que salga de tu navegador.',
     'Después de guardar, solo verás los últimos 4 caracteres del token.',
   ] },

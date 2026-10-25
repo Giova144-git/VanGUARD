@@ -48,7 +48,7 @@ export default function PaginaCloudflare() {
         </div>
         {/* Mientras cargan las conexiones, un hueco de alto fijo: ni el CTA equivocado ni el salto (L7). */}
         {cx.isPending ? <div className="min-h-16" aria-busy="true" />
-          : blindaje ? <p className="text-sm text-muted-foreground">Puedes bloquear una IP desde un incidente o desde el mismo WhatsApp, con simulación previa y «Deshacer».</p>
+          : blindaje ? <p className="text-sm text-muted-foreground">Desde un incidente puedes bloquear una IP (también desde el mismo WhatsApp) o activar el modo bajo ataque en el host atacado, con simulación previa y «Deshacer».</p>
           : <ActivarBlindaje />}
       </section>
       {zona ? (

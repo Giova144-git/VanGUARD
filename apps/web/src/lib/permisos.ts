@@ -9,6 +9,7 @@ export const PERMISOS: Record<string, string> = {
   zone_read: 'Zone · Zone · Read', zone_settings_read: 'Zone · Zone Settings · Read', dns_read: 'Zone · DNS · Read',
   analytics_read: 'Zone · Analytics · Read', firewall_read: 'Zone · Firewall Services · Read', waf_read: 'Zone · Zone WAF · Read',
   bot_read: 'Zone · Bot Management · Read', firewall_edit: 'Zone · Firewall Services · Edit',
+  config_rules_edit: 'Zone · Config Rules · Edit', zone_settings_edit: 'Zone · Zone Settings · Edit',   // modo bajo ataque (host y zona)
   // GitHub (fine-grained)
   'metadata:read': 'Metadata · Read-only', 'contents:read': 'Contents · Read-only', 'dependabot_alerts:read': 'Dependabot alerts · Read-only',
   // GitHub, token de escritura del bloqueo de merge (E53; anexo de cierre de PR)

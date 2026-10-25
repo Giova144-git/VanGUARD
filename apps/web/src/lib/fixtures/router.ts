@@ -6,6 +6,7 @@ import {
   type MergeGateConfig, type MergeGateSaved, type Overview, type RespuestaEscritura,
   type Finding, type Incident, type IncidentDetail, type MatrizHallazgos, type Me, type Module, type Org, type PermCheck, type ScanKind,
   type ScanRun, type TimelineItem, type WikiRun, type ZipFinding,
+  type UnderAttackActivo, type UnderAttackMotivo, type UnderAttackOffer, type UnderAttackProposal,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { ApiError } from '../errores';
@@ -54,10 +55,17 @@ function crearOrg(body: unknown): Org {
   return org;
 }
 
-// Conexiones por org: la demo arranca con las del fixture; una org nueva (o ?escenario=vacio), vacía.
+// Conexiones por org: la demo arranca con las del fixture; una org nueva (o ?escenario=vacio), vacía. El token de Modo
+// blindaje de la demo trae Zone · Config Rules · Edit (config_rules_edit: true, lo que guardaría la sonda de E9), así E55
+// ofrece el modo bajo ataque con permiso 'ok' como fx.underAttackOffer; sin la clave sería 'sin_probar'.
 const conexiones = new Map<string, ConnectionPublic[]>();
+function conexionesDemo(): ConnectionPublic[] {
+  const lista = structuredClone(fx.connections as unknown as ConnectionPublic[]);   // el literal con satisfies no casa con Record<string, boolean>
+  for (const c of lista) if (c.provider === 'cloudflare' && c.kind === 'action') c.capabilities = { ...c.capabilities, config_rules_edit: true };
+  return lista;
+}
 const listaDe = (org: string) => {
-  if (!conexiones.has(org)) conexiones.set(org, vacia(org) ? [] : structuredClone(fx.connections as unknown as ConnectionPublic[]));  // el literal con satisfies no casa con Record<string, boolean>
+  if (!conexiones.has(org)) conexiones.set(org, vacia(org) ? [] : conexionesDemo());
   return conexiones.get(org)!;
 };
 const conectado = (org: string, p: ConnectionPublic['provider']) =>
@@ -122,6 +130,9 @@ function guardaFalsa(token: string) {
   if (/^sb_secret_|^gh[pousr]_|^cfk_/.test(token))
     falla(422, 'key_rejected', 'Esa clave puede escribir: VanGUARD solo acepta tokens de solo lectura', { reason: 'write_capable' });
 }
+// Sonda falsa del permiso del modo bajo ataque (el dry_run de Config Rules de E8/E9): un token de acciones con «sin-config»
+// hace de token sin Zone · Config Rules · Edit (la sonda vería un 403: config_rules_edit false); cualquier otro lo trae.
+const conConfigRules = (token: string) => !/sin-config/i.test(token);
 
 function conectarFalso(org: string, body: unknown): ConnectionCreated {
   const b = (body ?? {}) as Record<string, string | undefined>;
@@ -142,7 +153,8 @@ function conectarFalso(org: string, body: unknown): ConnectionCreated {
       connection = { ...base, provider: 'cloudflare', label: 'Cloudflare · officialvanguard.com', last4: (b.read_token ?? '').slice(-4),
         scopes: ['zone_read', 'analytics_read'], meta: { zone_id: b.zone_id, zone_name: 'officialvanguard.com', plan: 'free' } };
       if (b.action_token) action_connection = { ...connection, id: crypto.randomUUID(), kind: 'action', label: `${connection.label} · blindaje`,
-        last4: b.action_token.slice(-4), scopes: ['firewall_read'] };
+        last4: b.action_token.slice(-4), scopes: ['firewall_read'],
+        capabilities: { firewall_read: true, config_rules_edit: conConfigRules(b.action_token) } };
       checks = CHECKS.cloudflare;
       break;
     case 'github': {
@@ -187,9 +199,13 @@ function conectarFalso(org: string, body: unknown): ConnectionCreated {
 function probarFalso(org: string, id: string) {
   const c = listaDe(org).find((x) => x.id === id) ?? falla(404, 'not_found', 'Esa conexión no existe');
   c.last_checked_at = new Date().toISOString();
-  // GitHub kind 'action' es el token de estados del bloqueo de merge: E9 lo sondea leyendo estados, sin escribir.
+  // GitHub kind 'action' es el token de estados del bloqueo de merge: E9 lo sondea leyendo estados, sin escribir. El de
+  // acciones de Cloudflare también dice si su token trae Config Rules · Edit (opcional: sin él solo no hay modo bajo ataque).
+  const config: PermCheck = c.capabilities?.config_rules_edit === false
+    ? { permission: 'config_rules_edit', ok: false, required: false, error_code: 'forbidden' } : { permission: 'config_rules_edit', ok: true, required: false };
   const checks = c.provider === 'ingest' ? [] : c.kind === 'action'
-    ? [{ permission: c.provider === 'github' ? 'statuses:read' : 'firewall_edit', ok: true, required: true }] : CHECKS[c.provider];
+    ? (c.provider === 'github' ? [{ permission: 'statuses:read', ok: true, required: true }] : [{ permission: 'firewall_edit', ok: true, required: true }, config])
+    : CHECKS[c.provider];
   return { ok: checks.every((k) => k.ok || k.required === false), checks, checked_at: c.last_checked_at };
 }
 
@@ -579,8 +595,9 @@ function muteFalso(org: string, id: string) {
   return { ok: true, resultado: 'Silenciado 1 h', en: iso(Date.now()) };
 }
 
-// Aprobaciones pendientes: approval_id → incidente, IP e intentos. Código válido en fixtures: 123456.
-const aprobaciones = new Map<string, { org: string; incident_id: string; target: string; intentos: number; vence: number; usada: boolean }>();
+// Aprobaciones pendientes: approval_id → incidente, objetivo (IP o host), tipo e intentos. Código válido en fixtures: 123456.
+type Aprobacion = { org: string; incident_id: string; target: string; kind: 'block_ip' | 'under_attack_on'; intentos: number; vence: number; usada: boolean };
+const aprobaciones = new Map<string, Aprobacion>();
 function proponerFalso(org: string, body: unknown) {
   const b = (body ?? {}) as { incident_id?: string; target?: string };
   const i = incidente(org, b.incident_id ?? '');
@@ -588,7 +605,7 @@ function proponerFalso(org: string, body: unknown) {
   if (!/^[\d.]+$|^[\da-f:]+$/i.test(ip)) falla(422, 'invalid_body', 'Solo bloqueamos una IP suelta (/32 o /128)', { reason: 'not_an_ip' });
   const approval_id = crypto.randomUUID();
   const vence = Date.now() + 600_000;          // el fixture trae una expires_at fija (sábado): se recalcula aquí (A9)
-  aprobaciones.set(approval_id, { org, incident_id: i.id, target: ip, intentos: 3, vence, usada: false });
+  aprobaciones.set(approval_id, { org, incident_id: i.id, target: ip, kind: 'block_ip', intentos: 3, vence, usada: false });
   marca(i, 'action_proposed', `Propuesto bloquear ${ip}`);
   return { ...fx.actionProposal, approval_id, efecto: `Bloquear ${ip} (/32) en la zona officialvanguard.com durante 1 h`, expires_at: iso(vence) };
 }
@@ -614,6 +631,10 @@ function confirmarFalso(org: string, approvalId: string, body: unknown) {
     return falla(422, 'invalid_body', 'Código incorrecto', { reason: 'wrong_code', attempts_left: a.intentos });   // misma forma que E21 (H9)
   }
   a.usada = true;
+  if (a.kind === 'under_attack_on') {
+    const accion = ejecutarBajoAtaque(org, a.incident_id, a.target, approvalId);
+    return { ok: true, resultado: `Modo bajo ataque activo ${TTL_BAJO_ATAQUE / 60_000} min en ${a.target}`, en: accion.created_at, action_id: accion.id };
+  }
   const accion = ejecutarBloqueo(org, a.incident_id, a.target, approvalId);
   return { ok: true, resultado: 'IP bloqueada 1 h', en: accion.created_at, action_id: accion.id };
 }
@@ -621,13 +642,88 @@ function deshacerFalso(org: string, actionId: string) {
   for (const i of incidentesDe(org)) {
     const a = i.actions.find((x) => x.id === actionId);
     if (!a) continue;
-    if (a.status === 'undone') falla(409, 'conflict', 'Ese bloqueo ya se deshizo', { reason: 'already_undone' });
+    const bajo = a.kind === 'under_attack_on';
+    if (a.status === 'undone') falla(409, 'conflict', bajo ? 'El modo bajo ataque ya se desactivó' : 'Ese bloqueo ya se deshizo', { reason: 'already_undone' });
     a.status = 'undone'; a.undone_at = iso(Date.now());
-    i.status = i.acked_at ? 'ack' : 'open'; i.mitigated_at = null;
-    marca(i, 'action_undone', `IP ${a.target} desbloqueada`);
-    return { ok: true, resultado: 'Desbloqueada', en: a.undone_at };
+    // Sigue mitigado si queda otra acción viva (un bloqueo y el modo bajo ataque a la vez).
+    if (!i.actions.some((x) => x.status === 'executed')) { i.status = i.acked_at ? 'ack' : 'open'; i.mitigated_at = null; }
+    marca(i, 'action_undone', bajo ? `Modo bajo ataque desactivado en ${a.target}` : `IP ${a.target} desbloqueada`);
+    return { ok: true, resultado: bajo ? 'Modo bajo ataque desactivado' : 'Desbloqueada', en: a.undone_at };
   }
   return falla(404, 'not_found', 'Esa acción no existe');
+}
+
+// ── Modo bajo ataque (E55 y E56; confirmar y deshacer, E21 y E22 de arriba; asignaciones/modo-bajo-ataque.md §9) ──
+// La demo trae dos IPs inundando demo.officialvanguard.com (fx.underAttackOffer). Como leerOfertaBajoAtaque del BACK: sin
+// CF_IP_FLOOD no aplica, resuelto está cerrado, sin host no hay nada; con la regla de acuerdo (ofrece sigue true), sin Modo
+// blindaje es sin_conexion y con un token al que la sonda le vio el 403 de Config Rules, sin_permiso, los dos con `copiar`.
+// El modo vivo es del host, así que se busca en toda la org.
+const APPROVAL_BAJO_ATAQUE = fx.underAttackProposal.approval_id;
+const ACTION_BAJO_ATAQUE = 'ac000000-0000-4000-8000-000000000001';   // el de fixtures/ids.ts (el paquete no exporta los ids)
+const TTL_BAJO_ATAQUE = fx.underAttackOffer.ttl_s * 1000;
+const blindajeDe = (org: string) => listaDe(org).find((c) => c.provider === 'cloudflare' && c.kind === 'action' && c.status === 'active');
+
+// pasosManualesBajoAtaque de core (que la web no puede importar): el mismo texto que fx.underAttackOfferSinPermiso.copiar.
+function pasosManuales(host: string, zona: string | null): string {
+  return [
+    zona ? `Para activarlo a mano en Cloudflare (zona ${zona}):` : 'Para activarlo a mano en Cloudflare:',
+    '1. Rules → Configuration Rules → Create rule.',
+    `2. If incoming requests match: Hostname · equals · ${host}.`,
+    '3. Then the settings are: I\'m Under Attack → On. Deploy.',
+    '4. Cuando pase el ataque, borra la regla.',
+    'Para hacerlo desde VanGUARD: añade Zone · Config Rules · Edit al token de Modo blindaje y pulsa «Probar conexión».',
+  ].join('\n').slice(0, 1500);
+}
+function activoBajoAtaque(org: string, host: string): UnderAttackActivo | null {
+  for (const i of incidentesDe(org)) {
+    const a = i.actions.find((x) => x.kind === 'under_attack_on' && x.status === 'executed' && x.target === host);
+    if (a) return { action_id: a.id, scope: 'host', target: a.target, created_at: a.created_at, expires_at: a.expires_at, retirada_fallida: false };
+  }
+  return null;
+}
+function ofertaBajoAtaque(org: string, id: string): UnderAttackOffer {
+  const i = incidente(org, id);
+  const host = typeof i.details.host === 'string' && i.details.host ? i.details.host : null;
+  const c = blindajeDe(org);
+  const zona = typeof c?.meta.zone_name === 'string' ? c.meta.zone_name : null;
+  const cap = c?.capabilities.config_rules_edit;
+  const permiso = !c ? null : cap === true ? 'ok' : cap === false ? 'falta' : 'sin_probar';
+  const base: UnderAttackOffer = { ...fx.underAttackOffer, hostname: host, zone_name: zona, connection_id: c?.id ?? null, permiso,
+    activo: host ? activoBajoAtaque(org, host) : null };
+  const no = (motivo: UnderAttackMotivo, extra: Partial<UnderAttackOffer> = {}): UnderAttackOffer => ({ ...base, ofrece: false, motivo, scopes: [], ...extra });
+  // El orden de ofreceBajoAtaque de core: resuelto da cerrado aunque no haya host (y sin host, ips 0, como el BACK).
+  if (!i.rule_ids.includes('CF_IP_FLOOD')) return no('no_aplica', { ips: 0 });
+  if (i.status === 'resolved') return no('cerrado', host ? {} : { ips: 0 });
+  if (!host) return no('sin_host', { ips: 0 });
+  if (!c) return { ...base, motivo: 'sin_conexion', scopes: [], copiar: pasosManuales(host, null) };
+  if (permiso === 'falta') return { ...base, motivo: 'sin_permiso', scopes: [], copiar: pasosManuales(host, zona) };
+  return base;
+}
+function proponerBajoAtaque(org: string, id: string): UnderAttackProposal {
+  exigirAdmin();
+  const o = ofertaBajoAtaque(org, id);
+  if (o.activo) return falla(409, 'conflict', `El modo bajo ataque ya está activo en ${o.activo.target}`, { reason: 'already_active', action_id: o.activo.action_id });
+  if (o.motivo === 'sin_conexion') return falla(409, 'conflict', 'Activa el Modo blindaje con un token de acciones', { reason: 'no_action_connection' });
+  // El dry_run de E56 con ese token daría el 403: el mismo 409 con los pasos para hacerlo a mano.
+  if (o.motivo === 'sin_permiso') return falla(409, 'conflict', 'Te falta el permiso Zone · Config Rules · Edit en el token de Modo blindaje',
+    { reason: 'sin_permiso', ...(o.copiar ? { copiar: o.copiar } : {}) });
+  if (o.motivo === 'cerrado') return falla(409, 'conflict', 'El incidente ya se cerró', { reason: 'resolved' });
+  if (o.motivo || !o.hostname) return falla(422, 'invalid_body', 'El modo bajo ataque es solo para inundaciones de tráfico', { reason: o.motivo ?? 'sin_host' });
+  const vence = Date.now() + 600_000;          // como en el bloqueo: la expires_at del fixture es fija
+  aprobaciones.set(APPROVAL_BAJO_ATAQUE, { org, incident_id: id, target: o.hostname, kind: 'under_attack_on', intentos: 3, vence, usada: false });
+  marca(incidente(org, id), 'action_proposed', `Propuesto el modo bajo ataque en ${o.hostname}`);
+  return { ...fx.underAttackProposal, expires_at: iso(vence) };
+}
+function ejecutarBajoAtaque(org: string, incident_id: string, target: string, approval_id: string) {
+  const i = incidente(org, incident_id);
+  const ahora = Date.now();
+  const usado = incidentesDe(org).some((x) => x.actions.some((a) => a.id === ACTION_BAJO_ATAQUE));   // reactivarlo: id nuevo
+  const accion: ActionPublic = { id: usado ? crypto.randomUUID() : ACTION_BAJO_ATAQUE, kind: 'under_attack_on', target, status: 'executed',
+    created_at: iso(ahora), undone_at: null, expires_at: iso(ahora + TTL_BAJO_ATAQUE), approval_id };
+  i.actions.push(accion);
+  i.status = 'mitigated'; i.mitigated_at ??= iso(ahora);
+  marca(i, 'action_executed', `Modo bajo ataque activo en ${target}`);
+  return accion;
 }
 
 // Botones que solo existen en modo fixtures (S14 §14.19): ensayar el tramo de incidentes del guion sin BACK.
@@ -1172,6 +1268,8 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     (m) => structuredClone(incidente(m[1]!, m[2]!))],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/ack`),  (m) => ackFalso(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/mute`), (m) => muteFalso(m[1]!, m[2]!)],
+  ['GET',  r(`${ORG}\\/incidents\\/([^/]+)\\/under-attack`), (m) => ofertaBajoAtaque(m[1]!, m[2]!)],
+  ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/under-attack\\/propose`), (m) => proponerBajoAtaque(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/actions\\/propose`),       (m, b) => proponerFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/confirm`), (m, b) => confirmarFalso(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],

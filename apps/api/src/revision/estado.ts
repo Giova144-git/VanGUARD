@@ -12,13 +12,14 @@ import { cambiarEstadoPr, comentarPr, conexionAccion, escribirGh, motivoGh, TRAN
 
 // Paso 'estado' de la revisión de código (asignaciones/bloqueo-merge-criticos.md §2.4 y el anexo bloqueo-merge-cierre-
 // pr.md): publica en GitHub el estado de commit «VanGUARD» de una revisión cerrada (✗ si lo añadido trae un crítico, o si
-// no se pudo leer entero; ✓ si no) y, en un PR con hallazgos críticos NUEVOS, lo comenta con texto fijo y lo CIERRA (en
-// repos privados gratuitos la protección de rama no exige checks: lo único que impide fusionar en cualquier plan es que
-// el PR esté cerrado). Mensaje {kind:'review', paso:'estado'}: lo encola el paso diff al cerrar (y fallar(), yaReclamada,
-// la DLQ y E54) solo con el bloqueo encendido. El repo sale de connections.meta del token de acciones, el SHA de la
-// fila; nada sale de un payload. Nunca lanza sin decidir: ack o retry, como diff.
+// no se pudo leer entero; ✓ si no) y, en un PR con hallazgos críticos nuevos (o con críticos que VanGUARD aún no atendió
+// en ese PR), lo comenta con texto fijo y lo CIERRA (en repos privados gratuitos la protección de rama no exige checks: lo
+// único que impide fusionar en cualquier plan es que el PR esté cerrado). Mensaje {kind:'review', paso:'estado'}: lo
+// encola el paso diff al cerrar (y fallar(), yaReclamada, la DLQ y E54) solo con el bloqueo encendido. El repo sale de
+// connections.meta del token de acciones, el SHA de la fila; nada sale de un payload. Nunca lanza sin decidir: ack o
+// retry, como diff.
 // Subpeticiones: revisión 1 + config 1 + conexiones 1 + secreto 1 + llaves ≤ 2 (en frío) + POST ≤ 4 (saltos) + cierre 1
-// + config 1 (o, con 401, config y conexión 2) ≤ 13; con el cierre del PR, + última del PR 1 + reclamo 1 + comentario
+// + config 1 (o, con 401, config y conexión 2) ≤ 13; con el cierre del PR, + historial del PR 1 + reclamo 1 + comentario
 // ≤ 4 + PATCH ≤ 4 + resultado 1 ≤ 24 de 40. Bloqueo apagado: revisión 1 + config 1 y ack, sin escribir nada.
 
 export const REINTENTOS_ESTADO = 2;
@@ -48,19 +49,30 @@ export function enlaceRevision(env: CloudflareBindings, orgId: string, reviewId:
 // ── Cierre del PR con críticos (anexo, punto 3) ─────────────────────────────────────────────────────────────────────
 type Cierre = { tipo: 'cerrado'; comentado: boolean } | { tipo: 'omitido'; motivo: string }
   | { tipo: 'fallo'; code: string; transitorio: boolean };
+const HISTORIAL_PR = 100;
 
-// Solo la revisión más nueva de ese PR (otra más vieja que termine tarde no cierra un PR ya arreglado). Reclamo CAS por
-// gate_pr_at: el comentario sale UNA vez por revisión aunque el paso se repita o lleguen dos mensajes; si un intento
-// anterior reclamó y cayó antes de anotar el resultado, este solo vuelve a cerrar (cerrar un PR cerrado no cambia nada).
-// Si el comentario falla, igual cierra.
+// Decide con el historial de ese PR (1 subpetición, las 100 más nuevas). Cierra la revisión TERMINADA (done) más nueva:
+// una más vieja que termine tarde no cierra un PR que otra ya revisó, pero una más nueva aún en cola o en curso no la
+// frena (con dos pushes seguidos la 1.ª se apartaba y la 2.ª, que ya no ve la clave como nueva por 0013, tampoco
+// cerraba), ni una fallida (falla cerrado, D2). Con hallazgos NUEVOS ≥ umbral cierra siempre (punto 4: commits nuevos con
+// un crítico nuevo); sin nuevos, solo si VanGUARD aún no hizo nada con ese PR: ninguna revisión suya tiene gate_pr_action
+// (cerrado, reabierto a mano o desde VanGUARD, cierre fallido) ni «Dar por bueno». Así la misma clave no vuelve a cerrar
+// lo que una persona reabrió o aprobó. Reclamo CAS por gate_pr_at: el comentario sale UNA vez por revisión aunque el paso
+// se repita o lleguen dos mensajes; si un intento anterior reclamó y cayó antes de anotar el resultado, este solo vuelve
+// a cerrar (cerrar un PR cerrado no cambia nada). Si el comentario falla, igual cierra.
 async function cerrarConCritico(admin: SupabaseClient, m: MsgRevision, rev: Obj, token: string, repo: string, n: number,
-  texto: string): Promise<Cierre> {
-  const { data, error } = await admin.from('code_reviews').select('id').eq('org_id', m.org_id)
-    .eq('config_id', String(rev.config_id)).eq('event', 'pull_request').eq('pr_number', n)
-    .order('created_at', { ascending: false }).limit(1);
+  nuevos: number, umbral: UmbralBloqueo, url: string): Promise<Cierre> {
+  const { data, error } = await admin.from('code_reviews').select('id, status, gate_pr_action, gate_override_at')
+    .eq('org_id', m.org_id).eq('config_id', String(rev.config_id)).eq('event', 'pull_request').eq('pr_number', n)
+    .order('created_at', { ascending: false }).limit(HISTORIAL_PR);
   if (error) return { tipo: 'fallo', code: 'base', transitorio: true };
-  const ultima = (Array.isArray(data) ? obj(data[0]) : obj(data)).id;
-  if (ultima !== rev.id) return { tipo: 'omitido', motivo: 'no_es_la_ultima' };
+  const historial = (Array.isArray(data) ? data : []).map(obj);
+  if (historial.find((f) => f.status === 'done')?.id !== rev.id) return { tipo: 'omitido', motivo: 'no_es_la_ultima' };
+  if (nuevos === 0 && historial.some((f) => f.gate_pr_action != null || f.gate_override_at != null)) {
+    return { tipo: 'omitido', motivo: 'ya_atendido' };
+  }
+  // Sin nuevos, el número es el de bloqueantes de lo añadido (gate_blocking > 0: el estado es failure).
+  const texto = textoCierrePr(nuevos > 0 ? nuevos : Number(rev.gate_blocking), umbral, url);
   let comentar = false;
   if (rev.gate_pr_at == null) {
     const { data: c, error: ec } = await admin.from('code_reviews').update({ gate_pr_at: new Date().toISOString() })
@@ -139,13 +151,12 @@ export async function pasoEstado(env: CloudflareBindings, m: MsgRevision, intent
   const url = enlaceRevision(env, m.org_id, m.review_id);
   const cuerpo: CuerpoEstado = { state: e.state, description: e.description, context: CONTEXTO_BLOQUEO,
     ...(url ? { target_url: url } : {}) };
-  // Cierre del PR (anexo): failure en un PR, interruptor encendido, token con «Pull requests: write», nada hecho aún con
-  // ese PR en esta revisión y al menos un hallazgo NUEVO ≥ umbral. Con commits nuevos que mantienen la clave ya avisada no
-  // hay nuevos: queda el ✗ y no se vuelve a cerrar un PR que alguien reabrió a mano.
+  // Cierre del PR (anexo): failure en un PR, interruptor encendido, token con «Pull requests: write» y nada hecho aún con
+  // ese PR en esta revisión; lo demás (la más nueva, nuevos o PR sin atender) lo decide cerrarConCritico con el historial.
   const n = rev.pr_number;
   const nuevos = nuevosBloqueo(rev.counts, umbral);
   const cerrar = e.state === 'failure' && rev.event === 'pull_request' && prValido(n) && cfg.gate_close_pr !== false
-    && accion.caps.pull_requests === true && rev.gate_pr_action == null && nuevos > 0;
+    && accion.caps.pull_requests === true && rev.gate_pr_action == null;
 
   let res: { estado: Escrito; cierre: Cierre | null };
   try {
@@ -153,12 +164,18 @@ export async function pasoEstado(env: CloudflareBindings, m: MsgRevision, intent
       async (token) => {
         const estado = await publicarEstado(token, accion.repo, sha, cuerpo);
         if (!estado.ok || !cerrar) return { estado, cierre: null };
-        return { estado, cierre: await cerrarConCritico(admin, m, rev, token, accion.repo, n as number,
-          textoCierrePr(nuevos, umbral, url)) };
+        const cierre = await cerrarConCritico(admin, m, rev, token, accion.repo, n as number, nuevos, umbral, url);
+        return { estado, cierre };
       });
   } catch (x) {
-    if (x instanceof ApiError) return marcar('sin_token');   // withSecret: la conexión ya no tiene secreto
-    throw x;
+    if (!(x instanceof ApiError)) throw x;
+    // withSecret lanza la MISMA ApiError('not_found') si falta el secreto y si falla la base (08006, plazo): como en el
+    // paso diff, se reintenta y solo agotados los reintentos queda sin_token.
+    if (intento <= REINTENTOS_ESTADO) {
+      log('warn', 'gate.reintento', { review: m.review_id, code: 'sin_credencial', intento });
+      return reintento();
+    }
+    return marcar('sin_token');
   }
 
   const r = res.estado;
@@ -212,9 +229,19 @@ export async function pasoEstado(env: CloudflareBindings, m: MsgRevision, intent
   }
   const cambio = k.tipo === 'cerrado' ? { gate_pr_action: 'closed', gate_pr_error: null }
     : { gate_pr_action: 'close_failed', gate_pr_error: k.code };
-  const { error: ek } = await admin.from('code_reviews').update(cambio).eq('id', m.review_id).eq('org_id', m.org_id)
-    .is('gate_pr_action', null);
-  if (ek) log('error', 'gate.pr_sin_marca', { review: m.review_id, code: ek.code ?? null });
+  const { data: anotada, error: ek } = await admin.from('code_reviews').update(cambio).eq('id', m.review_id)
+    .eq('org_id', m.org_id).is('gate_pr_action', null).select('id');
+  if (ek) {
+    // Sin anotar, E47 no reconoce la reapertura a mano (casa desde 'closed') y otra revisión del PR volvería a cerrar:
+    // otra entrega repite el estado y el PATCH (inofensivos; sin comentario, gate_pr_at ya está) y lo anota.
+    log('error', 'gate.pr_sin_marca', { review: m.review_id, code: ek.code ?? null });
+    return intento <= REINTENTOS_ESTADO ? reintento() : 'ack';
+  }
+  // El CAS no casó: otro mensaje de esta misma revisión (entrega al menos una vez, yaReclamada) ya lo anotó y avisó.
+  if (!(Array.isArray(anotada) ? anotada.length : anotada)) {
+    log('info', 'gate.pr_ya_anotado', { review: m.review_id });
+    return 'ack';
+  }
   if (k.tipo === 'cerrado') avisoPrCerrado(m, n as number, k.comentado);
   else log('warn', 'gate.pr_cierre_error', { review: m.review_id, code: k.code });
   return 'ack';

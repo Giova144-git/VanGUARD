@@ -31,7 +31,7 @@ let conexiones: Fila[];
 let gh: Record<string, () => Response>;
 let fetchMock: ReturnType<typeof vi.fn>;
 let doble: ReturnType<typeof dbDoble>;
-const env = envDoble().env;
+const env = envDoble({ VG_ENV: 'production' }).env;
 
 const cumple = (f: Fila, op: Op) => op.filters.every(([c, o, v]) =>
   o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : o === 'is' ? (f[c] ?? null) === v : true);
@@ -111,8 +111,26 @@ describe('reabrirPr', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     conexiones[1]!.status = 'active';
     conexiones[1]!.meta = { repo_full_name: 'Acme/Tienda', repo_id: 42 };
+    // withSecret lanza lo mismo si la base no pudo leer el secreto (08006): «no pudimos leerlo», nunca «falta el token».
     estado.sinSecreto = true;
-    expect(await reabrirPr(env, admin(), ORG, REV)).toEqual({ ok: false, motivo: 'sin_token' });
+    expect(await reabrirPr(env, admin(), ORG, REV)).toEqual({ ok: false, motivo: 'sin_credencial' });
+    conexiones[1]!.capabilities = { statuses: true, pull_requests: true, issues: true };
+    expect(await crearIssue(env, admin(), ORG, REV, { titulo: 'VanGUARD: clave', cuerpo: 'Rota la clave.' }))
+      .toEqual({ ok: false, motivo: 'sin_credencial' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fila.gate_pr_action).toBe('closed');
+  });
+
+  it('fuera de producción (local o despliegue de prueba) → dry_run sin leer la base ni escribir en GitHub', async () => {
+    for (const extra of [{ VG_ENV: 'local' }, {}] as Partial<CloudflareBindings>[]) {
+      const e = envDoble(extra).env;
+      expect(await reabrirPr(e, admin(), ORG, REV, { via: 'whatsapp' })).toEqual({ ok: false, motivo: 'dry_run' });
+      expect(await crearIssue(e, admin(), ORG, REV, { titulo: 'VanGUARD: clave', cuerpo: 'Rota la clave.' }))
+        .toEqual({ ok: false, motivo: 'dry_run' });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(doble.ops).toEqual([]);
+    expect(fila.gate_pr_action).toBe('closed');
   });
 
   it('GitHub 403 → forbidden, 422 → rechazado, 5xx → red; la revisión sigue closed', async () => {

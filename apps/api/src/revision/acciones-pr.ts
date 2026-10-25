@@ -131,6 +131,23 @@ async function leerRevisionYConfig(admin: SupabaseClient, orgId: string, reviewI
   return { rev: obj(rev), lecturaId: cfg ? String(obj(cfg).connection_id) : null };
 }
 
+/** Token de acciones de una conexión activa: withSecret lanza la MISMA ApiError si falta el secreto y si la base falla
+ *  (08006, plazo), y con la conexión activa casi siempre es lo segundo. 'sin_credencial' = «no pudimos leerlo, vuelve a
+ *  intentarlo»; nunca «falta el token» (eso es sin_token, sin conexión activa). */
+async function conToken(env: CloudflareBindings, admin: SupabaseClient, orgId: string, id: string,
+  fn: (token: string) => Promise<Escrito>): Promise<Escrito | 'sin_credencial'> {
+  try {
+    return await withSecret(env, admin, ctxAccion(orgId, id), fn);
+  } catch (e) {
+    if (e instanceof ApiError) return 'sin_credencial';
+    throw e;
+  }
+}
+
+// Las dos acciones escriben en el GitHub del cliente: como el paso 'estado' (§2.4, paso 4), ni un despliegue de prueba ni
+// local lo hacen (dev y prod comparten la base). Fuera de producción responden dry_run sin leer ni escribir nada; quien
+// llame (E54, el botón del WhatsApp) exige además el host de producción.
+
 /** «Reabrir el PR» (anexo, punto 6): solo un PR que cerró VanGUARD (gate_pr_action 'closed'). PATCH state open con el
  *  token de acciones; el ✗ y el comentario se quedan. Deja gate_pr_action 'reopened' (CAS desde closed o
  *  reopened_by_human: el webhook del reabierto puede llegar antes que esta escritura). Lo usan E54 (op reopen_pr) y, más
@@ -138,6 +155,7 @@ async function leerRevisionYConfig(admin: SupabaseClient, orgId: string, reviewI
  *  1 + llaves ≤ 2 + PATCH ≤ 4 + escritura 1 ≤ 11. */
 export async function reabrirPr(env: CloudflareBindings, admin: SupabaseClient, orgId: string, reviewId: string,
   o: { rid?: string; via?: 'panel' | 'whatsapp' } = {}): Promise<ResultadoAccion> {
+  if (env.VG_ENV !== 'production') return { ok: false, motivo: 'dry_run' };
   const leida = await leerRevisionYConfig(admin, orgId, reviewId);
   if (!leida) return { ok: false, motivo: 'no_encontrada' };
   const { rev, lecturaId } = leida;
@@ -151,13 +169,8 @@ export async function reabrirPr(env: CloudflareBindings, admin: SupabaseClient, 
   if (!c.ok) return { ok: false, motivo: c.motivo };
   if (c.accion.caps.pull_requests !== true) return { ok: false, motivo: 'sin_permiso_pr' };
   const { repo } = c.accion;
-  let r: Escrito;
-  try {
-    r = await withSecret(env, admin, ctxAccion(orgId, c.accion.id), (t) => cambiarEstadoPr(t, repo, n, 'open'));
-  } catch (e) {
-    if (e instanceof ApiError) return { ok: false, motivo: 'sin_token' };
-    throw e;
-  }
+  const r = await conToken(env, admin, orgId, c.accion.id, (t) => cambiarEstadoPr(t, repo, n, 'open'));
+  if (r === 'sin_credencial') return { ok: false, motivo: r };
   if (!r.ok) {
     const motivo = motivoGh(r.code);
     log('warn', 'gate.pr_reabrir_error', { rid: o.rid, review: reviewId, motivo, status: r.status, via: o.via ?? 'panel' });
@@ -176,6 +189,7 @@ export async function reabrirPr(env: CloudflareBindings, admin: SupabaseClient, 
  *  write» (capabilities.issues, lo comprueba E53) y que la revisión sea del repo del token. Devuelve número y URL. */
 export async function crearIssue(env: CloudflareBindings, admin: SupabaseClient, orgId: string, reviewId: string,
   t: { titulo: string; cuerpo: string }, o: { rid?: string; via?: 'panel' | 'whatsapp' } = {}): Promise<ResultadoAccion> {
+  if (env.VG_ENV !== 'production') return { ok: false, motivo: 'dry_run' };
   const titulo = t.titulo.trim(), cuerpo = t.cuerpo.trim();
   if (!titulo || titulo.length > 200 || cuerpo.length > 10_000 || PARECE_SECRETO.test(`${titulo}\n${cuerpo}`)
     || BIDI.test(`${titulo}${cuerpo}`)) {
@@ -188,14 +202,9 @@ export async function crearIssue(env: CloudflareBindings, admin: SupabaseClient,
   if (c.accion.caps.issues !== true) return { ok: false, motivo: 'sin_permiso_issues' };
   const { repo } = c.accion;
   const issue = { title: titulo, body: cuerpo, labels: ['vanguard'] };
-  let r: Escrito;
-  try {
-    r = await withSecret(env, admin, ctxAccion(orgId, c.accion.id),
-      (tok) => escribirGh(tok, 'POST', `/repos/${repo}/issues`, issue, 64_000));
-  } catch (e) {
-    if (e instanceof ApiError) return { ok: false, motivo: 'sin_token' };
-    throw e;
-  }
+  const r = await conToken(env, admin, orgId, c.accion.id,
+    (tok) => escribirGh(tok, 'POST', `/repos/${repo}/issues`, issue, 64_000));
+  if (r === 'sin_credencial') return { ok: false, motivo: r };
   if (!r.ok) {
     const motivo = motivoGh(r.code);
     log('warn', 'gate.issue_error', { rid: o.rid, review: reviewId, motivo, status: r.status, via: o.via ?? 'panel' });

@@ -38,7 +38,7 @@ type Fila = Record<string, unknown>;
 let fila: Fila;
 let config: Fila | null;
 let conexiones: Fila[];
-let ultima: string;
+let historial: Fila[];   // revisiones de ese PR, de la más nueva a la más vieja
 let gh: Record<string, () => Response>;
 let fetchMock: ReturnType<typeof vi.fn>;
 let doble: ReturnType<typeof dbDoble>;
@@ -61,7 +61,7 @@ beforeEach(() => {
       capabilities: { statuses: true, pull_requests: true },
       meta: { repo_full_name: 'Acme/Tienda', repo_id: 42, branch: 'main', purpose: 'commit_statuses' } },
   ];
-  ultima = REV;
+  historial = [fila];
   estado.sinSecreto = false;
   estado.ctx = null;
   gh = {
@@ -72,7 +72,7 @@ beforeEach(() => {
   doble = dbDoble({
     tabla: (op): Resp | undefined => {
       if (op.table === 'code_reviews') {
-        if (op.action === 'select' && op.orden) return { data: [{ id: ultima }] };   // la más nueva de ese PR
+        if (op.action === 'select' && op.orden) return { data: historial };   // el historial de ese PR
         const hit = cumple(fila, op) ? fila : null;
         if (op.action === 'select') return { data: hit };
         if (op.action === 'update') {
@@ -218,8 +218,13 @@ describe('paso estado · sin publicar', () => {
     await correr();
     expect(fila.gate_error).toBe('sin_token');
     conexiones[1]!.status = 'active';
+    fila.gate_error = null;
     estado.sinSecreto = true;
-    await correr();
+    // withSecret lanza lo mismo si la base no pudo leer el secreto (08006): primero se reintenta, sin marcar nada.
+    expect(await correr(1)).toEqual({ retry: 10 });
+    expect(await correr(2)).toEqual({ retry: 20 });
+    expect(fila.gate_error).toBeNull();
+    expect(await correr(REINTENTOS_ESTADO + 1)).toBe('ack');
     expect(fila.gate_error).toBe('sin_token');
     estado.sinSecreto = false;
     conexiones[1]!.meta = { repo_full_name: 'acme/otro', repo_id: 99 };
@@ -288,12 +293,41 @@ describe('paso estado · cierre del PR con críticos (anexo)', () => {
     expect(lineas()).toContain('"event":"gate.pr_cerrado"');
   });
 
-  it('segundo push al PR con la misma clave (counts 0, gate_blocking 1) → failure y NO cierra', async () => {
+  it('push con la misma clave a un PR que VanGUARD ya atendió (cerrado, reabierto, cierre fallido o aprobado) → NO cierra',
+    async () => {
+      fila.counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };   // 0013: la clave ya salió en la anterior
+      const previas: Fila[] = [{ gate_pr_action: 'reopened_by_human' }, { gate_pr_action: 'reopened' },
+        { gate_pr_action: 'closed' }, { gate_pr_action: 'close_failed' }, { gate_override_at: '2026-10-24T20:00:00Z' }];
+      for (const previa of previas) {
+        historial = [fila, { id: OTRA_REV, status: 'done', gate_pr_action: null, gate_override_at: null, ...previa }];
+        fetchMock.mockClear();
+        expect(await correr()).toBe('ack');
+        expect(cuerpoDe(`POST ${GH}/statuses/${HEAD}`).state).toBe('failure');
+        expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`]);
+        expect(fila.gate_pr_action).toBeNull();
+      }
+      expect(lineas()).toContain('"motivo":"ya_atendido"');
+    });
+
+  it('dos pushes seguidos: la 1.ª cierra aunque la 2.ª ya esté en cola o en curso', async () => {
+    for (const status of ['queued', 'running']) {
+      Object.assign(fila, { gate_pr_action: null, gate_pr_at: null });
+      historial = [{ id: OTRA_REV, status, gate_pr_action: null, gate_override_at: null }, fila];
+      fetchMock.mockClear();
+      expect(await correr()).toBe('ack');
+      expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `POST ${GH}/issues/7/comments`, `PATCH ${GH}/pulls/7`]);
+      expect(fila.gate_pr_action).toBe('closed');
+    }
+  });
+
+  it('dos pushes seguidos: la 2.ª, sin nuevos (0013), cierra si nadie atendió aún el PR (la 1.ª se apartó)', async () => {
     fila.counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+    historial = [fila, { id: OTRA_REV, status: 'done', gate_pr_action: null, gate_override_at: null }];
     expect(await correr()).toBe('ack');
-    expect(cuerpoDe(`POST ${GH}/statuses/${HEAD}`).state).toBe('failure');
-    expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`]);
-    expect(fila.gate_pr_action).toBeNull();
+    expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `POST ${GH}/issues/7/comments`, `PATCH ${GH}/pulls/7`]);
+    // Sin nuevos, el comentario cuenta los bloqueantes de lo añadido (gate_blocking), nunca «0 hallazgos».
+    expect(cuerpoDe(`POST ${GH}/issues/7/comments`)).toEqual({ body: textoCierrePr(1, 'critical', URL_REV) });
+    expect(fila.gate_pr_action).toBe('closed');
   });
 
   it('push, interruptor apagado, token sin Pull requests o éxito → no cierra', async () => {
@@ -314,11 +348,49 @@ describe('paso estado · cierre del PR con críticos (anexo)', () => {
     }
   });
 
-  it('no es la revisión más nueva de ese PR → no cierra (una vieja que termina tarde)', async () => {
-    ultima = OTRA_REV;
+  it('una más nueva del PR ya terminada → no cierra (una vieja que termina tarde); si la nueva falló, cierra', async () => {
+    historial = [{ id: OTRA_REV, status: 'done', gate_pr_action: null, gate_override_at: null }, fila];
     expect(await correr()).toBe('ack');
     expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`]);
     expect(fila.gate_pr_at).toBeNull();
+    expect(lineas()).toContain('"motivo":"no_es_la_ultima"');
+    historial[0]!.status = 'failed';   // falla cerrado (D2): una revisión fallida no tapa el crítico de esta
+    fetchMock.mockClear();
+    expect(await correr()).toBe('ack');
+    expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `POST ${GH}/issues/7/comments`, `PATCH ${GH}/pulls/7`]);
+  });
+
+  it('otro mensaje de la misma revisión anotó el cierre antes → no repite el aviso del PR cerrado', async () => {
+    fila.gate_pr_at = '2026-10-24T20:00:00Z';   // lo reclamó el otro mensaje: este no comenta
+    gh[`PATCH ${GH}/pulls/7`] = () => {
+      fila.gate_pr_action = 'closed';           // y el otro termina mientras este cierra
+      return new Response('{}', { status: 200 });
+    };
+    expect(await correr()).toBe('ack');
+    expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `PATCH ${GH}/pulls/7`]);
+    expect(lineas()).not.toContain('"event":"gate.pr_cerrado"');
+    expect(lineas()).toContain('"event":"gate.pr_ya_anotado"');
+  });
+
+  it('el resultado del cierre no se pudo anotar → retry; agotados, ack sin aviso', async () => {
+    const base = doble.client.from.bind(doble.client);
+    let fallar = true;
+    estado.client = { ...doble.client, from: (t: string) => {
+      const q = base(t) as unknown as { update: (p: Fila) => unknown };
+      const update = q.update.bind(q);
+      q.update = (p: Fila) => (fallar && 'gate_pr_action' in p
+        ? { eq: () => ({ eq: () => ({ is: () => ({ select: async () => ({ data: null, error: { code: '08006' } }) }) }) }) }
+        : update(p));
+      return q;
+    } };
+    expect(await correr(1)).toEqual({ retry: 10 });
+    expect(fila.gate_pr_action).toBeNull();
+    expect(await correr(REINTENTOS_ESTADO + 1)).toBe('ack');
+    expect(lineas()).not.toContain('"event":"gate.pr_cerrado"');
+    fallar = false;
+    expect(await correr(2)).toBe('ack');
+    expect(fila.gate_pr_action).toBe('closed');
+    expect(lineas()).toContain('"event":"gate.pr_cerrado"');
   });
 
   it('ya cerrado o reabierto a mano: un estado repetido (p. ej. tras «Deshacer») no vuelve a cerrar', async () => {

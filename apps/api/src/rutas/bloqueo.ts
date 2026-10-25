@@ -282,6 +282,8 @@ const MOTIVO_REABRIR: Record<string, [ApiError['code'], string]> = {
   no_cerrado: ['conflict', 'VanGUARD no cerró este pull request'],
   ya_abierto: ['conflict', 'El pull request ya está abierto'],
   sin_token: ['conflict', 'Falta el token de estados de GitHub'],
+  sin_credencial: ['internal', 'No pudimos leer el token de estados. Vuelve a intentarlo; si sigue, vuelve a guardarlo.'],
+  dry_run: ['conflict', 'Solo se publica en GitHub desde officialvanguard.com'],
   sin_permiso_pr: ['conflict', 'El token de estados no tiene Pull requests: Read and write'],
   otro_repo: ['conflict', 'El token de estados es de otro repo'],
   repo_invalido: ['conflict', 'El token de estados no tiene un repo válido: vuelve a guardarlo'],

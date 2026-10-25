@@ -1,6 +1,7 @@
 
 # Plan interno del equipo: nunca se publica (16.9)
 /docs
+/PLAN_MAESTRO.md
 # Herramientas locales del equipo (ataque, secretos, Kapso, PSI): fuera del repo público. El lint de imports
 # que corre en el build vive en apps/web/scripts/.
 /scripts

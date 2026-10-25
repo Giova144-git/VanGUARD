@@ -1,4 +1,4 @@
-// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0013.
+// GENERADO con generate_typescript_types (MCP de Supabase) sobre accshmgmfrqrxubpuxcl tras la migración 0018 (todas las de la noche: 0014b, 0015, 0016, 0017, 0018 y 0019).
 // No editar a mano: regenerar tras cada migración (tarea T6 del ORQUESTADOR).
 export type Json =
   | string
@@ -197,6 +197,7 @@ export type Database = {
           action_kind: string
           attempts: number
           channel: string
+          code_review_id: string | null
           created_at: string
           expires_at: string
           id: string
@@ -212,6 +213,7 @@ export type Database = {
           action_kind: string
           attempts?: number
           channel: string
+          code_review_id?: string | null
           created_at?: string
           expires_at?: string
           id?: string
@@ -227,6 +229,7 @@ export type Database = {
           action_kind?: string
           attempts?: number
           channel?: string
+          code_review_id?: string | null
           created_at?: string
           expires_at?: string
           id?: string
@@ -239,6 +242,13 @@ export type Database = {
           used_at?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "approvals_code_review_id_fkey"
+            columns: ["code_review_id"]
+            isOneToOne: false
+            referencedRelation: "code_reviews"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "approvals_incident_id_fkey"
             columns: ["incident_id"]
@@ -255,6 +265,82 @@ export type Database = {
           },
         ]
       }
+      audit_snapshots: {
+        Row: {
+          counts: Json
+          fixed_checked: number
+          fixed_ids: string[]
+          gone: number
+          ignored_ids: string[]
+          is_first: boolean
+          kind: string
+          modules_seen: string[]
+          moved: number
+          new_ids: string[]
+          open_ids: string[]
+          org_id: string
+          prev_scan_run_id: string | null
+          scan_run_id: string
+          taken_at: string
+        }
+        Insert: {
+          counts: Json
+          fixed_checked?: number
+          fixed_ids?: string[]
+          gone?: number
+          ignored_ids?: string[]
+          is_first: boolean
+          kind: string
+          modules_seen: string[]
+          moved?: number
+          new_ids?: string[]
+          open_ids?: string[]
+          org_id: string
+          prev_scan_run_id?: string | null
+          scan_run_id: string
+          taken_at?: string
+        }
+        Update: {
+          counts?: Json
+          fixed_checked?: number
+          fixed_ids?: string[]
+          gone?: number
+          ignored_ids?: string[]
+          is_first?: boolean
+          kind?: string
+          modules_seen?: string[]
+          moved?: number
+          new_ids?: string[]
+          open_ids?: string[]
+          org_id?: string
+          prev_scan_run_id?: string | null
+          scan_run_id?: string
+          taken_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_snapshots_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_snapshots_prev_scan_run_id_fkey"
+            columns: ["prev_scan_run_id"]
+            isOneToOne: false
+            referencedRelation: "scan_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_snapshots_scan_run_id_fkey"
+            columns: ["scan_run_id"]
+            isOneToOne: true
+            referencedRelation: "scan_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       code_review_configs: {
         Row: {
           branch: string
@@ -262,12 +348,22 @@ export type Database = {
           created_at: string
           created_by: string | null
           enabled: boolean
+          gate_admins: string | null
+          gate_checked_at: string | null
+          gate_close_pr: boolean
+          gate_enabled: boolean
+          gate_last_error: string | null
+          gate_last_error_at: string | null
+          gate_min: string
+          gate_pr_required: string | null
+          gate_required: string | null
           hook_events: string[]
           id: string
           last_error: string | null
           last_error_at: string | null
           last_event_at: string | null
           last_ping_at: string | null
+          muted_until: string | null
           org_id: string
           secret_kid: string
           secret_last4: string | null
@@ -280,12 +376,22 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           enabled?: boolean
+          gate_admins?: string | null
+          gate_checked_at?: string | null
+          gate_close_pr?: boolean
+          gate_enabled?: boolean
+          gate_last_error?: string | null
+          gate_last_error_at?: string | null
+          gate_min?: string
+          gate_pr_required?: string | null
+          gate_required?: string | null
           hook_events?: string[]
           id: string
           last_error?: string | null
           last_error_at?: string | null
           last_event_at?: string | null
           last_ping_at?: string | null
+          muted_until?: string | null
           org_id: string
           secret_kid: string
           secret_last4?: string | null
@@ -298,12 +404,22 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           enabled?: boolean
+          gate_admins?: string | null
+          gate_checked_at?: string | null
+          gate_close_pr?: boolean
+          gate_enabled?: boolean
+          gate_last_error?: string | null
+          gate_last_error_at?: string | null
+          gate_min?: string
+          gate_pr_required?: string | null
+          gate_required?: string | null
           hook_events?: string[]
           id?: string
           last_error?: string | null
           last_error_at?: string | null
           last_event_at?: string | null
           last_ping_at?: string | null
+          muted_until?: string | null
           org_id?: string
           secret_kid?: string
           secret_last4?: string | null
@@ -337,10 +453,22 @@ export type Database = {
           counts: Json
           created_at: string
           delivery_id: string | null
+          delta: Json | null
           error_code: string | null
           event: string
           files_changed: number
           finished_at: string | null
+          gate_blocking: number | null
+          gate_error: string | null
+          gate_findings: Json
+          gate_override_at: string | null
+          gate_override_by: string | null
+          gate_override_reason: string | null
+          gate_pr_action: string | null
+          gate_pr_at: string | null
+          gate_pr_error: string | null
+          gate_published_at: string | null
+          gate_state: string | null
           head_sha: string
           id: string
           lines_added: number
@@ -352,9 +480,13 @@ export type Database = {
           pr_number: number | null
           push_commits: string[]
           reported_keys: string[]
+          snap_at: string | null
+          snap_open_ids: string[] | null
           started_at: string | null
           status: string
           voice_pending: boolean
+          whatsapp_action: string | null
+          whatsapp_action_at: string | null
         }
         Insert: {
           alert_reason?: string | null
@@ -365,10 +497,22 @@ export type Database = {
           counts?: Json
           created_at?: string
           delivery_id?: string | null
+          delta?: Json | null
           error_code?: string | null
           event: string
           files_changed?: number
           finished_at?: string | null
+          gate_blocking?: number | null
+          gate_error?: string | null
+          gate_findings?: Json
+          gate_override_at?: string | null
+          gate_override_by?: string | null
+          gate_override_reason?: string | null
+          gate_pr_action?: string | null
+          gate_pr_at?: string | null
+          gate_pr_error?: string | null
+          gate_published_at?: string | null
+          gate_state?: string | null
           head_sha: string
           id?: string
           lines_added?: number
@@ -380,9 +524,13 @@ export type Database = {
           pr_number?: number | null
           push_commits?: string[]
           reported_keys?: string[]
+          snap_at?: string | null
+          snap_open_ids?: string[] | null
           started_at?: string | null
           status?: string
           voice_pending?: boolean
+          whatsapp_action?: string | null
+          whatsapp_action_at?: string | null
         }
         Update: {
           alert_reason?: string | null
@@ -393,10 +541,22 @@ export type Database = {
           counts?: Json
           created_at?: string
           delivery_id?: string | null
+          delta?: Json | null
           error_code?: string | null
           event?: string
           files_changed?: number
           finished_at?: string | null
+          gate_blocking?: number | null
+          gate_error?: string | null
+          gate_findings?: Json
+          gate_override_at?: string | null
+          gate_override_by?: string | null
+          gate_override_reason?: string | null
+          gate_pr_action?: string | null
+          gate_pr_at?: string | null
+          gate_pr_error?: string | null
+          gate_published_at?: string | null
+          gate_state?: string | null
           head_sha?: string
           id?: string
           lines_added?: number
@@ -408,9 +568,13 @@ export type Database = {
           pr_number?: number | null
           push_commits?: string[]
           reported_keys?: string[]
+          snap_at?: string | null
+          snap_open_ids?: string[] | null
           started_at?: string | null
           status?: string
           voice_pending?: boolean
+          whatsapp_action?: string | null
+          whatsapp_action_at?: string | null
         }
         Relationships: [
           {
@@ -839,6 +1003,56 @@ export type Database = {
           },
           {
             foreignKeyName: "incidents_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mcp_tokens: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          expires_at: string | null
+          id: string
+          last_used_at: string | null
+          last4: string | null
+          name: string
+          org_id: string
+          revoked_at: string | null
+          scopes: string[]
+          token_hash: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string | null
+          id?: string
+          last_used_at?: string | null
+          last4?: string | null
+          name: string
+          org_id: string
+          revoked_at?: string | null
+          scopes?: string[]
+          token_hash: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string | null
+          id?: string
+          last_used_at?: string | null
+          last4?: string | null
+          name?: string
+          org_id?: string
+          revoked_at?: string | null
+          scopes?: string[]
+          token_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mcp_tokens_org_id_fkey"
             columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "orgs"
@@ -1349,6 +1563,10 @@ export type Database = {
         Returns: undefined
       }
       vg_ai_status: { Args: { p_org: string }; Returns: Json }
+      vg_audit_delta: {
+        Args: { p_limit?: number; p_org: string; p_scan: string }
+        Returns: Json
+      }
       vg_claim_step: {
         Args: { p_paso: string; p_retomar: boolean; p_scan: string }
         Returns: boolean
@@ -1382,6 +1600,10 @@ export type Database = {
           ua_top: string
         }[]
       }
+      vg_evolution: {
+        Args: { p_days?: number; p_limit?: number; p_org: string }
+        Returns: Json
+      }
       vg_ip_first_seen: {
         Args: { p_ip: unknown; p_org: string; p_seconds?: number }
         Returns: string
@@ -1401,6 +1623,7 @@ export type Database = {
           action_kind: string
           attempts: number
           channel: string
+          code_review_id: string | null
           created_at: string
           expires_at: string
           id: string
@@ -1458,6 +1681,10 @@ export type Database = {
         }
         Returns: Json
       }
+      vg_review_snapshot: {
+        Args: { p_org: string; p_review: string }
+        Returns: Json
+      }
       vg_rotate_secret: {
         Args: {
           p_capabilities: Json
@@ -1469,6 +1696,10 @@ export type Database = {
           p_secret: Json
         }
         Returns: undefined
+      }
+      vg_snapshot_audit: {
+        Args: { p_org: string; p_scan: string }
+        Returns: Json
       }
       vg_traffic: { Args: { p_org: string; p_seconds?: number }; Returns: Json }
       vg_try_eval: { Args: { p_org: string }; Returns: boolean }

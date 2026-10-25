@@ -123,6 +123,17 @@ describe('bloqueo de merge', () => {
     expect(c.CodeReview.safeParse({ ...r, gate: { ...r.gate!, error: 'Forbidden 403' } }).success).toBe(false);
     expect(c.CodeReview.safeParse({ ...r, gate: { ...r.gate!, state: null, error: 'sin_token' } }).success).toBe(true);
   });
+  it('un pr_action o un whatsapp_action desconocido sale null y no tumba la revisión', () => {
+    const r = c.CodeReview.parse(fx.codeReviewStateBloqueo.recent[0]);
+    const conGate = c.CodeReview.parse({ ...r, gate: { ...r.gate!, pr_action: 'merged_by_bot' } });
+    expect(conGate.gate?.pr_action).toBeNull();
+    expect(c.CodeReview.parse({ ...r, gate: { ...r.gate!, pr_action: 'closed' } }).gate?.pr_action).toBe('closed');
+    const alerta = c.CodeReviewAlert.parse({ ...r.alert, whatsapp_action: 'uat_activado' });
+    expect(alerta.whatsapp_action).toBeNull();
+    const estado = c.CodeReviewState.parse({ ...fx.codeReviewStateBloqueo,
+      recent: [{ ...r, alert: { ...r.alert, whatsapp_action: 'otra_accion' } }] });
+    expect(estado.recent[0]?.alert.whatsapp_action).toBeNull();
+  });
 });
 
 // Evolución (E51, E52 y la foto de cada push en E45): los fixtures cuentan la misma historia que hallazgos.ts,

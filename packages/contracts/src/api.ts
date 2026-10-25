@@ -304,8 +304,9 @@ export const CodeReviewAlert = z.object({
   voice_pending: z.boolean(),                // pasó el umbral de llamada; sin llamadas, el aviso salió por WhatsApp
   notified_at: Ts.nullable(),
   seconds: z.number().min(0).nullable(),     // notified_at − created_at de la revisión
-  // Anexo avisos-whatsapp-botones.md: lo último que se hizo con un botón del WhatsApp de esta revisión.
-  whatsapp_action: z.enum(['fix_sent', 'issue_created', 'muted', 'pr_reopened']).nullable().optional(),
+  // Anexo avisos-whatsapp-botones.md: lo último que se hizo con un botón del WhatsApp de esta revisión. Una acción que
+  // este contrato aún no conoce sale null (.catch) en vez de tumbar CodeReviewState entero: la tarjeta se sigue pintando.
+  whatsapp_action: z.enum(['fix_sent', 'issue_created', 'muted', 'pr_reopened']).nullable().optional().catch(null),
   whatsapp_action_at: Ts.nullable().optional() });
 export type CodeReviewAlert = z.infer<typeof CodeReviewAlert>;
 // Bloqueo por revisión (CodeReview.gate). blocking: hallazgos de lo AÑADIDO con severidad ≥ min_severity y sin «Ignorar»
@@ -319,8 +320,9 @@ export const MergeGateReview = z.object({ blocking: z.number().int().min(0).null
   error: z.string().regex(/^[a-z_]{2,40}$/).nullable(), published_at: Ts.nullable(), override_at: Ts.nullable(),
   // Anexo de cierre de PR: closed (VanGUARD lo cerró) · reopened_by_human (alguien lo reabrió sin commits nuevos; no se
   // vuelve a cerrar) · reopened (lo reabrió VanGUARD por «Reabrir el PR», E54 o WhatsApp) · close_failed (ver
-  // pr_close_error). null = no aplica (push, PR sin críticos o interruptor apagado).
-  pr_action: z.enum(['closed', 'reopened_by_human', 'reopened', 'close_failed']).nullable().optional(),
+  // pr_close_error). null = no aplica (push, PR sin críticos o interruptor apagado). Un valor desconocido sale null
+  // (.catch) y el resto del bloqueo se sigue viendo. error y pr_close_error siguen estrictos: un texto libre no pasa.
+  pr_action: z.enum(['closed', 'reopened_by_human', 'reopened', 'close_failed']).nullable().optional().catch(null),
   pr_close_error: z.string().regex(/^[a-z_]{2,40}$/).nullable().optional() });
 export type MergeGateReview = z.infer<typeof MergeGateReview>;
 // Foto de Codebase al cerrar una revisión de push (0015; asignaciones/evolucion-entre-revisiones.md §2.2). open =

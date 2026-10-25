@@ -1,8 +1,8 @@
--- supabase/tests/fix-requests.sql · 0023: una petición abierta por hallazgo, la FK a un hallazgo de la misma org, las
+-- supabase/tests/fix-requests.sql · 0024: una petición abierta por hallazgo, la FK a un hallazgo de la misma org, las
 -- transiciones (enviado → arreglando → corregido; cerradas no se reabren), el cierre automático cuando el hallazgo deja
 -- de estar abierto (verified/fixed = corregido, ignored = cancelado), las políticas (miembros leen; owner/admin no
 -- anónimo crean y cancelan; viewer y anónimo no) y los privilegios (anon y authenticated sin nada, como todo public).
--- Se corre con execute_sql del MCP o el editor SQL DESPUÉS de aplicar 0023 (o pegado detrás de la migración en la misma
+-- Se corre con execute_sql del MCP o el editor SQL DESPUÉS de aplicar 0024 (o pegado detrás de la migración en la misma
 -- llamada). Siempre termina en ERROR a propósito: el mensaje lleva el resultado y la excepción deshace todo (orgs,
 -- usuarios, hallazgos, peticiones y los grants temporales con los que se prueban las políticas).
 -- Resultado esperado:

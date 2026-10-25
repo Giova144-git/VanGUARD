@@ -448,9 +448,30 @@ describe('convivencia de las funciones nuevas', () => {
   });
 });
 
+describe('Cloudflare por zona o por sitio (cloudflare-por-url.md)', () => {
+  const ZONA = 'a'.repeat(32);
+  const TOK = 't'.repeat(40);
+  const ok = (x: unknown) => c.ConnectionCreate.safeParse(x).success;
+  it('sin mode es zona, como siempre; zona sin token o sin zone_id → no pasa', () => {
+    expect(c.ConnectionCreate.parse({ provider: 'cloudflare', zone_id: ZONA, read_token: TOK })).toMatchObject({ mode: 'zone' });
+    expect(ok({ provider: 'cloudflare', zone_id: ZONA })).toBe(false);
+    expect(ok({ provider: 'cloudflare', mode: 'zone', read_token: TOK })).toBe(false);
+  });
+  it('sitio: https y dominio público; sin token vale; http, IP o sin url no; action_token solo en zona', () => {
+    expect(ok({ provider: 'cloudflare', mode: 'url', url: 'https://mi-app.pages.dev' })).toBe(true);
+    expect(ok({ provider: 'cloudflare', mode: 'url', url: 'https://api.mi-app.com/x', read_token: TOK })).toBe(true);
+    expect(ok({ provider: 'cloudflare', mode: 'url', url: 'http://mi-app.pages.dev' })).toBe(false);
+    expect(ok({ provider: 'cloudflare', mode: 'url', url: 'https://203.0.113.7' })).toBe(false);
+    expect(ok({ provider: 'cloudflare', mode: 'url', url: 'https://[2001:db8::1]' })).toBe(false);
+    expect(ok({ provider: 'cloudflare', mode: 'url' })).toBe(false);
+    expect(ok({ provider: 'cloudflare', mode: 'url', url: 'https://mi-app.pages.dev', action_token: TOK })).toBe(false);
+    expect(ok({ provider: 'cloudflare', mode: 'zona', url: 'https://mi-app.pages.dev' })).toBe(false);
+  });
+});
+
 describe('E57 simular ataque', () => {
-  it('kind por defecto path_scan y solo los tres tipos', () => {
-    expect(c.SimulateAttackIn.parse({}).kind).toBe('path_scan');
+  it('kind por defecto ip_flood (la única crítica) y solo los tres tipos', () => {
+    expect(c.SimulateAttackIn.parse({}).kind).toBe('ip_flood');
     expect(c.SimulateAttackIn.safeParse({ kind: 'ddos' }).success).toBe(false);
   });
   it('la respuesta dice qué hizo cada canal', () => {

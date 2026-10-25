@@ -7,7 +7,7 @@ import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
 
-// «Enviar a mi IA» (cola fix_requests, 0023_fix_requests.sql):
+// «Enviar a mi IA» (cola fix_requests, 0024_fix_requests.sql):
 // E58 · POST   /api/orgs/:org/findings/:id/fix-requests · admin → crea la petición «enviado» (idempotente: si ya hay una
 //               abierta, 200 con esa; nueva, 201). Solo para un hallazgo abierto (otro estado → 409).
 // E58 · DELETE /api/orgs/:org/findings/:id/fix-requests · admin → cancela la abierta (204 aunque no hubiera ninguna).

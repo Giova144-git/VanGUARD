@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { db } from '../lib/db.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
+import { esConexionSimulador } from '../lib/simulador.ts';
 
 // E6 · EstadoModulo (R08 §6, nombres en español a propósito). El BACK decide grupos, roles y verbos; rol 'mal' solo si
 // hay acción posible; un chequeo que no corrió va con comprobado:false y n:null (nunca verde sin mirar). Error de base o
@@ -32,6 +33,10 @@ const CHECKS: Record<Proveedor, Check[]> = {
     { codigo: 'CF_ADMIN_EXPOSED', nombre: 'Rutas de admin abiertas', vivo: true },
     { codigo: 'CF_PATH_SCAN', nombre: 'Escaneo de rutas', vivo: true },
     { codigo: 'CF_UA_TOOL', nombre: 'Herramientas de ataque', vivo: true },
+    // Modo sitio (cloudflare-por-url.md): por HTTP siempre; la configuración solo con token de cuenta.
+    { codigo: 'CF_SITE_*', nombre: 'Cabeceras y archivos del sitio', mira: ['sitio_http'] },
+    { codigo: 'CF_PAGES_*', nombre: 'Variables de Pages', mira: ['configuracion'] },
+    { codigo: 'CF_WORKER_*', nombre: 'Variables y subdominio del Worker', mira: ['configuracion'] },
   ],
   codebase: [
     { codigo: 'CB_ENV_COMMITTED', nombre: '.env subido al repo', mira: ['env'] },
@@ -195,7 +200,7 @@ async function estadoProveedor(env: CloudflareBindings, orgId: string, m: Provee
     return fallo('sin_conexion', hora, cifrasBase, CHECKS[m], m, fs.error ? null : ((fs.data ?? []) as FilaFinding[]));
   }
   const hallazgos = (fs.data ?? []) as FilaFinding[];
-  const conns = (cx.data ?? []) as Conexion[];
+  const conns = ((cx.data ?? []) as Conexion[]).filter((x) => !esConexionSimulador(x));
   const propias = conns.filter((c) => c.provider === PROVEEDOR[m] && c.kind === 'read');
   if (!propias.some((c) => c.status === 'active')) {
     const mala = propias[0];

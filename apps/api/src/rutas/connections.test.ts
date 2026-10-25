@@ -259,6 +259,68 @@ describe('E8 · Supabase · sondeo negativo (permisos de más, §06.3)', () => {
   });
 });
 
+// Cloudflare sin zona (asignaciones/cloudflare-por-url.md): modo sitio con token opcional.
+describe('E8 · Cloudflare en modo sitio', () => {
+  const insertadas = () => doble.ops.filter((o) => o.table === 'connections' && o.action === 'insert').map((o) => o.payload as Record<string, unknown>);
+  beforeEach(() => {
+    tabla = (op) => {
+      if (op.table === 'connections' && op.action === 'insert') {
+        const p = op.payload as Record<string, unknown>;
+        creadas.push({ connectionId: p.id, provider: p.provider, kind: p.kind, label: p.label, meta: p.meta,
+          capabilities: p.capabilities, scopes: p.scopes });
+        return {};
+      }
+      if (op.table === 'connections' && op.action === 'select' && !op.filters.some(([c, o]) => c === 'id' && o === 'in')) return { data: [] };
+      return undefined;
+    };
+  });
+
+  it('sin token → 201, conexión sin secreto, meta de modo url y sin llamar a Cloudflare', async () => {
+    const r = await post({ provider: 'cloudflare', mode: 'url', url: 'https://mi-app.pages.dev/inicio' });
+    expect(r.status).toBe(201);
+    const b = ConnectionCreated.parse(await r.json());
+    expect(b.connection).toMatchObject({ provider: 'cloudflare', label: 'Cloudflare · mi-app.pages.dev',
+      meta: { mode: 'url', site_url: 'https://mi-app.pages.dev', site_kind: 'pages', project: 'mi-app', config_read: false } });
+    expect(b.action_connection).toBeNull();
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+    expect(insertadas()).toHaveLength(1);
+    expect(insertadas()[0]).toMatchObject({ org_id: ORG, provider: 'cloudflare', kind: 'read' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('modo zona con un Zone ID que no es zona (400 de Cloudflare) → 422 que lo dice, nunca 502 «no respondió»', async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ errors: [{ code: 7003 }] }), { status: 400 }));
+    const r = await post({ provider: 'cloudflare', zone_id: ZONA, read_token: CF_LECTURA });
+    expect(r.status).toBe(422);
+    const e = await error(r);
+    expect(e.code).toBe('provider_rejected');
+    expect(e.message).toContain('¿pegaste el Account ID?');
+    expect(e.details?.reason).toBe('zone_not_found');
+  });
+
+  it('URL de VanGUARD, IP o http → 422 con field_errors.url; nada se guarda', async () => {
+    for (const url of ['https://officialvanguard.com', 'https://203.0.113.7', 'http://mi-app.pages.dev']) {
+      const r = await post({ provider: 'cloudflare', mode: 'url', url });
+      expect(r.status, url).toBe(422);
+    }
+    expect((await error(await post({ provider: 'cloudflare', mode: 'url', url: 'https://officialvanguard.com' }))).details?.field_errors)
+      .toHaveProperty('url');
+    expect(insertadas()).toEqual([]);
+  });
+
+  it('con token rechazado (401) → 422 provider_rejected sin guardar; mismo sitio ya conectado → 409', async () => {
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 401 }));
+    const r = await post({ provider: 'cloudflare', mode: 'url', url: 'https://mi-app.pages.dev', read_token: CF_LECTURA });
+    expect(r.status).toBe(422);
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+    tabla = (op) => (op.table === 'connections' && op.action === 'select' && !op.filters.some(([c, o]) => c === 'id' && o === 'in')
+      ? { data: [{ id: CONN, meta: { mode: 'url', site_url: 'https://mi-app.pages.dev' } }] } : undefined);
+    const d = await post({ provider: 'cloudflare', mode: 'url', url: 'https://mi-app.pages.dev' });
+    expect(d.status).toBe(409);
+    expect((await error(d)).details?.reason).toBe('sitio_duplicado');
+  });
+});
+
 describe('E8 · GitHub e ingest', () => {
   it('repo que el token no ve → 422 provider_rejected [metadata:read]', async () => {
     fetchMock.mockImplementation(async () => new Response('{}', { status: 404 }));
@@ -453,6 +515,17 @@ describe('E7, E9 y E10', () => {
     const [c] = ConnectionPublic.array().parse(await r.json());
     expect(c?.capabilities).toEqual({ project: true });
     expect(c?.last_checked_at).toBe('2026-10-24T14:00:00.123Z');
+  });
+
+  it('E7 no enseña la conexión del simulador de ataques (meta.simulador, E57)', async () => {
+    tabla = (op) => (op.table === 'connections' && eqDe(op, 'org_id') === ORG
+      ? { data: [fila({}), fila({ id: '27ace5b4-b217-4006-adc3-a305655c0c76', provider: 'ingest', status: 'revoked',
+        label: 'vanguard-demo-victima.pages.dev', meta: { simulador: true, purpose: 'simulador_e57' } })] } : undefined);
+    const r = await app.request(`https://officialvanguard.com/api/orgs/${ORG}/connections`,
+      { headers: { authorization: 'Bearer ana' } }, envDoble().env);
+    const xs = ConnectionPublic.array().parse(await r.json());
+    expect(xs).toHaveLength(1);
+    expect(xs[0]!.provider).not.toBe('ingest');
   });
 
   it('E9: un 401 del proveedor deja la conexión revoked', async () => {

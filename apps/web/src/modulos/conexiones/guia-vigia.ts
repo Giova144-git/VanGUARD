@@ -15,6 +15,7 @@ export const DURACION_BIEN_MS = 5000;
 // Los data-guia que señala (los pinta Asistente.tsx). `conexion-paso-N` es el N-ésimo paso de GUIAS_CONEXION.
 export const OBJETIVO = {
   enlace: 'conexion-enlace', proyecto: 'conexion-proyecto', zona: 'conexion-zona', repo: 'conexion-repo', nombre: 'conexion-nombre',
+  modo: 'conexion-modo', url: 'conexion-url',
   token: 'conexion-token', accion: 'conexion-token-accion', probar: 'conexion-probar', error: 'conexion-error', permisos: 'conexion-permisos',
 } as const;
 export const objetivoPermiso = (codigo: string) => `permiso-${codigo}`;   // cada fila de ListaChecks
@@ -50,6 +51,17 @@ export const GUIA_VIGIA: Record<Provider, { titulo: string; pasos: readonly Paso
     { objetivo: OBJETIVO.probar, texto: 'Al crearla te enseño un secreto una sola vez: cópialo y ponlo en tu app como VG_INGEST_SECRET.',
       textoLectura: 'Aquí se crea la conexión. En la demo no puedes: lo hace un administrador.' },
   ], final: 'Tu app firmará cada lote de eventos con ese secreto.' },
+};
+
+// Cloudflare en modo «Sitio» (por URL de Pages, Workers o dominio): sin Zone ID ni Modo blindaje. El asistente elige
+// esta guía o la de GUIA_VIGIA.cloudflare (modo «Zona») según el modo que esté marcado al pedirla.
+export const GUIA_VIGIA_CF_SITIO: { titulo: string; pasos: readonly PasoTour[]; final: string } = {
+  titulo: 'Conectar Cloudflare', pasos: [
+    { objetivo: OBJETIVO.modo, texto: 'Elige qué conectas: tu sitio por su URL, o la zona entera con su Zone ID si quieres bloquear IPs.' },
+    { objetivo: OBJETIVO.url, texto: 'Pega la URL de tu sitio: la de Pages, la de Workers o tu dominio.' },
+    { objetivo: OBJETIVO.token, texto: 'El token de cuenta es opcional: con él también reviso la configuración del proyecto. Sin él, reviso el sitio por HTTP.' },
+    { objetivo: OBJETIVO.probar, texto: 'Pulsa aquí: compruebo que el sitio responde y, con token, cada permiso.', textoLectura: PROBAR_LECTURA },
+  ], final: 'Eso es todo. Si algo falla en la prueba, te lo explico.',
 };
 
 // Qué marcar y para qué sirve, en llano, por código de permiso (los de lib/permisos.ts).

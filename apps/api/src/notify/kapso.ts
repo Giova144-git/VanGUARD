@@ -29,7 +29,16 @@ export type MensajeInteractivo = {
     action: { buttons: { type: 'reply'; reply: BotonKapso }[] };
   };
 };
-export type MensajeKapso = MensajeTexto | MensajeInteractivo;
+// Botón «Llamar a Guardia» (interactive voice_call): la llamada la inicia el usuario, que es lo que Meta permite en esta
+// cuenta (las iniciadas por la empresa dan 138013). payload vuelve en la llamada entrante (cta_payload) al servidor de voz.
+export type MensajeBotonLlamada = {
+  messaging_product: 'whatsapp'; recipient_type: 'individual'; to: string; type: 'interactive';
+  interactive: {
+    type: 'voice_call'; body: { text: string };
+    action: { name: 'voice_call'; parameters: { display_text: string; ttl_minutes: number; payload: string } };
+  };
+};
+export type MensajeKapso = MensajeTexto | MensajeInteractivo | MensajeBotonLlamada;
 
 // Un ProviderError que además lleva el código corto del proveedor (131047…) o uno nuestro ('sin_config'), nunca su
 // mensaje: es lo que va a notifications.error y a details.provider_code de E27.
@@ -60,6 +69,21 @@ export function cuerpoTexto(e164: string, texto: string): MensajeTexto {
   const body = recortar(texto.trim(), MAX_TEXTO);
   if (!body) throw new RangeError('KAPSO_TEXTO_VACIO');
   return { messaging_product: 'whatsapp', to: aDestino(e164), type: 'text', text: { body } };
+}
+
+/** Texto fijo del botón de llamada (sin IA). */
+export const TEXTO_BOTON_LLAMADA = '¿Te lo explico por voz? Guardia, la asistente de IA de VanGUARD, te atiende ahora.';
+export const TITULO_BOTON_LLAMADA = 'Llamar a Guardia';
+export const TTL_BOTON_LLAMADA_MIN = 30;
+const PAYLOAD_LLAMADA = /^vg:[A-Z0-9]{6}$/;
+/** El interactivo voice_call con su payload «vg:<código del incidente>»; lanza RangeError si el payload no casa. */
+export function cuerpoBotonLlamada(e164: string, payload: string): MensajeBotonLlamada {
+  if (!PAYLOAD_LLAMADA.test(payload)) throw new RangeError('KAPSO_PAYLOAD_LLAMADA');
+  return {
+    messaging_product: 'whatsapp', recipient_type: 'individual', to: aDestino(e164), type: 'interactive',
+    interactive: { type: 'voice_call', body: { text: TEXTO_BOTON_LLAMADA },
+      action: { name: 'voice_call', parameters: { display_text: TITULO_BOTON_LLAMADA, ttl_minutes: TTL_BOTON_LLAMADA_MIN, payload } } },
+  };
 }
 
 export type OpcionesInteractivo = { header?: string; body: string; footer?: string; botones: BotonKapso[] };

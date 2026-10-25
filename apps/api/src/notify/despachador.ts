@@ -14,9 +14,10 @@ import { db } from '../lib/db.ts';
 import { log } from '../lib/log.ts';
 import { ventanaAbierta } from '../lib/verificacion.ts';
 import {
-  cuerpoInteractivo, cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado, type MensajeKapso,
+  cuerpoBotonLlamada, cuerpoInteractivo, cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado,
+  type MensajeKapso,
 } from './kapso.ts';
-import { llamarVoz, vozConfigurada } from './voz.ts';
+import { esperarLlamada, vozConfigurada } from './voz.ts';
 
 // Despachador de avisos externos (S12 12.4–12.6, S15 15.9 y 15.10). Lo llama la evaluación en vivo tras cada
 // vg_upsert_incident que lo requiera (nuevo, subida de severidad o reapertura). Lee el incidente (id + org), los
@@ -25,7 +26,7 @@ import { llamarVoz, vozConfigurada } from './voz.ts';
 // sale nada), una fila de approvals por botón con sha256(nonce), el interactivo por Kapso y cierre a sent | failed.
 // Lo que no sale (tope, ventana de demo, sin verificar) deja su fila con status y error y no llama a Kapso. Llamada de
 // Guardia (asignaciones/llamada-ataque.md §B1): con VOZ_URL y VOZ_OPERATOR_TOKEN, la entrada voice/call_v1 del plan sale
-// DESPUÉS del WhatsApp del incidente (la voz lo menciona), con fila queued antes de llamar y un único intento (llamarUno);
+// DESPUÉS del WhatsApp del incidente: attack/expect y el botón «Llamar a Guardia» (llamarUno; Meta no deja iniciarla);
 // sin esas variables se ignora sin fila, como antes. Subpeticiones: 5–8 de lectura (+2 del uso de la voz si está
 // configurada) + ~4 por WhatsApp enviado + 3 por llamada.
 // Tercer botón blk «Bloquear IP» (§12.6): solo si el incidente es CF_ con resource ip:<ip> bloqueable y la org tiene una
@@ -293,19 +294,23 @@ async function marcarNotificado(d: Despacho, sentAt: string) {
   if (error) log('warn', 'despacho.sin_notified_at', { rid: d.rid, incidente: d.inc.code, code: error.code ?? null });
 }
 
-// ── Llamada de Guardia (asignaciones/llamada-ataque.md §B1) ─────────────────────────────────────────────────────────
-// Como enviarUno: lo que el plan no deja salir (tope, tope global, ventana de la demo, sin verificar) o fuera de
-// producción deja su fila y no llama; si sale, fila queued ANTES de llamar (23505 = ya se llamó a ese contacto por este
-// incidente) y UN intento: 200 → sent con provider_id = ref; 409 → failed sin_permiso | ocupado; lo demás o el plazo →
-// failed 'desconocido', sin reintento (el teléfono pudo sonar). Contexto: contextoLlamada (5 claves, por textoSeguro).
-// Logs voz.llamada_ok | voz.llamada_fallida | voz.llamada_desconocida con el ref y el teléfono enmascarado.
+// ── Botón «Llamar a Guardia» (asignaciones/llamada-ataque.md §B1) ────────────────────────────────────────────────────
+// Meta no deja a esta cuenta iniciar llamadas (138013): la entrada voice/call_v1 del plan se hace botón. Como enviarUno:
+// lo que el plan no deja salir (tope, tope global, ventana de la demo, sin verificar), fuera de producción, sin Kapso o
+// con la ventana de 24 h cerrada deja su fila (failed window_closed…) y no llama a nadie; si sale, fila queued ANTES
+// (23505 = ya se le ofreció a ese contacto por este incidente), UN POST attack/expect al servidor de voz con el contexto
+// (contextoLlamada) y el ticket vg:<código>, y solo con su 200 el interactivo voice_call por Kapso: sent con el wamid;
+// expect fallido → failed voz_no_disponible sin botón; Kapso fallido → failed con su código. Sin reintentos.
+export const PLANTILLA_BOTON_LLAMADA = 'call_button_v1';
 async function llamarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<Salida> {
   const recipient_masked = enmascararTelefono(contacto.phone);
-  const base = { org_id: d.orgId, incident_id: d.incidentId, channel: 'voice', template: p.template, recipient_masked };
+  const base = { org_id: d.orgId, incident_id: d.incidentId, channel: 'voice', template: PLANTILLA_BOTON_LLAMADA, recipient_masked };
   const registro = { rid: d.rid, incidente: d.inc.code, recipient_masked };
   try {
     const fila = p.status !== 'queued' ? { status: p.status, error: p.error ?? 'cap' }
-      : d.env.VG_ENV !== 'production' ? { status: 'failed', error: 'dry_run' } : null;
+      : d.env.VG_ENV !== 'production' ? { status: 'failed', error: 'dry_run' }
+      : !kapsoConfigurado(d.env) ? { status: 'failed', error: 'sin_config' }
+      : !ventanaAbierta(d.env, contacto.wa_last_inbound_at, d.ahora) ? { status: 'failed', error: 'window_closed' } : null;
     if (fila) {
       const { error } = await d.admin.from('notifications').insert({ ...base, ...fila });
       if (error && error.code !== '23505') log('warn', 'despacho.sin_fila', { ...registro, canal: 'voice', code: error.code ?? null });
@@ -323,18 +328,28 @@ async function llamarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<S
       log('warn', 'despacho.sin_fila', { ...registro, canal: 'voice', code: error?.code ?? null });
       return 'fallido';
     }
-    const r = await llamarVoz(d.env, contacto.phone.slice(1), contextoLlamada(d.inc));
-    const cierre: Cierre = r.tipo === 'ok' ? { status: 'sent', provider_id: r.ref, sent_at: new Date().toISOString() }
-      : { status: 'failed', error: r.tipo === 'fallida' ? r.error : 'desconocido' };
+    const ticket = `vg:${d.inc.code}`;
+    const espera = await esperarLlamada(d.env, contacto.phone.slice(1), contextoLlamada(d.inc), ticket);
+    let cierre: Cierre;
+    if (espera.tipo !== 'ok') {
+      log('warn', 'voz.espera_fallida', { ...registro, status: espera.status });
+      cierre = { status: 'failed', error: 'voz_no_disponible' };
+    } else {
+      try {
+        const { provider_id } = await enviarKapso(d.env, cuerpoBotonLlamada(contacto.phone, ticket));
+        cierre = { status: 'sent', provider_id, sent_at: new Date().toISOString() };
+      } catch (e) {
+        cierre = { status: 'failed', error: codigoError(e) };
+      }
+    }
     const { error: ec } = await d.admin.from('notifications').update(cierre).eq('id', id).eq('org_id', d.orgId).eq('status', 'queued');
     if (ec) log('warn', 'despacho.sin_cierre', { ...registro, canal: 'voice', code: ec.code ?? null, status: cierre.status });
     if (cierre.status === 'sent') {
-      log('info', 'voz.llamada_ok', { ...registro, ref: cierre.provider_id, state: r.tipo === 'ok' ? r.state : null });
+      log('info', 'voz.boton_enviado', { ...registro, minutos: espera.tipo === 'ok' ? espera.minutos : null });
       await marcarNotificado(d, cierre.sent_at);
       return 'enviado';
     }
-    if (r.tipo === 'fallida') log('warn', 'voz.llamada_fallida', { ...registro, error: r.error });
-    else log('warn', 'voz.llamada_desconocida', registro);
+    log('warn', 'voz.boton_fallido', { ...registro, error: cierre.error });
     return 'fallido';
   } catch (e) {
     log('error', 'voz.llamada_excepcion', { ...registro, name: e instanceof Error ? e.name : typeof e });

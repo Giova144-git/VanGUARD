@@ -6,7 +6,7 @@ import {
 } from '@vanguard/core';
 import { db } from '../lib/db.ts';
 import { log } from '../lib/log.ts';
-import { avisarIncidente } from '../notify/despachador.ts';
+import { avisarIncidente, type ResumenAviso } from '../notify/despachador.ts';
 
 // Motor en vivo (S15 15.9, S12 12.2–12.4). E30 lo llama una vez por lote con filas, en waitUntil: vg_try_eval (una
 // evaluación por org cada ≥ 5 s) → vg_edge_window(org, 60) ‖ conexión → evaluateEdge del core, un incidente por IP →
@@ -31,19 +31,37 @@ export const COSTE_OFERTA_BAJO_ATAQUE = 8;
 const costeAviso = (inc: { rule_ids: readonly string[] }) =>
   COSTE_AVISO + (inc.rule_ids.some((r) => REGLAS_QUE_OFRECEN.includes(r)) ? COSTE_OFERTA_BAJO_ATAQUE : 0);
 
-export type Ctx = { orgId: string; connectionId: string; rid: string };
+// marcas: claves que se añaden a details del incidente DESPUÉS de que las reglas decidan (E57: simulated). No entran en
+// la ventana ni en evaluateEdge, así que no cambian ni reglas, ni severidad, ni título.
+export type Ctx = { orgId: string; connectionId: string; rid: string; marcas?: Readonly<Record<string, unknown>> };
 export type ResumenEvaluacion = {
   filas: number; incidentes: number; procesados: number; nuevos: number; avisos: number; pendientes: number; errores: number;
   subpeticiones: number;
 };
+/** Lo que decidió el motor por cada incidente que registró, y lo que hizo el despachador si avisó. */
+export type IncidenteEvaluado = { id: string; code: string; rule_ids: string[]; severity: Severity; ip: string;
+  aviso: ResumenAviso | null };
+export type Evaluacion = ResumenEvaluacion & { registrados: IncidenteEvaluado[] };
 
 export async function evaluarEnVivo(env: CloudflareBindings, ctx: Ctx): Promise<void> {
+  await evaluarAhora(env, ctx);
+}
+
+/** El motor en vivo de una vez, con su resultado: null si no tocó evaluar (vg_try_eval: otra evaluación de la org hace
+ *  < 5 s) o si algo lanzó. E30 lo deja en waitUntil (evaluarEnVivo); E57 lo espera para responder. Nunca lanza. */
+export async function evaluarAhora(env: CloudflareBindings, ctx: Ctx): Promise<Evaluacion | null> {
   const t0 = Date.now();
   try {
     const r = await evaluar(env, ctx);
-    if (r) log(r.errores || r.pendientes ? 'warn' : 'info', 'motor.evaluacion', { rid: ctx.rid, ...r, ms: Date.now() - t0 });
+    if (r) {
+      const { registrados, ...resumen } = r;
+      log(r.errores || r.pendientes ? 'warn' : 'info', 'motor.evaluacion', { rid: ctx.rid, ...resumen, ms: Date.now() - t0 });
+      void registrados;
+    }
+    return r;
   } catch (e) {
     log('error', 'motor.error', { rid: ctx.rid, name: e instanceof Error ? e.name : typeof e });
+    return null;
   }
 }
 
@@ -81,7 +99,7 @@ export function planEvaluacion(incidentes: readonly IncidenteEdgeConClave[], abi
   return [...plan.filter((p) => p.avisara), ...plan.filter((p) => !p.avisara)];   // filter conserva critical primero
 }
 
-async function evaluar(env: CloudflareBindings, ctx: Ctx): Promise<ResumenEvaluacion | null> {
+async function evaluar(env: CloudflareBindings, ctx: Ctx): Promise<Evaluacion | null> {
   const { orgId, connectionId, rid } = ctx;
   const admin = db(env);
   const { data: toca, error: et } = await admin.rpc('vg_try_eval', { p_org: orgId });
@@ -95,8 +113,8 @@ async function evaluar(env: CloudflareBindings, ctx: Ctx): Promise<ResumenEvalua
     admin.rpc('vg_edge_window', { p_org: orgId, p_seconds: VENTANA_S }),
     admin.from('connections').select('label, meta').eq('id', connectionId).eq('org_id', orgId).maybeSingle(),
   ]);
-  const r: ResumenEvaluacion = { filas: 0, incidentes: 0, procesados: 0, nuevos: 0, avisos: 0, pendientes: 0, errores: 0,
-    subpeticiones: COSTE_BASE };
+  const r: Evaluacion = { filas: 0, incidentes: 0, procesados: 0, nuevos: 0, avisos: 0, pendientes: 0, errores: 0,
+    subpeticiones: COSTE_BASE, registrados: [] };
   if (ventana.error) {
     log('error', 'motor.ventana_error', { rid, code: ventana.error.code ?? null });
     return { ...r, errores: 1 };
@@ -138,6 +156,9 @@ async function evaluar(env: CloudflareBindings, ctx: Ctx): Promise<ResumenEvalua
     }
     r.procesados++;
     if (resp.is_new) r.nuevos++;
+    const registrado: IncidenteEvaluado = { id: resp.id, code: resp.code, rule_ids: [...inc.rule_ids], severity: resp.severity,
+      ip: inc.ip, aviso: null };
+    r.registrados.push(registrado);
     if (!motivoAviso(resp)) continue;
     // Un aviso no previsto (se resolvió entre la lectura y el upsert) sale solo si aún cabe; si no, queda en el log.
     if (!avisara && r.subpeticiones + coste > PRESUPUESTO_MOTOR) {
@@ -147,7 +168,8 @@ async function evaluar(env: CloudflareBindings, ctx: Ctx): Promise<ResumenEvalua
     r.avisos++;
     r.subpeticiones += coste;
     try {
-      await avisarIncidente(env, orgId, resp.id, { is_new: resp.is_new, prev_severity: resp.prev_severity, reopened: resp.reopened }, rid);
+      registrado.aviso = await avisarIncidente(env, orgId, resp.id, { is_new: resp.is_new, prev_severity: resp.prev_severity,
+        reopened: resp.reopened }, rid);
     } catch (e) {
       log('error', 'motor.aviso_error', { rid, incidente: resp.code, name: err(e) });
     }
@@ -163,7 +185,8 @@ async function registrar(admin: SupabaseClient, inc: IncidenteEdgeConClave, ctx:
   if (ep) log('warn', 'motor.primera_vista_error', { rid, code: ep.code ?? null });
   // Sin dato, p_started null: la RPC usa now() (started_at es not null).
   const started_at = !ep && typeof primera === 'string' && primera ? primera : null;
-  const params = paramsUpsertIncidente(inc, { org_id: orgId, connection_id: connectionId, started_at });
+  const base = paramsUpsertIncidente(inc, { org_id: orgId, connection_id: connectionId, started_at });
+  const params = ctx.marcas ? { ...base, p_details: { ...base.p_details, ...ctx.marcas } } : base;
   for (let intento = 1; intento <= 2; intento++) {
     const { data, error } = await admin.rpc('vg_upsert_incident', params);
     r.subpeticiones++;

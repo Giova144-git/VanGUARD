@@ -2,7 +2,7 @@
 // del WhatsApp o código en el sitio) → bloqueo → «Deshacer». Dos columnas 60/40 desde 1280 px; apiladas por debajo.
 import type { ReactNode } from 'react';
 import { useLocation, useParams, Link } from 'react-router';
-import { ArrowLeft, Bell, BellOff, Eye, FlaskConical, MessageCircle, Phone, Send } from 'lucide-react';
+import { ArrowLeft, Bell, BellOff, Cable, Eye, FlaskConical, MessageCircle, Phone, Send } from 'lucide-react';
 import type { ActionKind, ActionStatus, Channel, IncidentDetail, NotificationPublic } from '@vanguard/contracts';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { Cronometro } from '@/componentes/vg/Cronometro';
@@ -22,7 +22,8 @@ import { useAccionIncidente } from '@/lib/mutaciones';
 import { porQueImporta } from '@/lib/reglas-texto';
 import { deMapa } from '@/lib/severidad';
 import { ActivarBlindaje } from '@/modulos/conexiones/ActivarBlindaje';
-import { BajoAtaque } from './BajoAtaque';
+import { Button } from '@/componentes/ui/button';
+import { BajoAtaque, ZONA_NECESARIA } from './BajoAtaque';
 import { BloquearIp } from './BloquearIp';
 import { finDe, hitosDe, restoDe, t0De } from './hitos';
 import { estadoInc } from './PaginaIncidentes';
@@ -54,6 +55,9 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
   const accion = useAccionIncidente(org);
   const conexiones = useConexiones(org);
   const blindaje = conexiones.data?.some((c) => c.provider === 'cloudflare' && c.kind === 'action' && c.status === 'active');
+  // Cloudflare solo por URL (cloudflare-por-url.md): sin zona, bloquear y bajo ataque no son posibles; se pide la zona.
+  const lecturasCf = (conexiones.data ?? []).filter((c) => c.provider === 'cloudflare' && c.kind === 'read' && c.status !== 'revoked');
+  const sitioPorUrl = lecturasCf.length > 0 && lecturasCf.every((c) => c.meta.mode === 'url');
   const ejecutada = i.actions.find((a) => a.kind === 'block_ip' && a.status === 'executed');
   const bajoAtaque = i.actions.find((a) => a.kind === 'under_attack_on' && a.status === 'executed');
   const silenciado = i.muted_until && Date.parse(i.muted_until) > Date.now();
@@ -77,13 +81,24 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
       {esIp ? (blindaje || ejecutada
         ? <BloquearIp key={i.id} org={org} incidentId={i.id} ip={i.resource.slice(3)} ejecutada={ejecutada} puedeEscribir={puedeEscribir} />
         : conexiones.isPending ? <div className="h-14" aria-busy="true" />   // sin saber si hay blindaje: hueco fijo, no el CTA equivocado (L7)
+        : sitioPorUrl ? <ZonaNecesaria org={org} puedeEscribir={puedeEscribir} />
         : <ActivarBlindaje titulo="Activa el Modo blindaje para bloquear desde aquí" />) : null}
       {/* Solo ante una inundación (o con el modo ya activo); si E55 aún no existe en el BACK, no pinta nada. Su clave no
           repite la de BloquearIp: dos hermanos con la misma clave se duplican u omiten al cambiar el de al lado. */}
       {i.rule_ids.includes('CF_IP_FLOOD') || bajoAtaque
-        ? <BajoAtaque key={`bajo-ataque:${i.id}`} org={org} incidentId={i.id} puedeEscribir={puedeEscribir} ejecutada={bajoAtaque} blindajeArriba={ctaBlindaje} /> : null}
+        ? <BajoAtaque key={`bajo-ataque:${i.id}`} org={org} incidentId={i.id} puedeEscribir={puedeEscribir} ejecutada={bajoAtaque} blindajeArriba={ctaBlindaje} sitioPorUrl={sitioPorUrl} /> : null}
       <BotonSimularWhatsApp org={org} incidentId={i.id} />
     </section>
+  );
+}
+
+// En lugar de «Activa el Modo blindaje» cuando Cloudflare solo está conectado por URL: hace falta una zona (Zone ID).
+function ZonaNecesaria({ org, puedeEscribir }: { org: string; puedeEscribir: boolean }) {
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-xl border p-4">
+      <p className="text-[15px] font-semibold">{ZONA_NECESARIA}</p>
+      {puedeEscribir ? <Button asChild variant="fantasma" size="grande"><Link to={`/o/${org}/connections`}><Cable />Añadir la zona en Conexiones</Link></Button> : null}
+    </div>
   );
 }
 

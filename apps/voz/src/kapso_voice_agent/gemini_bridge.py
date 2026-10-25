@@ -293,7 +293,11 @@ class GeminiAgentBridge(FrameProcessor):
         except ConnectionClosedOK:
             self.log.add("agent_conversation_ended", self.ref)
         except Exception as error:
-            self.log.add("agent_receive_failed_" + type(error).__name__, self.ref)
+            # Gemini explains a refused or broken session in the close frame (code + reason, never a secret).
+            closed = getattr(error, "rcvd", None)
+            self.log.add("agent_receive_failed_" + type(error).__name__, self.ref,
+                         code=getattr(closed, "code", None) or 0,
+                         reason=" ".join(str(getattr(closed, "reason", "") or "").split())[:64])
             if not self.ready.is_set() or self.audio_out == 0:
                 self.log.provider_failed(close_problem(error), self.ref)
         finally:

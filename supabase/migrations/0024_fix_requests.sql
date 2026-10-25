@@ -1,4 +1,4 @@
--- 0023_fix_requests.sql · cola «Enviar a mi IA»: el usuario pulsa el botón en el detalle de un hallazgo (o en «Ahora») y
+-- 0024_fix_requests.sql · cola «Enviar a mi IA»: el usuario pulsa el botón en el detalle de un hallazgo (o en «Ahora») y
 -- la web crea una petición; su IA la ve por el MCP (list_fix_requests) y, al pedir la corrección (get_fix_prompt o el
 -- prompt resolver_hallazgo), el Worker la pasa a «arreglando». «corregido» lo pone la base cuando el hallazgo deja de
 -- estar abierto (auto-verificación de vg_upsert_findings, «Marcar corregido» de E14 o cualquier otra vía); un hallazgo

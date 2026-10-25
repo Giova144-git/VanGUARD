@@ -75,17 +75,21 @@ function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones, pue
       deshabilitado={puedeEscribir ? undefined : SOLO_LECTURA} onClick={() => navegar(`/o/${org}/connections/${proveedor}`)} />
   );
   const chapa = proveedor === 'github' ? chapaGithub(reposGithub(conexiones)) : c ? chapaEstado(c) : null;
+  // Cloudflare conectado por URL (cloudflare-por-url.md): «Cloudflare · sitio» y, sin token de cuenta, «solo HTTP».
+  // Sale del meta de la conexión (E7): Coverage del contrato no trae detail.
+  const sitio = proveedor === 'cloudflare' && c?.meta.mode === 'url';
   return (
     // La chapa («Conectado · probado 24-10 17:41») va en su propia fila: en 3 columnas (lg, ~318 px) no cabe al lado del
     // nombre, el contador y «Abrir», y partida en la fila de 24 px se montaba encima del nombre.
     <Link to={`/o/${org}/${modulo}`} className="flex min-h-16 flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border bg-card px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground"><Icono className="size-6" strokeWidth={1.5} /></span>
-      <span className="min-w-0 flex-1 text-base font-semibold">{NOMBRE[modulo]}</span>
+      <span className="min-w-0 flex-1 text-base font-semibold">{sitio ? 'Cloudflare · sitio' : NOMBRE[modulo]}</span>
       <MarcasContador contador={estado.data?.contador} grande />
       <span className="text-sm font-medium text-info">Abrir</span>
       <span className="flex basis-full">
         {chapa ? <Etiqueta texto={chapa.texto} rol={chapa.rol} className="h-auto min-h-6 w-fit max-w-full py-1 whitespace-normal" /> : <span className="text-texto-3">—</span>}
       </span>
+      {sitio && c.meta.config_read !== true ? <span className="basis-full text-[12.5px] text-muted-foreground">Solo HTTP: sin token de cuenta no leemos la configuración del proyecto</span> : null}
     </Link>
   );
 }

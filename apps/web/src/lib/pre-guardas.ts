@@ -39,3 +39,21 @@ export function extraerRepoYRama(entrada: string): { repo: string; rama: string 
 export const extraerRepo = (entrada: string): string | null => extraerRepoYRama(entrada)?.repo ?? null;
 
 export const zoneIdValido = (z: string) => /^[0-9a-f]{32}$/.test(z.trim());
+
+// Modo sitio de Cloudflare (asignaciones/cloudflare-por-url.md): la URL de Pages, de un Worker o su dominio propio →
+// https://<host>, sin ruta, query ni puerto (como normaliza el BACK). Acepta el host a secas. Como el contrato: solo
+// https y un dominio público (ni IP ni localhost); además, fuera los de VanGUARD, que el BACK también rechaza.
+export function extraerUrlSitio(entrada: string): { url: string } | { error: string } {
+  const v = entrada.trim();
+  if (!v) return { error: 'Pega la URL de tu sitio, por ejemplo https://mi-app.pages.dev' };
+  if (/^http:\/\//i.test(v)) return { error: 'Solo https: escribe https:// al principio' };
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v) && !/^https:\/\//i.test(v)) return { error: 'Solo https: escribe https:// al principio' };
+  let u: URL;
+  try { u = new URL(/^https:\/\//i.test(v) ? v : `https://${v}`); } catch { return { error: 'Eso no parece una URL: prueba con https://mi-app.pages.dev' }; }
+  const host = u.hostname.toLowerCase().replace(/\.$/, '');
+  if (u.username || u.password) return { error: 'La URL no puede llevar usuario ni contraseña' };
+  if (!host.includes('.') || /^[\d.]+$/.test(host) || host.includes(':') || host.startsWith('[') || host === 'localhost' || host.endsWith('.localhost'))
+    return { error: 'Tiene que ser un dominio público, no una IP ni localhost' };
+  if (host === 'officialvanguard.com' || host.endsWith('.officialvanguard.com')) return { error: 'Ese dominio es de VanGUARD: pega la URL de tu sitio' };
+  return { url: `https://${host}` };
+}

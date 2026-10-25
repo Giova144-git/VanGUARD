@@ -64,11 +64,15 @@ const desafio = (h: ReactNode, ttl_s: number) => <>Cada visitante de {h} pasará
 const SOLO_ESE_HOST = 'Solo ese host: el resto de tu zona de Cloudflare sigue igual.';
 // Qué falta para activarlo desde aquí. Owner y admin lo leen con el enlace a Conexiones y «Copiar pasos»; el viewer y el
 // anónimo de la demo, el mismo dato en neutro y sin controles (como «añade uno en Ajustes» en la revisión de código).
+// Cloudflare conectado solo por URL (cloudflare-por-url.md): sin zona no hay Modo blindaje posible; E20/E55 dan sin_conexion.
+export const ZONA_NECESARIA = 'Bloquear IP y el modo bajo ataque necesitan una zona de Cloudflare (Zone ID). Tu sitio está conectado por URL: VanGUARD lo revisa, pero no puede cambiar su configuración.';
 const FALTA = {
   sin_conexion: { admin: 'Para activarlo desde aquí, activa el Modo blindaje', lectura: 'Sin el Modo blindaje no se puede activar desde aquí.' },
   // La página del incidente ya pinta encima la tarjeta «Activa el Modo blindaje» (incidente de IP sin blindaje): aquí no
   // se repite la llamada ni el enlace a Conexiones, solo se dice que esa misma activación sirve también para esto.
   sin_conexion_arriba: { admin: 'Con el Modo blindaje de arriba también lo activas desde aquí', lectura: 'Sin el Modo blindaje no se puede activar desde aquí.' },
+  sin_zona: { admin: ZONA_NECESARIA, lectura: ZONA_NECESARIA },
+  sin_zona_arriba: { admin: 'Como dice arriba, el modo bajo ataque también necesita una zona de Cloudflare.', lectura: 'Como dice arriba, el modo bajo ataque también necesita una zona de Cloudflare.' },
   sin_permiso: { admin: `Para activarlo desde aquí, añade ${CONFIG_RULES} a tu token de Modo blindaje`,
     lectura: `Al token de Modo blindaje le falta ${CONFIG_RULES}: no se puede activar desde aquí.` },
 };
@@ -112,10 +116,12 @@ export function vivoDe(o: UnderAttackOffer | undefined, leidaEn: number, fase: F
   return { id: ejecutada.id, host: ejecutada.target, en: ejecutada.created_at, expira: ejecutada.expires_at, fallida: false };
 }
 
-export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada, blindajeArriba = false }: {
+export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada, blindajeArriba = false, sitioPorUrl = false }: {
   org: string; incidentId: string; puedeEscribir: boolean; ejecutada: ActionPublic | undefined;
-  /** La página ya enseña «Activa el Modo blindaje» encima: con sin_conexion no se repite. */
+  /** La página ya enseña encima «Activa el Modo blindaje» (o, con sitioPorUrl, que hace falta una zona): no se repite. */
   blindajeArriba?: boolean;
+  /** La única conexión de Cloudflare de la org es de un sitio por URL: sin_conexion pide una zona, no el Modo blindaje. */
+  sitioPorUrl?: boolean;
 }) {
   const q = useOfertaBajoAtaque(org, incidentId);
   const b = useBajoAtaque(org);
@@ -288,7 +294,9 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada, blindaje
   // confirmar), lo que falta para activarlo desde aquí y los pasos para hacerlo a mano. `copiar` va tal cual al portapapeles.
   if (o.motivo === 'sin_conexion' || o.motivo === 'sin_permiso') {
     const repite = o.motivo === 'sin_conexion' && blindajeArriba;
-    const falta = o.motivo === 'sin_permiso' ? FALTA.sin_permiso : repite ? FALTA.sin_conexion_arriba : FALTA.sin_conexion;
+    const falta = o.motivo === 'sin_permiso' ? FALTA.sin_permiso
+      : sitioPorUrl ? (repite ? FALTA.sin_zona_arriba : FALTA.sin_zona)
+      : repite ? FALTA.sin_conexion_arriba : FALTA.sin_conexion;
     return marco(
       <div className={MARCO_PROPUESTA}>
         <Etiqueta texto="Modo bajo ataque · vista previa" icono={ShieldAlert} className="h-auto min-h-6 w-fit py-1 whitespace-normal" />
@@ -296,7 +304,7 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada, blindaje
         {puedeEscribir ? <>
           <p className="text-[15px] font-semibold">{falta.admin}</p>
           <div className="flex flex-wrap items-center gap-2">
-            {repite ? null : <Button asChild variant="fantasma" size="grande"><Link to={`/o/${org}/connections`}><Cable />Ir a Conexiones</Link></Button>}
+            {repite ? null : <Button asChild variant="fantasma" size="grande"><Link to={`/o/${org}/connections`}><Cable />{sitioPorUrl && o.motivo === 'sin_conexion' ? 'Añadir la zona en Conexiones' : 'Ir a Conexiones'}</Link></Button>}
             {o.copiar ? <BotonCopiar valor={o.copiar} texto="Copiar pasos para hacerlo a mano" tam="grande" className={cn(PARTE, 'min-h-14')} /> : null}
           </div>
         </> : <p className="text-sm text-muted-foreground">{falta.lectura}</p>}

@@ -11,7 +11,7 @@ import { ApiError } from '@/lib/errores';
 import { GUIAS_CONEXION } from '@/lib/guias';
 import { nombrePermiso, PERMISOS } from '@/lib/permisos';
 import Asistente, { Resultado } from './Asistente';
-import { dichoDeChecks, dichoDeError, dichoDeRechazo, EXPLICA_PERMISO, GUIA_VIGIA, OBJETIVO } from './guia-vigia';
+import { dichoDeChecks, dichoDeError, dichoDeRechazo, EXPLICA_PERMISO, GUIA_VIGIA, GUIA_VIGIA_CF_SITIO, OBJETIVO } from './guia-vigia';
 
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
 
@@ -20,11 +20,12 @@ const ADMIN: OrgActual = { ...fx.me.orgs[0]!, me: fx.me, puedeEscribir: true };
 const PROVEEDORES: Provider[] = ['supabase', 'cloudflare', 'github', 'ingest'];
 const guias = (html: string) => new Set([...html.matchAll(/data-guia="([^"]+)"/g)].map((m) => m[1]!));
 
-function pintar(provider: Provider): string {
+// `blindaje`: llega desde «Modo blindaje», que abre Cloudflare en modo «Zona»; si no, abre en modo «Sitio».
+function pintar(provider: Provider, blindaje = false): string {
   const qc = new QueryClient();
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[`/o/${ORG}/connections/${provider}`]}>
+      <MemoryRouter initialEntries={[{ pathname: `/o/${ORG}/connections/${provider}`, state: blindaje ? { blindaje: true } : null }]}>
         <OrgDePrueba org={ADMIN}>
           <Routes><Route path="/o/:orgId/connections/:provider" element={<Asistente />} /></Routes>
         </OrgDePrueba>
@@ -36,12 +37,17 @@ function pintar(provider: Provider): string {
 describe('«Que Vigía me guíe»', () => {
   for (const p of PROVEEDORES) {
     it(`${p}: el botón está y cada paso señala un data-guia que el asistente pinta`, () => {
-      const html = pintar(p);
+      const html = pintar(p, p === 'cloudflare');
       expect(html).toContain('Que Vigía me guíe');
       const hay = guias(html);
       for (const paso of GUIA_VIGIA[p].pasos) expect(hay.has(paso.objetivo), `${p}: ${paso.objetivo}`).toBe(true);
     });
   }
+
+  it('cloudflare en modo «Sitio» (el de entrada): cada paso de su guía señala algo que se pinta', () => {
+    const hay = guias(pintar('cloudflare'));
+    for (const paso of GUIA_VIGIA_CF_SITIO.pasos) expect(hay.has(paso.objetivo), paso.objetivo).toBe(true);
+  });
 
   it('los pasos numerados existen en GUIAS_CONEXION de su proveedor', () => {
     for (const p of PROVEEDORES) for (const paso of GUIA_VIGIA[p].pasos) {
@@ -51,7 +57,7 @@ describe('«Que Vigía me guíe»', () => {
   });
 
   it('textos fijos y cortos (sin plantillas ni marcadores)', () => {
-    const textos = [...Object.values(GUIA_VIGIA).flatMap((g) => [g.titulo, g.final, ...g.pasos.flatMap((x) => [x.texto, x.textoLectura ?? ''])]),
+    const textos = [...[...Object.values(GUIA_VIGIA), GUIA_VIGIA_CF_SITIO].flatMap((g) => [g.titulo, g.final, ...g.pasos.flatMap((x) => [x.texto, x.textoLectura ?? ''])]),
       ...Object.values(EXPLICA_PERMISO)].filter(Boolean);
     for (const t of textos) {
       expect(t, t).not.toMatch(/[{}<>$]/);

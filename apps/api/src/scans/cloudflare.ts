@@ -7,6 +7,7 @@ import { db } from '../lib/db.ts';
 import { ProviderError, check, codigoHttp, pedir, sondear } from '../lib/http.ts';
 import { escribirDetalleModulo } from './cobertura.ts';
 import { conexionActiva, guardarHallazgos } from './comun.ts';
+import { pasoCloudflareSitio } from './cloudflare-sitio-paso.ts';
 import { sondeoFallido, veredicto, type Sondeo } from './sondeo.ts';
 
 // Sondeo de los tokens de Cloudflare (§08.2–08.3): lectura obligatoria con zone_read y analytics_read; acciones opcional.
@@ -63,6 +64,11 @@ async function zona(token: string, zoneId: string): Promise<{ z: Zona } | { erro
       return { error: sondeoFallido('rechazado', c, { faltan: ['zone_read'],
         mensaje: 'El token no ve esta zona: en el paso 2 elige Specific zone → tu dominio' }) };
     }
+    if (code === 'invalid') {
+      // 400 (7003 «Could not route»): ese Zone ID no es una zona; lo típico es pegar el Account ID. Nunca «no respondió».
+      return { error: sondeoFallido('rechazado', c, { faltan: ['zone_read'], motivo: 'zone_not_found',
+        mensaje: 'Ese Zone ID no es una zona de Cloudflare (¿pegaste el Account ID?). Si no tienes dominio propio, conecta el sitio por URL.' }) };
+    }
     return { error: sondeoFallido('caido', c, { mensaje: 'Cloudflare no respondió. Vuelve a intentarlo en un minuto.' }) };
   }
 }
@@ -99,11 +105,15 @@ export async function probarCloudflareLectura(token: string, zoneId: string): Pr
   let analytics: PermCheck;
   let limites: { max_duration_s: number | null; max_page_size: number | null; not_older_than_s: number | null } | null = null;
   let campos: string[] = [];
-  if (typeof g0 === 'string') analytics = { permission: 'analytics_read', ok: false, required: true, error_code: g0 };
-  else if (g0.errors?.length) {
-    // Con la zona pending, un error que no es de permiso no rechaza: analytics_read queda invalid (§08.2 paso 5).
+  // G0 solo bloquea el alta por PERMISO (401/403 o un error de autorización dentro de errors[]): eso dice qué falta. Un
+  // 400, un 5xx, el plazo o un error de GraphQL que no es de permiso (p. ej. el dataset en plan Free) no es «Cloudflare
+  // no respondió»: la conexión se guarda sin analytics_read y el monitor en vivo queda sin datos hasta el próximo «Probar».
+  if (typeof g0 === 'string') {
+    const permiso = g0 === 'unauthorized' || g0 === 'forbidden';
+    analytics = { permission: 'analytics_read', ok: false, required: permiso, error_code: g0 };
+  } else if (g0.errors?.length) {
     const permiso = g0.errors.some(esPermiso);
-    analytics = { permission: 'analytics_read', ok: false, required: permiso || activa, error_code: permiso ? 'forbidden' : 'invalid' };
+    analytics = { permission: 'analytics_read', ok: false, required: permiso, error_code: permiso ? 'forbidden' : 'invalid' };
   } else {
     const s = g0.data?.viewer?.zones?.[0]?.settings?.httpRequestsAdaptiveGroups;
     limites = { max_duration_s: s?.maxDuration ?? null, max_page_size: s?.maxPageSize ?? null, not_older_than_s: s?.notOlderThan ?? null };
@@ -230,6 +240,8 @@ export async function zonaParaAuditar(token: string, zoneId: string): Promise<Zo
 export const pasoCloudflare: FnPaso = async (env, m) => {
   const conn = await conexionActiva(env, m, 'cloudflare');
   if (!conn) return { status: 'skipped', error_code: 'no_connection' };
+  // Modo sitio (cloudflare-por-url.md): sin zona; su revisión va aparte y el modo zona no cambia.
+  if (conn.meta.mode === 'url') return pasoCloudflareSitio(env, m, conn);
   const zoneId = String(conn.meta.zone_id ?? '');
   const ctx = { orgId: m.org_id, connectionId: conn.id, provider: 'cloudflare' as const, kind: 'read' as const };
   const z = await withSecret(env, db(env), ctx, (t) => zonaParaAuditar(t, zoneId));

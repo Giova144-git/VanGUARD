@@ -18,7 +18,7 @@ import { manejadorMcp, McpFallo, type Herramienta, type Prompt } from './protoco
 // que uno inexistente. Todo lo que sale pasa por redactarParaExport con IPs a /24, como el export. `subpeticiones` =
 // lecturas de la base de cada una en el peor caso, sin la base de auth y RL_API (SUBPETICIONES_BASE de protocolo.ts);
 // mcp.test.ts mide que ninguna pase de 40.
-// Única escritura, y no la decide la IA: telemetría de estado de la cola «Enviar a mi IA» (0023_fix_requests.sql). Al
+// Única escritura, y no la decide la IA: telemetría de estado de la cola «Enviar a mi IA» (0024_fix_requests.sql). Al
 // pedir la corrección de un hallazgo (get_fix_prompt o el prompt resolver_hallazgo), si el usuario lo había enviado
 // desde la web, su petición pasa de «enviado» a «arreglando» (marcarArreglando). Ningún argumento elige qué se escribe:
 // solo enviado → arreglando, del hallazgo pedido, en la org del token. No hay herramientas de escritura.

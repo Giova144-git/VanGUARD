@@ -1,5 +1,5 @@
 // Contexto de la llamada de Guardia en un ataque (asignaciones/llamada-ataque.md §B1): las 5 claves EXACTAS que acepta
-// POST {VOZ_URL}/operator/api/outbound/call (otra clave → 422). El agente las lee dentro de un saludo fijo; aquí salen
+// POST {VOZ_URL}/operator/api/attack/expect (otra clave → 422). El agente las lee dentro de un saludo fijo; aquí salen
 // cortas y por textoSeguro: nada de rutas, repo, tokens ni texto de IA, y la IP siempre recortada (203.0.x.x, como el WhatsApp).
 import type { Severity } from '@vanguard/contracts';
 import { ipCanonica, ipCorta } from '../engine/edge.ts';

@@ -9,7 +9,7 @@ vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
 vi.mock('../lib/credentials.ts', () => ({
   withSecret: async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn('tok-de-prueba'),
 }));
-const { pasoCloudflare, probarCloudflareAcciones, REF_SONDA, reglasZona, zonaParaAuditar } = await import('./cloudflare.ts');
+const { pasoCloudflare, probarCloudflareAcciones, probarCloudflareLectura, REF_SONDA, reglasZona, zonaParaAuditar } = await import('./cloudflare.ts');
 
 const ZONA = 'a'.repeat(32);
 const CONN = 'c0000000-0000-4000-8000-000000000002';
@@ -207,5 +207,52 @@ describe('probarCloudflareAcciones · sonda config_rules_edit', () => {
     const s = await probar();
     expect(s.capabilities).toEqual({ firewall_read: true });
     expect(llamadas.at(-1)).toMatchObject({ method: 'DELETE', url: `${CF}/rulesets/${RS}/rules/${'e'.repeat(32)}` });
+  });
+});
+
+// El alta en modo zona en producción daba «Cloudflare no respondió» (502): el único check obligatorio además de la
+// zona es analytics_read (GraphQL G0), y un fallo que no es de permiso lo dejaba obligatorio → veredicto 'caido'.
+describe('probarCloudflareLectura · solo un PERMISO bloquea el alta', () => {
+  let gql: () => Response;
+  beforeEach(() => {
+    gql = () => new Response(JSON.stringify({ data: { viewer: { zones: [{ settings: { httpRequestsAdaptiveGroups: { maxDuration: 86400 } } }] } } }));
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const p = new URL(url).pathname;
+      if (p.endsWith('/graphql')) return gql();
+      if (p === `/client/v4/zones/${ZONA}`) return new Response(JSON.stringify({ result: { name: 'demo.com', status: 'active', account: { id: 'b'.repeat(32) } } }));
+      if (p.endsWith('/user/tokens/verify')) return new Response(JSON.stringify({ result: { status: 'active' } }));
+      if (p.endsWith('/bot_management')) return new Response('{}', { status: 403 });   // plan Free: opcional
+      return new Response('{}', { status: 200 });
+    }));
+  });
+
+  it('todo bien → ok con analytics_read', async () => {
+    const s = await probarCloudflareLectura('tok', ZONA);
+    expect(s.estado).toBe('ok');
+    expect(s.capabilities.analytics_read).toBe(true);
+  });
+  it('GraphQL 400, 5xx o un error que no es de permiso → el alta sigue (ok) sin analytics_read', async () => {
+    for (const r of [() => new Response('{}', { status: 400 }), () => new Response('{}', { status: 503 }),
+      () => new Response(JSON.stringify({ errors: [{ message: 'unknown field httpRequestsAdaptiveGroups' }] }))]) {
+      gql = r;
+      const s = await probarCloudflareLectura('tok', ZONA);
+      expect(s.estado).toBe('ok');
+      expect(s.capabilities.analytics_read).toBe(false);
+      expect(s.checks.find((c) => c.permission === 'analytics_read')).toMatchObject({ ok: false, required: false });
+    }
+  });
+  it('GraphQL sin permiso (403 o error de autorización) → rechazado y dice que falta Zone · Analytics · Read', async () => {
+    for (const r of [() => new Response('{}', { status: 403 }),
+      () => new Response(JSON.stringify({ errors: [{ message: 'not authorized for that zone', extensions: { code: 'authz' } }] }))]) {
+      gql = r;
+      const s = await probarCloudflareLectura('tok', ZONA);
+      expect(s.estado).toBe('rechazado');
+      expect(s.mensaje).toBe('Te falta el permiso Zone · Analytics · Read en el token de lectura');
+    }
+  });
+  it('un check opcional que falla (bot_management 403 en Free) no tumba el alta', async () => {
+    const s = await probarCloudflareLectura('tok', ZONA);
+    expect(s.checks.find((c) => c.permission === 'bot_read')).toMatchObject({ ok: false, required: false });
+    expect(s.estado).toBe('ok');
   });
 });

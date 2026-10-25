@@ -270,7 +270,7 @@ nunca de un argumento, y todo lo que sale pasa por `redactarParaExport` (`apps/a
 - **Solo lectura para la IA.** Herramientas: `get_overview`, `get_repo_status`, `list_findings`, `get_finding`,
   `get_fix_prompt`, `list_fix_requests` y `list_incidents`; prompts: `resolver_hallazgo`, `resolver_criticos` y
   `resolver_enviados`. Ninguna escribe ni recibe un estado como argumento, y ninguna llama al modelo.
-- **Cola «Enviar a mi IA»** (`supabase/migrations/0023_fix_requests.sql`, `apps/api/src/rutas/fix-requests.ts`). La web
+- **Cola «Enviar a mi IA»** (`supabase/migrations/0024_fix_requests.sql`, `apps/api/src/rutas/fix-requests.ts`). La web
   la llena: el botón del detalle (y de «Ahora») crea la petición (E58, `requireAdmin`; viewer y anónimo → 403) y abre
   el enlace profundo de Claude Code con `/mcp__vanguard__resolver_hallazgo <id>`: solo viaja el UUID validado, nunca
   texto del hallazgo. Estados: `enviado → arreglando → corregido`, o `cancelado` (DELETE de E58 o hallazgo ignorado).

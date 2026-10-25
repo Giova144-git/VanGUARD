@@ -1,6 +1,6 @@
 // «Revisión automática de código» (§6.1 y F6): bandera por 404, lo que ve el viewer y que el secreto del alta no se
 // queda en el MutationCache ni en el almacenamiento tras reset(). Sin jsdom: renderToStaticMarkup y la caché a mano.
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { MutationObserver, QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -159,6 +159,31 @@ describe('TarjetaRevisionCodigo · foto de cada push (evolución F3)', () => {
     expect(html).toContain('PR #7 · ');
     expect(html).not.toContain('siguen abiertos');
     expect(html).not.toContain(NOTA);
+  });
+});
+
+// Anexo de botones de WhatsApp (avisos-whatsapp-botones.md, «FRONT»): la acción tomada desde el mensaje y el repo silenciado.
+describe('TarjetaRevisionCodigo · acciones desde WhatsApp', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-24T19:40:00.000Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+  const conAccion = (whatsapp_action: unknown) => ({ ...ESPERANDO, recent: [{ ...ESPERANDO.recent[0]!,
+    alert: { ...ESPERANDO.recent[0]!.alert, whatsapp_action: whatsapp_action as never, whatsapp_action_at: '2026-10-24T19:22:05.000Z' } }] });
+
+  it('la fila de la revisión dice lo que se hizo desde WhatsApp y a qué hora; una acción nueva, el texto por defecto', () => {
+    expect(tarjeta(ADMIN, conAccion('fix_sent'))).toContain('Arreglo enviado por WhatsApp · 15:22');
+    expect(tarjeta(VIEWER, conAccion('pr_reopened'))).toContain('PR reabierto por WhatsApp · 15:22');
+    const rara = tarjeta(ADMIN, conAccion('__proto__'));
+    expect(rara).toContain('Acción desde WhatsApp · 15:22');
+    expect(rara).not.toContain('__proto__');
+    expect(tarjeta(ADMIN, ESPERANDO)).not.toContain('desde WhatsApp');   // BACK sin el anexo: nada
+  });
+
+  it('«Silenciado hasta hh:mm» (hora de Caracas) solo con muted_until en el futuro', () => {
+    const silenciado = (muted_until: string | null) => tarjeta(VIEWER, { ...ESPERANDO, config: { ...ESPERANDO.config!, muted_until } });
+    expect(silenciado('2026-10-24T20:30:00.000Z')).toContain('Silenciado hasta 16:30');
+    expect(silenciado('2026-10-24T19:00:00.000Z')).not.toContain('Silenciado hasta');
+    expect(silenciado(null)).not.toContain('Silenciado hasta');
+    expect(tarjeta(ADMIN, ESPERANDO)).not.toContain('Silenciado hasta');
   });
 });
 

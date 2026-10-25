@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { fixtures as fx, type CodeReview } from '@vanguard/contracts';
 import {
-  chipAviso, chipBloqueo, chipEstadoBloqueo, chipHook, chipParcial, chipPr, chipRevision, sePuedeAprobar, sePuedeRepublicar, textoErrorBloqueo, textoErrorCierre,
-  textoErrorHook, textoErrorRevision, textoMotivo, textoParcialBloqueo, textoPrueba, umbralWhatsapp,
+  chipAccionWhatsapp, chipAviso, chipBloqueo, chipEstadoBloqueo, chipHook, chipParcial, chipPr, chipRevision, sePuedeAprobar, sePuedeRepublicar, textoErrorBloqueo,
+  textoErrorCierre, textoErrorHook, textoErrorRevision, textoMotivo, textoParcialBloqueo, textoPrueba, textoSilenciado, umbralWhatsapp,
 } from './revision';
 
 const RAROS = ['__proto__', 'constructor', 'toString', 'zzz', '', 7, null] as never[];
@@ -118,5 +118,33 @@ describe('chips del bloqueo de merge (§6.2)', () => {
     expect(sePuedeRepublicar(gate({ state: 'failure', error: null }))).toBe(false);
     expect(sePuedeRepublicar(gate({ state: 'success', error: 'estado_ajeno' }))).toBe(false);
     expect(sePuedeRepublicar(undefined)).toBe(false);
+  });
+});
+
+// Anexo de botones de WhatsApp (avisos-whatsapp-botones.md, «FRONT»). Horas en Caracas (UTC−4).
+describe('acciones desde WhatsApp y repo silenciado', () => {
+  const AHORA = new Date('2026-10-24T19:40:00.000Z');
+  it('cada acción con su texto y su hora; sin acción, sin chip; una desconocida o «__proto__», el texto por defecto', () => {
+    const a = (whatsapp_action: unknown, whatsapp_action_at: string | null = '2026-10-24T19:22:05.000Z') =>
+      chipAccionWhatsapp({ whatsapp_action: whatsapp_action as never, whatsapp_action_at }, AHORA);
+    expect(a('fix_sent')).toEqual({ texto: 'Arreglo enviado por WhatsApp · 15:22', rol: 'info' });
+    expect(a('issue_created')).toEqual({ texto: 'Issue creado desde WhatsApp · 15:22', rol: 'bien' });
+    expect(a('muted')).toEqual({ texto: 'Silenciado 1 h desde WhatsApp · 15:22', rol: 'neutra' });
+    expect(a('pr_reopened')?.texto).toBe('PR reabierto por WhatsApp · 15:22');
+    expect(a('pr_reopened', null)?.texto).toBe('PR reabierto por WhatsApp');
+    expect(a('fix_sent', 'no-es-fecha')?.texto).toBe('Arreglo enviado por WhatsApp');
+    expect(a(null)).toBeNull();
+    expect(a(undefined)).toBeNull();
+    expect(chipAccionWhatsapp(alerta({}), AHORA)).toBeNull();   // BACK de antes del anexo: el campo no viene
+    for (const k of RAROS.filter((x) => x !== null)) expect(a(k)?.texto).toBe('Acción desde WhatsApp · 15:22');
+  });
+  it('«Silenciado hasta hh:mm» solo con muted_until en el futuro', () => {
+    expect(textoSilenciado({ muted_until: '2026-10-24T20:30:00.000Z' }, AHORA)).toBe('Silenciado hasta 16:30');
+    expect(textoSilenciado({ muted_until: '2026-10-25T04:30:00.000Z' }, AHORA)).toBe('Silenciado hasta 25-10 00:30');
+    expect(textoSilenciado({ muted_until: '2026-10-24T19:39:59.000Z' }, AHORA)).toBeNull();
+    expect(textoSilenciado({ muted_until: null }, AHORA)).toBeNull();
+    expect(textoSilenciado({}, AHORA)).toBeNull();
+    expect(textoSilenciado({ muted_until: 'mañana' }, AHORA)).toBeNull();
+    expect(textoSilenciado(null, AHORA)).toBeNull();
   });
 });

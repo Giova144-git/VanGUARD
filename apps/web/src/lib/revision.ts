@@ -1,7 +1,7 @@
 // Textos de la revisión de código en cada push (asignaciones/revision-codigo.md §6.1 y §6.2). Todo valor del servidor se
 // lee con un mapa cerrado (deMapa) y un texto por defecto: nunca se pinta un código crudo ni «__proto__».
 import type { AlertPrefs, CodeReview, CodeReviewConfig, CommitStatusState, MergeGateConfig, MergeGateMin, Severity, UmbralAviso } from '@vanguard/contracts';
-import { decimal } from './formato';
+import { SIN_DATO, cuando, decimal } from './formato';
 import { deMapa, severidad, type Rol } from './severidad';
 
 export type Chip = { texto: string; rol: Rol };
@@ -97,6 +97,27 @@ export function chipAviso(a: CodeReview['alert']): Chip | null {
   const en = typeof a.seconds === 'number' && Number.isFinite(a.seconds) ? ` en ${decimal(a.seconds, 1)} s` : '';
   const estado = deMapa(ENTREGADO, a.delivery, 'Enviado');
   return { texto: `WhatsApp${en} · ${estado}`, rol: a.delivery === 'delivered' || a.delivery === 'read' ? 'bien' : 'info' };
+}
+
+// ── Anexo de botones de WhatsApp (avisos-whatsapp-botones.md, «FRONT») ──────────────────────────────────────────────
+// Lo último que se hizo con un botón del WhatsApp de esta revisión, con su hora de Caracas. Mapa cerrado: una acción que
+// el BACK sume después sale con el texto por defecto.
+const ACCION_WHATSAPP: Record<string, Chip> = {
+  fix_sent: { texto: 'Arreglo enviado por WhatsApp', rol: 'info' },
+  issue_created: { texto: 'Issue creado desde WhatsApp', rol: 'bien' },
+  muted: { texto: 'Silenciado 1 h desde WhatsApp', rol: 'neutra' },
+  pr_reopened: { texto: 'PR reabierto por WhatsApp', rol: 'neutra' },
+};
+export function chipAccionWhatsapp(a: Pick<CodeReview['alert'], 'whatsapp_action' | 'whatsapp_action_at'>, ahora = new Date()): Chip | null {
+  if (a.whatsapp_action == null) return null;
+  const c = deMapa(ACCION_WHATSAPP, a.whatsapp_action, { texto: 'Acción desde WhatsApp', rol: 'info' });
+  const hora = cuando(a.whatsapp_action_at, ahora);
+  return hora === SIN_DATO ? c : { ...c, texto: `${c.texto} · ${hora}` };
+}
+// «Silenciar repo 1 h»: sin avisos de revisión de este repo hasta muted_until. Solo mientras esté en el futuro.
+export function textoSilenciado(c: Pick<CodeReviewConfig, 'muted_until'> | null | undefined, ahora = new Date()): string | null {
+  const t = typeof c?.muted_until === 'string' ? Date.parse(c.muted_until) : NaN;
+  return Number.isFinite(t) && t > ahora.getTime() ? `Silenciado hasta ${cuando(c!.muted_until, ahora)}` : null;
 }
 
 // ── Bloqueo de merge con críticos (bloqueo-merge-criticos.md §6.1, §6.2 y §6.4; anexo bloqueo-merge-cierre-pr.md) ──

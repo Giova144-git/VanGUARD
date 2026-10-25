@@ -1,7 +1,7 @@
 // Tarjeta de un proveedor en Conexiones (S14 §14.10): estado, ••••last4, alcances y meta; probar, quitar y reconectar.
 // GitHub admite varios repos por org (varias-codebases §6.1): una línea por conexión de lectura, con el repo de título.
 import { Fragment, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { ExternalLink, KeyRound, RotateCw } from 'lucide-react';
 import { MAX_REPOS_GITHUB, type ConnectionPublic, type ConnectionTest, type Provider, type ProviderErrorCode } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
@@ -59,6 +59,23 @@ function urlRevocar(u: string | null): string | null {
 
 type Quitada = { en: string; revocar: string | null; nombre: string };
 
+// El aviso de «Quitar» se elige por proveedor Y tipo (bloqueo-merge-criticos.md §6.3): el token de estados del bloqueo de
+// merge también es de GitHub kind 'action' y no bloquea IPs. `conEstados`: es el repo del token de estados, que cae con él.
+export function avisoQuitar(c: Pick<ConnectionPublic, 'provider' | 'kind'>, conEstados = false): string {
+  if (c.kind === 'action' && c.provider === 'cloudflare') return 'Sin este token no podrás bloquear IPs desde VanGUARD.';
+  if (c.kind === 'action' && c.provider === 'github')
+    return 'Sin este token no marcamos ✗ en GitHub ni cerramos los PR con críticos. Si GitHub exige el check “VanGUARD”, los pull requests quedarán esperando.';
+  return `Dejamos de mirar este servicio; los hallazgos se conservan.${conEstados ? ' También quitamos el token de estados.' : ''}`;
+}
+
+// ¿Es este el repo del token de estados? Por meta.repo_id si los dos lo traen; si no, por nombre en minúsculas
+// (varias-codebases §2.6, punto 6).
+function mismoRepo(lectura: ConnectionPublic, estados: ConnectionPublic) {
+  const a = lectura.meta.repo_id, b = estados.meta.repo_id;
+  if (typeof a === 'number' && typeof b === 'number') return a === b;
+  return !!nombreRepo(lectura) && nombreRepo(lectura).toLowerCase() === nombreRepo(estados).toLowerCase();
+}
+
 // «Quitado · 21:41 · Revoca también el token en {proveedor} ›» (S14 §14.10). Vive en la tarjeta: la línea desaparece al refrescar.
 function AvisoQuitada({ q }: { q: Quitada }) {
   const url = urlRevocar(q.revocar);
@@ -71,8 +88,8 @@ function AvisoQuitada({ q }: { q: Quitada }) {
   );
 }
 
-// Una línea de conexión: lectura o modo blindaje.
-function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: ReactNode; alQuitar: (q: Quitada) => void }) {
+// Una línea de conexión: lectura, modo blindaje o token de estados del bloqueo de merge.
+function LineaConexion({ c, titulo, alQuitar, conEstados }: { c: ConnectionPublic; titulo?: ReactNode; alQuitar: (q: Quitada) => void; conEstados?: boolean }) {
   const org = useOrg();
   const navegar = useNavigate();
   const probar = useProbarConexion(org.id);
@@ -111,10 +128,12 @@ function LineaConexion({ c, titulo, alQuitar }: { c: ConnectionPublic; titulo?: 
         ) : null}
         {c.status !== 'active' ? (
           // GitHub: el asistente llega con el repo puesto y E8 reconecta la MISMA conexión (mismo id, hallazgos y revisión).
-          <Button variant="principal" disabled={!!solo} onClick={() => navegar(`/o/${org.id}/connections/${c.provider}${c.provider === 'github' && nombreRepo(c) ? `?repo=${encodeURIComponent(nombreRepo(c))}` : ''}`)}><KeyRound />Reconectar</Button>
+          // El token de estados no pasa por el asistente: se pega de nuevo en Codebase (E53 rota el de la misma conexión).
+          <Button variant="principal" disabled={!!solo} onClick={() => navegar(c.provider === 'github' && c.kind === 'action' ? `/o/${org.id}/codebase#revision-codigo`
+            : `/o/${org.id}/connections/${c.provider}${c.provider === 'github' && nombreRepo(c) ? `?repo=${encodeURIComponent(nombreRepo(c))}` : ''}`)}><KeyRound />Reconectar</Button>
         ) : null}
         <ConfirmarEnSitio verbo="Quitar" deshabilitado={solo}
-          aviso={c.kind === 'action' ? 'Sin este token no podrás bloquear IPs desde VanGUARD.' : 'Dejamos de mirar este servicio; los hallazgos se conservan.'}
+          aviso={avisoQuitar(c, conEstados)}
           onConfirmar={async () => { const r = await quitar.mutateAsync(c.id); alQuitar({ en: new Date().toISOString(), revocar: r.revocar, nombre }); }} />
       </div>
       {solo ? <span className="text-[12.5px] text-texto-3">{solo}</span> : null}
@@ -150,9 +169,15 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
       {quitada ? <AvisoQuitada q={quitada} /> : null}
       {lectura && proveedor === 'github' ? <>
         {lecturasGithub(conexiones).map((c) => (
-          <LineaConexion key={c.id} c={c} alQuitar={setQuitada}
+          <LineaConexion key={c.id} c={c} alQuitar={setQuitada} conEstados={!!accion && mismoRepo(c, accion)}
             titulo={<bdi dir="ltr" className="font-mono break-all">{sinBidi(nombreRepo(c) || c.label)}</bdi>} />
         ))}
+        {/* Bloqueo de merge (bloqueo-merge-criticos.md §6.3): el token de estados se da de alta en Codebase (E53), no aquí. */}
+        {accion
+          ? <LineaConexion c={accion} titulo="Estados de commit (bloqueo de merge)" alQuitar={setQuitada} />
+          : <p className="text-sm text-muted-foreground">
+              Bloqueo de merge con críticos: se configura en <Link to={`/o/${org.id}/codebase#revision-codigo`} className="font-medium text-foreground underline underline-offset-4">Codebase → Revisión automática</Link>.
+            </p>}
         <div className="flex flex-col gap-1">
           <div>
             <Button variant="secundaria" disabled={!org.puedeEscribir || !!tope} onClick={() => navegar(`/o/${org.id}/connections/github`)}>

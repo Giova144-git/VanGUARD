@@ -55,7 +55,9 @@ const clave = (id = INC) => ['org', ORG, 'under-attack', id];
 const ACTIVO = { action_id: 'ac000000-0000-4000-8000-000000000001', scope: 'host' as const, target: 'demo.officialvanguard.com',
   created_at: '2026-10-24T19:12:00.000Z', expires_at: '2099-10-24T19:42:00.000Z', retirada_fallida: false };
 
-const nuevaCache = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+// retryOnMount: false: si no, el observador que monta cada pintado ve un error sin datos como «cargando» (lo reintentaría
+// al montar) y las pruebas de la bandera pasarían sin llegar a pintar el error (BajoAtaque.bandera.test.tsx).
+const nuevaCache = () => new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false } } });
 function tarjeta(org: OrgActual, oferta: UnderAttackOffer | ApiError | QueryClient, ejecutada?: ActionPublic) {
   const qc = oferta instanceof QueryClient ? oferta : nuevaCache();
   if (oferta instanceof ApiError) qc.getQueryCache().build(qc, { queryKey: clave() }).setState({ status: 'error', error: oferta, fetchStatus: 'idle' });

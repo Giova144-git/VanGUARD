@@ -38,8 +38,8 @@ function useFallosSeguidos(q: UseQueryResult<unknown>) {
 
 function MarcaModulo({ org, modulo }: { org: string; modulo: Module }) {
   const q = useEstadoModulo(org, modulo);
-  const visto = useOverview(org).data?.module_checks?.[modulo];
-  return <MarcasContador contador={q.data?.contador} sinRevisar={visto !== undefined && visto !== 'done'} />;
+  const ov = useOverview(org).data;
+  return <MarcasContador contador={q.data?.contador} sinRevisar={!!ov && ov.module_checks?.[modulo] !== 'done'} />;
 }
 
 function ItemRiel({ entrada, compacto, marca, alNavegar }: { entrada: EntradaNav; compacto: boolean; marca?: ReactNode; alNavegar?: () => void }) {

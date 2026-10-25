@@ -159,7 +159,7 @@ export default function PaginaResumen() {
         {!o ? <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>
           : o.ahora.length === 0
             // Sin puntaje no hay auditoría terminada: nada se miró, así que no hay ✓ (UX P0-1). La hora, solo arriba.
-            ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">{o.score == null ? 'Sin revisar: aún no hay ninguna auditoría terminada.' : '0 ✓ Nada que atender'}</div>
+            ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">{o.score != null && Object.values(o.module_checks ?? {}).includes('done') ? '0 ✓ Nada que atender' : 'Sin revisar: aún no hay ninguna auditoría terminada.'}</div>
             : <ul className="overflow-hidden rounded-xl border bg-card">{o.ahora.map((a) => <FilaAhora key={`${a.kind}-${a.id}`} item={a} org={org.id} repo={a.kind === 'finding' ? repoDe(a.connection_id) : null} />)}</ul>}
       </section>
 

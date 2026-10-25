@@ -95,3 +95,23 @@ describe('Incidentes · «vigilando» solo con tráfico reciente', async () => {
     expect(ver(new Date(Date.now() - 60_000).toISOString())).toContain('vigilando');
   });
 });
+
+describe('PantallaModulo · module_checks manda', async () => {
+  const { PantallaModulo } = await import('@/componentes/vg/PantallaModulo');
+  const { EstadoModulo } = await import('@vanguard/contracts');
+  const ver = (module_checks: Overview['module_checks']) => {
+    const qc = new QueryClient();
+    qc.setQueryData(['org', ORG, 'overview'], { ...Overview.parse(fx.overview), module_checks });
+    qc.setQueryData(['org', ORG, 'connections'], fx.connections);
+    qc.setQueryData(['org', ORG, 'module', 'supabase'], { ...EstadoModulo.parse(fx.moduleState.supabase), ahora: [] });
+    return envolver(<PantallaModulo modulo="supabase" proveedor="supabase" />, qc);
+  };
+  it('sin el campo o sin la clave: «Sin revisar», aunque los chequeos digan comprobado', () => {
+    expect(ver(undefined)).toContain('Sin revisar');
+    expect(ver({ codebase: 'done' })).toContain('Sin revisar');
+    expect(ver({ supabase: 'fallido' })).toContain('Sin revisar');
+  });
+  it('con done: «0 ✓ Nada que atender»', () => {
+    expect(ver({ supabase: 'done' })).toContain('0 ✓ Nada que atender');
+  });
+});

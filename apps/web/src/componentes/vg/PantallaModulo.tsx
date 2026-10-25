@@ -51,10 +51,10 @@ export function PantallaModulo({ modulo, proveedor, arriba, children }: {
   const caida = proveedor === 'github' ? repos.some((x) => x.status !== 'active') : !!c && c.status !== 'active';
   const filtro = params.get('filtro');
   const est = q.data;
-  // UX P0-1: «✓ Nada que atender» solo si el módulo se miró en la última auditoría terminada. Lo dice
-  // Overview.module_checks (6782e5b); sin él, que ningún chequeo esté comprobado.
-  const visto = useOverview(org.id).data?.module_checks?.[modulo];
-  const sinRevisar = visto !== undefined ? visto !== 'done' : !!est && est.checks.length > 0 && !est.checks.some((x) => x.comprobado);
+  // UX P0-1: «✓ Nada que atender» solo si Overview.module_checks (6782e5b) dice 'done' para este módulo; sin el campo o sin
+  // la clave, «Sin revisar». Mientras llega el Overview, que ningún chequeo esté comprobado.
+  const ov = useOverview(org.id).data;
+  const sinRevisar = ov ? ov.module_checks?.[modulo] !== 'done' : !!est && est.checks.length > 0 && !est.checks.some((x) => x.comprobado);
   // L3: la chapa roja de la conexión lleva al lado la acción que la arregla.
   const arreglo = !proveedor ? null
     : est?.error === 'token_invalido' || caida ? 'Reconectar'

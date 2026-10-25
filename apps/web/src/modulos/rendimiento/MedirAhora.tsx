@@ -4,12 +4,13 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Gauge } from 'lucide-react';
+import { Cloud, Gauge } from 'lucide-react';
+import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
-import { usePerfRuns } from '@/lib/consultas';
+import { useConexiones, usePerfRuns } from '@/lib/consultas';
 import { esApiError } from '@/lib/errores';
 import { TEXTO_ROL } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
@@ -34,6 +35,7 @@ const ErrorCampo = ({ id, texto }: { id: string; texto: string | undefined }) =>
 export function MedirAhora() {
   const org = useOrg();
   const q = usePerfRuns(org.id);
+  const conexiones = useConexiones(org.id);
   const qc = useQueryClient();
   const navegar = useNavigate();
   const urls = useMemo(() => urlsConocidas(q.data), [q.data]);
@@ -50,6 +52,9 @@ export function MedirAhora() {
   if (medirOculto(org.id) || (q.isError && esApiError(q.error) && q.error.status === 404)) return null;
   const admin = org.puedeEscribir && (org.role === 'owner' || org.role === 'admin');
   const ayuda = org.is_demo || org.me.user.is_anonymous ? 'Solo un admin puede medir. Estás viendo la demo.' : 'Solo un admin puede medir.';
+  // Sin zona de Cloudflare activa (read o action) el servidor no sabe que el dominio es tuyo (assertMeasurableUrl, S10
+  // §10.9). El botón sigue: quien decide es el servidor (también cuentan los dominios verificados).
+  const sinZonas = Array.isArray(conexiones.data) && !conexiones.data.some((c) => c.provider === 'cloudflare' && c.status === 'active');
 
   const enviar = async (ev: FormEvent) => {
     ev.preventDefault();
@@ -73,6 +78,12 @@ export function MedirAhora() {
         <h3 id="t-medir" className="text-[17px] font-semibold">Medir ahora</h3>
         <p className="text-sm text-muted-foreground">Lighthouse vía PageSpeed Insights: 3 repeticiones, ~1 min. Solo dominios de tus zonas de Cloudflare.</p>
       </div>
+      {sinZonas ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3">
+          <p className="min-w-0 flex-1 basis-64 text-[15px]">Para medir necesitamos saber que el dominio es tuyo: conecta tu zona de Cloudflare.</p>
+          {admin ? <Button asChild variant="secundaria" size="fila"><Link to={`/o/${org.id}/connections/cloudflare`}><Cloud />Conectar Cloudflare</Link></Button> : null}
+        </div>
+      ) : null}
       <form onSubmit={enviar} noValidate className="flex flex-col gap-4">
         {urls.length > 1 ? <Grupo etiqueta="URL ya medidas" valor={actual} desactivado={!admin}
           opciones={urls.map((u) => [u, sinBidi(u.replace(/^https:\/\//, ''))])} onCambio={elegirUrl} /> : null}

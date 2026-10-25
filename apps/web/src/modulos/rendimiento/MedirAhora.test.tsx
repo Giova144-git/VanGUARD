@@ -72,6 +72,19 @@ describe('Medir ahora · quién y qué trae por defecto', () => {
     expect(html).toContain('value=""');
   });
 
+  it('sin zona de Cloudflare activa: lo dice y el admin tiene «Conectar Cloudflare»; el viewer, solo el texto', () => {
+    const sinCf = (fx.connections as { provider: string }[]).filter((c) => c.provider !== 'cloudflare');
+    const datos = (org: OrgActual): [QueryKey, unknown][] => [...conRuns(RUNS, org).filter(([k]) => k[2] !== 'connections'), [['org', org.id, 'connections'], sinCf]];
+    const admin = pintar(<MedirAhora />, { datos: datos(ADMIN) });
+    expect(admin).toContain('Para medir necesitamos saber que el dominio es tuyo: conecta tu zona de Cloudflare.');
+    expect(admin).toContain(`href="/o/${ORG}/connections/cloudflare"`);
+    expect(botonMedir(admin)).not.toContain('disabled=""');                       // quien decide es el servidor
+    const viewer = pintar(<MedirAhora />, { org: VIEWER, datos: datos(VIEWER) });
+    expect(viewer).toContain('conecta tu zona de Cloudflare');
+    expect(viewer).not.toContain('/connections/cloudflare');
+    expect(pintar(<MedirAhora />, { datos: conRuns(RUNS) })).not.toContain('conecta tu zona de Cloudflare');
+  });
+
   it('varias URL conocidas: la más reciente por defecto y las demás a un toque; nunca una con controles bidi', () => {
     const otra = RUNS.map((r) => ({ ...r, id: r.id.replace(/.$/, 'f'), url: 'https://www.officialvanguard.com/precios', created_at: '2026-10-24T22:00:00.000Z' }));
     const bidi = { ...RUNS[0]!, url: `https://demo.officialvanguard.com/${String.fromCodePoint(0x202e)}x`, created_at: '2026-10-25T00:00:00.000Z' };

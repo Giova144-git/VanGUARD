@@ -4,9 +4,11 @@ import { useMemo } from 'react';
 import { RepoFullName, type ConnectionPublic } from '@vanguard/contracts';
 import { useConexiones } from './consultas';
 
-// meta.repo_full_name lo escribe el sondeo de E8; fuera de contrato (no es texto) cuenta como «sin nombre».
+// meta.repo_full_name lo escribe el sondeo de E8; fuera de contrato (no es texto, o la conexión llega sin meta: api() en
+// producción deja pasar el cuerpo) cuenta como «sin nombre». Resumen, auditoría y el detalle del hallazgo no leían meta
+// antes de varias codebases: aquí no pueden caerse por él.
 export const nombreRepo = (c: Pick<ConnectionPublic, 'meta'>): string =>
-  typeof c.meta.repo_full_name === 'string' ? c.meta.repo_full_name : '';
+  typeof c.meta?.repo_full_name === 'string' ? c.meta.repo_full_name : '';
 const clave = (c: ConnectionPublic) => nombreRepo(c).toLowerCase() || c.id;   // sin nombre: cada una es su propio repo
 
 export const lecturasGithub = (cx: readonly ConnectionPublic[] | undefined): ConnectionPublic[] =>

@@ -209,10 +209,12 @@ function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string
 }
 
 // Estado de la wiki de un repo en la lista (§4.1): «Wiki lista · commit abc1234 · hace 2 h», «Generando…» o «Sin wiki».
+// Sin una primera lectura buena (404, 500, red o forma fuera de contrato) no se promete nada: «—», como cargando; un
+// fallo después de una lectura buena deja lo último que hubo. api() en producción deja pasar un cuerpo fuera de contrato:
+// uno que no es lista cuenta como sin lectura y una entrada que no es objeto se salta (no tumban la página de la wiki).
 function EstadoWikiRepo({ q, repo }: { q: ReturnType<typeof useWikiRuns>; repo: string }) {
-  if (q.isError) return <span className="text-sm text-muted-foreground">No pudimos leer sus wikis</span>;
-  if (!q.data) return <span className="text-texto-3">—</span>;
-  const runs = q.data.filter((r) => mismoRepo(r.repo_full_name, repo));
+  if (!Array.isArray(q.data)) return <span className="text-texto-3">—</span>;
+  const runs = q.data.filter((r) => !!r && typeof r === 'object' && mismoRepo(r.repo_full_name, repo));
   if (runs.some((r) => r.status === 'queued' || r.status === 'running')) return <Etiqueta texto="Generando…" rol="info" />;
   const lista = wikiAnterior(runs, { repo_full_name: repo });
   if (!lista) return <Etiqueta texto="Sin wiki" />;
@@ -317,8 +319,14 @@ export default function PaginaWiki() {
   const ultima = repoElegido && !crudo ? wikiAnterior(historial.data ?? [], { repo_full_name: repoElegido }) : null;
   const ultimaId = ultima?.id ?? null;
   const runId = esId(crudo) ? crudo : crudo ? null : ultimaId;
+  // La que abrió la página (no la URL ni un clic): sin una primera lectura buena de E44 (404, 500, red o forma fuera de
+  // contrato) no se promete nada, ni ErrorBloque ni «no existe», como antes de abrirse sola.
+  const [abiertaSola, setAbiertaSola] = useState<string | null>(null);
+  const sola = !!runId && runId === (crudo ? abiertaSola : ultimaId);
   useEffect(() => {
-    if (ultimaId && !crudo) setParams((p) => { const n = new URLSearchParams(p); n.set('run', ultimaId); return n; }, { replace: true });
+    if (!ultimaId || crudo) return;
+    setAbiertaSola(ultimaId);
+    setParams((p) => { const n = new URLSearchParams(p); n.set('run', ultimaId); return n; }, { replace: true });
   }, [ultimaId, crudo, setParams]);
   const elegirRepo = (r: string) => {
     const p = new URLSearchParams(params);
@@ -413,11 +421,12 @@ export default function PaginaWiki() {
       {generar.isError ? <p role="alert" className="text-sm text-mal">{mensajeDe(generar.error)}</p> : null}
 
       {run.data && run.data.status !== 'succeeded' ? <Progreso run={run.data} puedeEscribir={org.puedeEscribir} estancada={estancada} alReintentar={() => reintentar(run.data!)} /> : null}
-      {(crudo && !runId) || (run.isError && esApiError(run.error) && run.error.status === 404)
-        ? <p className="text-[15px] text-muted-foreground">Esta wiki no existe o no es de esta organización.</p>
-        : run.isError ? <ErrorBloque error={run.error} onReintentar={() => run.refetch()} /> : null}
+      {sola && !run.data ? null
+        : (crudo && !runId) || (run.isError && esApiError(run.error) && run.error.status === 404)
+          ? <p className="text-[15px] text-muted-foreground">Esta wiki no existe o no es de esta organización.</p>
+          : run.isError ? <ErrorBloque error={run.error} onReintentar={() => run.refetch()} /> : null}
       {doc.data ? <Documento d={doc.data} /> : run.data?.status === 'succeeded' && doc.isPending ? <p className="text-texto-3" aria-busy="true">—</p> : null}
-      {doc.isError ? <ErrorBloque error={doc.error} onReintentar={() => doc.refetch()} /> : null}
+      {doc.isError && !(sola && !doc.data) ? <ErrorBloque error={doc.error} onReintentar={() => doc.refetch()} /> : null}
 
       <section className="flex flex-col gap-3" aria-labelledby="t-historial">
         <h3 id="t-historial" className="text-[17px] font-semibold">Historial{consulta.repo ? <span className="font-mono text-[13px] font-normal break-all text-muted-foreground"> · <bdi dir="ltr">{sinBidi(consulta.repo)}</bdi></span> : null}</h3>

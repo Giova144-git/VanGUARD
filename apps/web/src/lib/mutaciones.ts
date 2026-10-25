@@ -137,10 +137,12 @@ export function tomarSecreto(org: string, connectionId: string): string | null {
 export const opcionesGuardarRevision = (org: string, qc: QueryClient) => ({
   gcTime: 0,
   mutationFn: (body: CodeReviewPut) => api(`/api/orgs/${org}/code-review`, { method: 'PUT', body, esquema: CodeReviewSaved }),
-  onSuccess: (r: CodeReviewSaved) => {
-    if (typeof r.webhook_secret === 'string') secretos.set(`${org}:${r.config.connection_id}`, r.webhook_secret);
+  // La conexión sale de lo PEDIDO, no de r.config: api() en producción deja pasar una respuesta sin config y leerla
+  // aquí haría fallar una mutación que el servidor ya guardó (y perdería el secreto, que solo llega una vez).
+  onSuccess: (r: CodeReviewSaved, body: CodeReviewPut) => {
+    if (typeof r?.webhook_secret === 'string') secretos.set(`${org}:${body.connection_id}`, r.webhook_secret);
     // setQueryData usa la clave EXACTA (la de la pestaña de ese repo); invalidateQueries, abajo, va por prefijo.
-    qc.setQueryData<CodeReviewState>(['org', org, 'revision', r.config.connection_id], (s) => (s && r.config ? { ...s, config: r.config } : s));
+    qc.setQueryData<CodeReviewState>(['org', org, 'revision', body.connection_id], (s) => (s && r?.config ? { ...s, config: r.config } : s));
   },
   onSettled: () => { void qc.invalidateQueries({ queryKey: ['org', org, 'revision'] }); },
 });

@@ -7,7 +7,7 @@ vi.mock('./api', () => ({ api: vi.fn() }));
 
 const { AVISO_SANDBOX, avisoPendiente, DEMASIADAS, enviarSalida, ErrorDemo, latir, LATIDO_MS, NO_DISPONIBLE, programarLatido, recordarAviso, RUTA_LATIDO, unirseADemo,
   avisarCierre, escucharCierre, latirAlCargar, recordarCopias, copiasRecordadas, destinoAlCaducar, permitirRecrear, confirmarCaducada, RUTA_RECREAR, RUTA_NO_RECREADA,
-  orgDeRuta, esCopiaRecordada, vieneDeCaducada, AVISO_CADUCADA } = await import('./sandbox');
+  orgDeRuta, esCopiaRecordada, vieneDeCaducada, AVISO_CADUCADA, comoDemoJoin } = await import('./sandbox');
 
 const pestana = () => {
   const m = new Map<string, string>();
@@ -201,5 +201,23 @@ describe('recrear la copia si caducó', () => {
     expect(muerta).toHaveBeenCalledTimes(1);
     expect(await confirmarCaducada(ORG, vi.fn().mockRejectedValue(new ApiError(401, 'unauthorized', 'x')))).toBe(true);
     expect(await confirmarCaducada(ORG, vi.fn().mockResolvedValue(undefined))).toBe(false);
+  });
+});
+
+// E4 validado a mano (lib/sandbox no puede cargar el contrato en tiempo de ejecución): la misma forma que DemoJoin.
+describe('comoDemoJoin', () => {
+  it('uuid válido: devuelve org_id y, si es booleano, sandbox', () => {
+    expect(comoDemoJoin({ org_id: ORG })).toEqual({ org_id: ORG });
+    expect(comoDemoJoin({ org_id: ORG, sandbox: true })).toEqual({ org_id: ORG, sandbox: true });
+    expect(comoDemoJoin({ org_id: ORG.toUpperCase(), sandbox: false })).toEqual({ org_id: ORG.toUpperCase(), sandbox: false });
+  });
+  it('sin org_id, con un org_id que no es uuid o con una respuesta que no es objeto: «no disponible»', () => {
+    for (const x of [{}, { sandbox: true }, { org_id: 'no-es-uuid' }, { org_id: `${ORG}x` }, { org_id: 7 }, null, undefined, 'texto', [ORG]]) {
+      expect(() => comoDemoJoin(x)).toThrow(ErrorDemo);
+      expect(() => comoDemoJoin(x)).toThrow(NO_DISPONIBLE);
+    }
+  });
+  it('un sandbox que no es booleano se descarta, sin tumbar la entrada', () => {
+    for (const sandbox of ['true', 1, null, {}]) expect(comoDemoJoin({ org_id: ORG, sandbox })).toEqual({ org_id: ORG });
   });
 });

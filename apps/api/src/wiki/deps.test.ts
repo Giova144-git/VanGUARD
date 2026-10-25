@@ -152,10 +152,11 @@ describe('conTokenGithub · el PAT solo dentro de withSecret', () => {
   const admin = (d: ReturnType<typeof dbDoble>) => d.client as unknown as SupabaseClient;
   const env = {} as CloudflareBindings;
 
-  it('sin connection_id: fn(undefined), sin tocar la base ni withSecret', async () => {
+  it('sin connection_id: fn(undefined, null), sin tocar la base ni withSecret', async () => {
     const d = doble();
     const fn = vi.fn(async (t: string | undefined) => t ?? 'publico');
     expect(await conTokenGithub(env, admin(d), ORG, undefined, 'acme/publico', fn)).toBe('publico');
+    expect(fn).toHaveBeenCalledWith(undefined, null);   // sin conexión, la wiki lleva el nombre canónico (E40/E41)
     expect(d.ops).toHaveLength(0);
     expect(cred.withSecret).not.toHaveBeenCalled();
   });
@@ -186,8 +187,8 @@ describe('conTokenGithub · el PAT solo dentro de withSecret', () => {
 
   it('B8: tiene que ser la conexión del repo pedido: otras mayúsculas valen; otro repo o meta sin repo → el mismo 404', async () => {
     const d = doble();
-    const r = await conTokenGithub(env, admin(d), ORG, CONN, 'ACME/tienda', async (t) => (t === PAT ? 'vale' : 'otro'));
-    expect(r).toBe('vale');
+    const r = await conTokenGithub(env, admin(d), ORG, CONN, 'ACME/tienda', async (t, repo) => (t === PAT ? repo : 'otro'));
+    expect(r).toBe('Acme/Tienda');   // fn recibe el nombre tal como está en la conexión: E40/E41 nombran la wiki con él
     expect(d.ops[0]?.columns).toContain('meta');   // la misma subpetición, con meta
     const SIN_REPO = 'c0aa0000-0000-4000-8000-000000000005';
     const textos = new Set<string>();

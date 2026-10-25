@@ -120,7 +120,8 @@ beforeEach(() => {
           ? { id: CONN, provider: 'github', kind: 'read', status: 'active', meta: { repo_full_name: repoConexion } } : null };
       }
       if (op.table === 'connections') {
-        return { data: [{ id: CONN, meta: { repo_full_name: 'Acme/Tienda' } }, { id: OTRA_CONN, meta: { repo_full_name: 'acme/otro' } }] };
+        return { data: [{ id: CONN, meta: { repo_full_name: repoConexion } },
+          { id: OTRA_CONN, meta: { repo_full_name: 'acme/otro' } }] };
       }
       if (op.table === 'scan_runs') return { data: auditorias };
       if (op.table === 'findings') {
@@ -271,6 +272,28 @@ describe('commit y hallazgos de la corrida', () => {
     expect(urls.map((u) => u.url)).not.toContain(`${API}/repos/acme/tienda/commits/main`);
     expect((fila.state as { meta: { branch: string; commit_sha: string } }).meta).toMatchObject({ branch: 'main', commit_sha: SHA });
     expect([fila.branch, fila.commit_sha]).toEqual(['main', SHA]);
+  });
+
+  it('repo renombrado: fila y conexión con el nombre de antes (E41); se sigue el 301 y la corrida termina', async () => {
+    const d = conIA();
+    fila.repo_full_name = 'acme/antes';
+    repoConexion = 'acme/antes';
+    github = (url) => {
+      if (url === `${API}/repos/acme/antes`) {
+        return new Response(null, { status: 301, headers: { location: `${API}/repositories/42` } });
+      }
+      return githubOk(url === `${API}/repositories/42` ? `${API}/repos/acme/tienda` : url);   // hoy se llama acme/tienda
+    };
+    const { medidas } = await correrCola(d, [msg('arbol')]);
+    expect(urls.slice(0, 3).map((u) => u.url)).toEqual([`${API}/repos/acme/antes`, `${API}/repositories/42`,
+      `${API}/repos/acme/tienda/commits/${SHA}`]);
+    expect((fila.state as { meta: { full_name: string } }).meta.full_name).toBe('acme/tienda');   // árbol y archivos: canónico
+    // arbol y area vuelven a comprobar la conexión con fila.repo_full_name: casa, nada queda en conexion_no_encontrada.
+    expect(fila.status).toBe('succeeded');
+    expect(fila.repo_full_name).toBe('acme/antes');
+    for (const x of medidas) expect(x.sub, x.paso).toBeLessThanOrEqual(40);
+    // Los hallazgos del repo se encuentran por la conexión (B7), aunque GitHub ya lo llame de otra forma.
+    expect((llamadasIA('wiki_sintesis')[0]?.[1] as { usuario: string }).usuario).toContain('Clave en el código');
   });
 
   it('sin commit en la fila, resuelve la rama (o la principal)', async () => {

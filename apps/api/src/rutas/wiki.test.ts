@@ -676,6 +676,65 @@ describe('E41 · POST /api/orgs/:org/wiki/runs', () => {
   });
 });
 
+// B8 con un repo renombrado en GitHub: la conexión conserva en meta.repo_full_name el nombre de antes (ni E9 ni
+// vg_rotate_secret lo reescriben) y GitHub responde a ese nombre con un 301 hacia el repo, que ya se llama acme/nuevo.
+describe('B8 · repo renombrado en GitHub', () => {
+  const CONN_REN = 'c0aa0000-0000-4000-8000-000000000006';
+  function githubRenombrado(url: string): Response {
+    const u = url.replace(`${API}/repos/ACME/Antes`, `${API}/repos/acme/antes`);   // GitHub no distingue mayúsculas
+    if (u === `${API}/repos/acme/antes`) {
+      return new Response(null, { status: 301, headers: { location: `${API}/repositories/42` } });
+    }
+    if (u === `${API}/repositories/42`) {
+      return json({ full_name: 'acme/nuevo', description: null, language: null, private: true, default_branch: 'main' });
+    }
+    if (u === `${API}/repos/acme/nuevo/commits/main`) return new Response(SHA);
+    if (u === `${API}/repos/acme/nuevo/git/trees/${SHA}?recursive=1`) return json({ sha: SHA, truncated: false, tree: ARBOL });
+    return new Response('no encontrado', { status: 404 });
+  }
+  beforeEach(() => {
+    CONEXIONES.push({ id: CONN_REN, org_id: ORG, provider: 'github', kind: 'read', status: 'active',
+      meta: { repo_full_name: 'acme/antes' } });
+    fetchMock.mockImplementation(async (u: string) => githubRenombrado(String(u)));
+  });
+  afterEach(() => { CONEXIONES.splice(CONEXIONES.findIndex((c) => c.id === CONN_REN), 1); });
+  const post = (ruta: string, body: unknown) => app.request(`https://officialvanguard.com/api/orgs/${ORG}/wiki/${ruta}`, {
+    method: 'POST', headers: { authorization: 'Bearer ana', 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }, envDoble({ VG_ENV: 'local' }).env);
+
+  it('flujo del FRONT: E40 da el nombre de la conexión, E41 lo guarda en la fila y E43 ?repo= la encuentra', async () => {
+    const r = await post('estimate', { repo_full_name: 'acme/antes', connection_id: CONN_REN });
+    expect(r.status).toBe(200);
+    const est = WikiEstimate.parse(await r.json());
+    expect(est.repo_full_name).toBe('acme/antes');   // el FRONT manda este nombre a E41
+    // El 301 se siguió: el árbol se leyó con el nombre canónico, con el PAT.
+    expect(fetchMock.mock.calls.map(([u]) => String(u))).toContain(`${API}/repos/acme/nuevo/git/trees/${SHA}?recursive=1`);
+    expect(cabeceras(0).Authorization).toBe(`Bearer ${PAT}`);
+
+    const r2 = await post('runs', { repo_full_name: est.repo_full_name, connection_id: CONN_REN, max_usd: 1 });
+    expect(r2.status).toBe(202);
+    // El nombre que se comprobó: los pasos arbol y area lo vuelven a comprobar con fila.repo_full_name.
+    expect(corridas[0]).toMatchObject({ repo_full_name: 'acme/antes', connection_id: CONN_REN, commit_sha: SHA,
+      branch: 'main' });
+    const h = WikiRun.array().parse(await (await leer('runs?repo=acme/antes')).json());
+    expect(h.map((x) => x.id)).toEqual([corridas[0]?.id]);
+  });
+
+  it('con otras mayúsculas, la fila lleva el nombre tal como está en la conexión', async () => {
+    const r = await post('runs', { repo_full_name: 'ACME/Antes', connection_id: CONN_REN });
+    expect(r.status).toBe(202);
+    expect(corridas[0]).toMatchObject({ repo_full_name: 'acme/antes', connection_id: CONN_REN });
+  });
+
+  it('sin conexión (repo público), la fila y la estimación llevan el nombre canónico, como siempre', async () => {
+    const est = WikiEstimate.parse(await (await post('estimate', { repo_full_name: 'acme/antes' })).json());
+    expect(est.repo_full_name).toBe('acme/nuevo');
+    const r = await post('runs', { repo_full_name: 'acme/antes' });
+    expect(r.status).toBe(202);
+    expect(corridas[0]).toMatchObject({ repo_full_name: 'acme/nuevo', connection_id: null });
+  });
+});
+
 describe('E43 · GET /api/orgs/:org/wiki/runs', () => {
   beforeEach(() => {
     corridas.push(

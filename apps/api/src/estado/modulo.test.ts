@@ -400,6 +400,26 @@ describe('B5 · Codebase con 2 o más repos activos', () => {
     expect(doble.ops.find((o) => o.table === 'scan_runs')?.columns).toContain('params');
   });
 
+  it('un failed sin detalle ni params (GitHub cayó antes del detalle de B0) va a la ACTIVA más antigua', async () => {
+    const x = gh('acme/x', 'revoked');   // la más antigua en cualquier estado: ya no cuenta
+    const y = gh('acme/y');              // la activa más antigua: la que eligió conexionActiva para la auditoría completa
+    const z = gh('acme/z');
+    const fallida = { ...scan([{ name: 'repo', status: 'failed' }]), params: {} };
+    const deY = auditoria({ connection_id: y.id, miradas: TODAS });
+    const deZ = auditoria({ connection_id: z.id, miradas: TODAS }, 'done', { params: { connection_id: z.id } });
+    fijar({ scans: [fallida, deY, deZ], conns: [x, y, z] });
+    let e = await pedir('codebase');
+    expect(comprobados(e)).toEqual([]);   // el último intento de acme/y falló: nada sale comprobado
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 1, de: 2, rol: 'aviso' });
+
+    // Un done sin detalle ni params solo puede ser de antes de B0: sigue siendo de la más antigua (§2.4), aquí la revocada.
+    const vieja = { ...scan([{ name: 'repo', status: 'done' }], { codebase: { modo: 'riesgo', miradas: TODAS } }), params: {} };
+    fijar({ scans: [vieja, deY, deZ], conns: [x, y, z] });
+    e = await pedir('codebase');
+    expect(comprobados(e)).toEqual(CB);
+    expect(cifra(e, 'codebase_repos')).toMatchObject({ n: 2, de: 2, rol: 'bien' });
+  });
+
   it('con detail.codebase.repos manda cada entrada: pending = sin mirar; sin miradas propias, las de la corrida (el Y)', async () => {
     const tienda = gh('acme/tienda');
     const landing = gh('acme/landing');

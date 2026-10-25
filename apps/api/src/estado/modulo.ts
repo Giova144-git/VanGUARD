@@ -131,13 +131,16 @@ export type IntentoRepo = { done: boolean; miradas: Miradas | null };
 // Último intento del paso repo de CADA repo. Las auditorías van de la más nueva a la más vieja y cada paso repo
 // terminado (done|failed) se atribuye: (1) con detail.codebase.repos (recorrido de varios repos), cada entrada con su
 // status y sus miradas (pending o skipped = sin mirar; sin miradas propias, las de la corrida, que son el Y de todas);
-// (2) si no, a detail.codebase.connection_id (B0) con el status del paso y detail.codebase.miradas; (3) si no
-// (auditorías de antes de B0), a params.connection_id o, sin él, a la conexión GitHub de lectura más antigua. El
-// primer intento que aparece de cada repo es su último intento. Un paso zip no cuenta para ningún repo. `conns`: las
-// GitHub de lectura en cualquier estado, created_at ascendente.
+// (2) si no, a detail.codebase.connection_id (B0) con el status del paso y detail.codebase.miradas; (3) si no, a
+// params.connection_id; sin él, un done (solo los de antes de B0 terminan sin detalle) va a la conexión GitHub de lectura
+// más antigua y un failed, a la ACTIVA más antigua: B0 escribe el detalle al final de la rama de archivos, así que un
+// fallo de GitHub anterior no lo deja, y esa es la que eligió conexionActiva. Así el fallo cae en un repo que cuenta y
+// el error va del lado de no comprobar. El primer intento que aparece de cada repo es su último intento. Un paso zip no
+// cuenta para ningún repo. `conns`: las GitHub de lectura en cualquier estado, created_at ascendente.
 export function ultimoPorRepo(scans: Scan[], conns: Conexion[]): Map<string, IntentoRepo> {
   const repoDe = new Map(conns.map((c) => [c.id, nombreRepo(c)]));
   const masAntigua = conns[0]?.id;
+  const principal = conns.find((c) => c.status === 'active')?.id ?? masAntigua;
   const out = new Map<string, IntentoRepo>();
   const anotar = (id: unknown, i: IntentoRepo) => {
     const n = typeof id === 'string' ? repoDe.get(id) : undefined;
@@ -156,7 +159,8 @@ export function ultimoPorRepo(scans: Scan[], conns: Conexion[]): Map<string, Int
       continue;
     }
     const pedida = obj(s.params)?.connection_id;
-    const id = typeof cb?.connection_id === 'string' ? cb.connection_id : typeof pedida === 'string' ? pedida : masAntigua;
+    const id = typeof cb?.connection_id === 'string' ? cb.connection_id : typeof pedida === 'string' ? pedida
+      : p.status === 'failed' ? principal : masAntigua;
     anotar(id, { done: p.status === 'done', miradas: obj(cb?.miradas) });
   }
   return out;

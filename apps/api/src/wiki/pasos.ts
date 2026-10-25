@@ -175,7 +175,9 @@ async function correrArbol(ctx: Ctx): Promise<RespuestaCola> {
     ...(fila.connection_id ? { connection_id: fila.connection_id } : {}) };
   const salida = salidaGithub(TOPE_SUBPETICIONES - FIJAS_ARBOL);
   ctx.github = salida;
-  // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub.
+  // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub. Con conexión,
+  // fila.repo_full_name es el nombre de la conexión que E41 ya comprobó (B8): casa aunque GitHub lo haya renombrado, y
+  // leerMeta sigue el 301 y deja en el estado el canónico para el árbol y los archivos.
   const leido = await conTokenGithub(env, db(env), m.org_id, fila.connection_id ?? undefined, fila.repo_full_name,
     (githubToken) => pasoArbol(ref, depsWiki({ fetch: salida.fetch, githubToken })));
   const estado: EstadoWiki = fijo && fila.branch ? { ...leido, meta: { ...leido.meta, branch: fila.branch } } : leido;

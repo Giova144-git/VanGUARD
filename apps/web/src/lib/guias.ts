@@ -47,7 +47,8 @@ export const GUIA_ESTADOS_GITHUB = {
     + (owner ? `&target_name=${encodeURIComponent(owner)}` : ''),
 };
 
-export type Guia = { titulo: string; pasos: string[] };
+// pasosLectura: lo que ve quien solo lee (viewer y anónimo de «Ver demo») cuando los pasos piden una acción que no tiene.
+export type Guia = { titulo: string; pasos: string[]; pasosLectura?: string[] };
 
 export const GUIAS: Record<IdNav, Guia> = {
   overview: { titulo: '¿Cómo leer el resumen?', pasos: [
@@ -78,7 +79,11 @@ export const GUIAS: Record<IdNav, Guia> = {
   performance: { titulo: '¿Cómo leer este módulo?', pasos: [   // los tres pasos de S10 §10.10
     'Escribe la URL de cualquier web pública con https:// (no medimos IPs, localhost ni webs de VanGUARD).',
     'Elige móvil o escritorio y pulsa «Medir ahora»: Lighthouse (el mismo de PageSpeed Insights) suele tardar menos de un minuto.',
-    'Mira qué empeoró frente a la medición anterior (en ámbar) y copia el arreglo para tu IA.',
+    'Compara el puntaje y las métricas (LCP, TBT, CLS) con la medición anterior: lo que empeoró sale en ámbar.',
+  ], pasosLectura: [
+    'Un administrador escribe la URL de una web pública con https:// y pulsa «Medir ahora»: Lighthouse (el mismo de PageSpeed Insights) suele tardar menos de un minuto.',
+    'Cada medición guarda el puntaje y las métricas (LCP, TBT, CLS) de móvil o de escritorio.',
+    'Compara con la medición anterior: lo que empeoró sale en ámbar.',
   ] },
   audit: { titulo: '¿Cómo funciona la auditoría?', pasos: [
     'Un botón revisa todo tu ecosistema por pasos: Supabase, Cloudflare y tu repo.',

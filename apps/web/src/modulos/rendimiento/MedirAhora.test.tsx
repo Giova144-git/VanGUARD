@@ -79,7 +79,11 @@ describe('Medir ahora · quién y qué trae por defecto', () => {
       expect(html).not.toContain('<datalist');
       expect(html).not.toContain('Solo un admin puede medir');
       expect(html).toContain('aria-labelledby="t-historico"');
-      expect(html).toBe(sinMedir(admin));                                    // el resto de Rendimiento, idéntico
+      // El resto de Rendimiento, idéntico salvo los pasos de la guía, que a quien solo lee no le dan la orden de medir.
+      expect(html).toContain('Un administrador escribe la URL');
+      expect(html).not.toContain('Elige móvil o escritorio y pulsa');
+      const sinPasos = (h: string) => h.replace(/<ol class="flex flex-col gap-3">[\s\S]*?<\/ol>/, '');
+      expect(sinPasos(html)).toBe(sinPasos(sinMedir(admin)));
     }
   });
 

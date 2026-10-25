@@ -4,12 +4,13 @@ import type { IdNav } from '@/lib/nav';
 import { SectorPlegable } from './SectorPlegable';
 
 // «¿Cómo leer este módulo?»: abierto la primera visita; el recuerdo queda en localStorage['vg-guia-<modulo>'] (S14 §14.12).
-export function GuiaModulo({ id }: { id: IdNav }) {
+export function GuiaModulo({ id, soloLectura = false }: { id: IdNav; soloLectura?: boolean }) {
   const g = GUIAS[id];
+  const pasos = soloLectura && g.pasosLectura ? g.pasosLectura : g.pasos;
   return (
     <SectorPlegable titulo={g.titulo} icono={CircleHelp} defaultOpen recuerdo={`vg-guia-${id}`}>
       <ol className="flex flex-col gap-3">
-        {g.pasos.map((p, i) => (
+        {pasos.map((p, i) => (
           <li key={i} className="flex gap-3 text-[15px] leading-relaxed">
             <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground tabular-nums">{i + 1}</span>
             <span className="pt-0.5 text-muted-foreground">{p}</span>

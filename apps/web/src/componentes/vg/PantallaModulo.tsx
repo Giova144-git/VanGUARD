@@ -79,7 +79,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children }: {
       {barra}
       {arriba}
       <Vacio icono={Gauge} titulo="Aún no medimos tu web" texto={e.descripcion} />
-      <GuiaModulo id={modulo as IdNav} />
+      <GuiaModulo id={modulo as IdNav} soloLectura={!org.puedeEscribir} />
     </div>
   );
 
@@ -89,7 +89,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children }: {
       <Vacio icono={KeyRound} titulo={`Conecta ${NOMBRE_PROV[proveedor]} para ver este módulo`} texto={e.descripcion}
         accion={<BotonGrande icono={KeyRound} titulo={`Conectar ${NOMBRE_PROV[proveedor]}`} descripcion="Con un token de solo lectura"
           deshabilitado={org.puedeEscribir ? undefined : SOLO_LECTURA} onClick={() => navegar(`/o/${org.id}/connections/${proveedor}`)} />} />
-      <GuiaModulo id={modulo as IdNav} />
+      <GuiaModulo id={modulo as IdNav} soloLectura={!org.puedeEscribir} />
     </div>
   );
 
@@ -127,7 +127,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children }: {
           <ChecksEnCero checks={est.checks} />
         </section>
       ) : null}
-      <GuiaModulo id={modulo as IdNav} />
+      <GuiaModulo id={modulo as IdNav} soloLectura={!org.puedeEscribir} />
       <DetalleEnPanel />
     </div>
   );

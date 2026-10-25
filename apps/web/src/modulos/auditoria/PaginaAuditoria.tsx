@@ -245,7 +245,7 @@ function Corrida({ id }: { id: string }) {
       {terminada && !medicion ? <Cambios scanId={run.id} /> : null}
       {terminada && medicion ? (
         <section className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-5" aria-label="Resultado">
-          <p className="min-w-0 flex-1 basis-64 text-[15px] text-muted-foreground">Medición guardada: el histórico, la comparación con la anterior y las causas están en Rendimiento.</p>
+          <p className="min-w-0 flex-1 basis-64 text-[15px] text-muted-foreground">Medición guardada: el puntaje, las métricas y la comparación con la anterior están en Rendimiento.</p>
           <Button asChild variant="principal" size="grande"><Link to={aRendimiento}><Gauge />Ver en Rendimiento</Link></Button>
         </section>
       ) : terminada ? <Resumen run={run} porId={porId} /> : null}

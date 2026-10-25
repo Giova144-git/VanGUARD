@@ -478,3 +478,22 @@ describe('E57 simular ataque', () => {
     expect(c.SimulateAttackOut.safeParse({ ...r, voice: 'sent' }).success).toBe(false);
   });
 });
+
+describe('revisión de UX: campos opcionales del Resumen', () => {
+  const base = { score: 49, band: 'red', coverage: { seen: 1, total: 4, missing: ['supabase'] },
+    counts: { critical: 4, high: 3, medium: 2, low: 0, info: 0 }, open_incidents: 0, last_scan: null, ahora: [] };
+  it('sin los campos nuevos sigue valiendo (el BACK aún no los manda)', () => {
+    expect(c.Overview.safeParse(base).success).toBe(true);
+  });
+  it('last_ok_scan, module_checks parcial, last_ingest_at, preview y coverage.detail', () => {
+    const r = c.Overview.parse({ ...base, coverage: { ...base.coverage, detail: { codebase: { miradas: { env: true } } } },
+      last_ok_scan: { id: '00000000-0000-4000-a000-0000000000a1', finished_at: '2026-10-25T06:13:38Z' },
+      module_checks: { codebase: 'done', supabase: 'sin_revisar' }, last_ingest_at: null, preview: true });
+    expect(r.module_checks?.supabase).toBe('sin_revisar');
+    expect(r.coverage.detail).toBeDefined();
+    expect(c.Overview.safeParse({ ...base, module_checks: { codebase: 'ok' } }).success).toBe(false);
+  });
+  it('preview_unsupported es un código de error válido', () => {
+    expect(c.ErrorCode.safeParse('preview_unsupported').success).toBe(true);
+  });
+});

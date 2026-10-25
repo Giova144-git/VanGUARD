@@ -28,7 +28,7 @@ export default function PaginaConexiones() {
       {q.isPending ? <div className="text-texto-3" aria-busy="true">—</div> : <>
         <div className="grid gap-4 lg:grid-cols-3">
           <TarjetaConexion proveedor="supabase" conexiones={lista} icono={Database} descripcion="Tu base: RLS, políticas, funciones y salud." />
-          <TarjetaConexion proveedor="cloudflare" conexiones={lista} icono={Cloud} descripcion="Tu zona: tráfico, ataques y bloqueo de IPs." />
+          <TarjetaConexion proveedor="cloudflare" conexiones={lista} icono={Cloud} descripcion="Tu zona o tu sitio de Pages/Workers: tráfico, ataques y bloqueo de IPs." />
           <TarjetaConexion proveedor="github" conexiones={lista} icono={GitBranch} descripcion="Tu repo: secretos, .env y dependencias con CVE." />
         </div>
         <TarjetaIngesta conexiones={lista} />

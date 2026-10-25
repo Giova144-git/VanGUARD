@@ -80,7 +80,9 @@ export const ScanStep = z.object({ name: z.enum(['supabase', 'cloudflare', 'repo
   status: z.enum(['pending', 'running', 'done', 'skipped', 'failed']), findings: z.number().int().optional(),
   error_code: z.string().optional() });
 export type ScanStep = z.infer<typeof ScanStep>;
-export const Coverage = z.object({ seen: z.number().int().min(0).max(4), total: z.number().int(), missing: z.array(Module) });
+// detail: lo que cada paso dejó en scan_runs.coverage.detail (codebase.miradas, cloudflare {modo, miradas}…); forma libre por módulo.
+export const Coverage = z.object({ seen: z.number().int().min(0).max(4), total: z.number().int(), missing: z.array(Module),
+  detail: z.record(z.string(), z.unknown()).optional() });
 export type Coverage = z.infer<typeof Coverage>;
 export const AuditSummary = z.object({ resumen: z.string().max(2000),
   top: z.array(z.object({ finding_id: Id, por_que: z.string().max(500) })).max(5),
@@ -241,7 +243,17 @@ export const Overview = z.object({ score: z.number().int().min(0).max(100).nulla
   counts: z.record(Severity, z.number().int()), // zod 4: un record con enum exige las 5 claves (aunque valgan 0)
   open_incidents: z.number().int(),
   last_scan: z.object({ id: Id, status: ScanStatus, finished_at: Ts.nullable() }).nullable(),
-  ai: z.object({ enabled: z.boolean(), level: AiUsage.shape.level }).optional(), ahora: z.array(AhoraItem).max(10) });
+  ai: z.object({ enabled: z.boolean(), level: AiUsage.shape.level }).optional(), ahora: z.array(AhoraItem).max(10),
+  // Revisión de UX (ux-revision-develop.md). Opcionales hasta que el BACK los mande; sin ellos la web no promete nada.
+  // last_ok_scan: la última full_audit SUCCEEDED («Última auditoría» enlaza a esta; last_scan puede ser una fallida).
+  last_ok_scan: z.object({ id: Id, finished_at: Ts }).nullable().optional(),
+  // module_checks: si cada módulo se miró en last_ok_scan (done), no se miró (sin_revisar: sin conexión, skipped o sin
+  // auditoría terminada) o su paso falló (fallido). Ningún módulo pinta «✓ Nada que atender» si no está en done.
+  module_checks: z.partialRecord(Module, z.enum(['done', 'sin_revisar', 'fallido'])).optional(),
+  // last_ingest_at: el último evento de ingesta de la org (null si nunca hubo). «Vigilando» solo con tráfico reciente.
+  last_ingest_at: Ts.nullable().optional(),
+  // preview: true en una vista previa de Workers (VG_ENV=preview): no hay cola y E11 responde 503 preview_unsupported.
+  preview: z.boolean().optional() });
 export type Overview = z.infer<typeof Overview>;
 
 // ── Revisión de código en cada push (E45–E50; asignaciones/revision-codigo.md) ─────────────────────────────────────

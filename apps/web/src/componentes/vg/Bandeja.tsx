@@ -8,7 +8,6 @@ import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
 import { DistintivoEnvio } from '@/modulos/hallazgos/EnviarAMiIA';
 import { sinBidi } from '@/lib/bidi';
 import { rutaDe } from '@/lib/destino';
-import { SEP, cuando } from '@/lib/formato';
 import { TEXTO_ROL, esRol, type Rol } from '@/lib/severidad';
 import { esId } from '@/lib/ids';
 import { cn } from '@/lib/utils';
@@ -35,7 +34,8 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
   switch (accion.clase) {
     case 'prompt': {
       const id = typeof accion.args?.finding_id === 'string' ? accion.args.finding_id : null;
-      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{verbo}<ChevronRight className="size-4" /></Link> : null;
+      // Quien no puede generar el prompt (viewer, «Ver demo») abre el mismo detalle: «Ver detalle», no «Generar» (UX P1-9).
+      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{puedeEscribir ? verbo : 'Ver detalle'}<ChevronRight className="size-4" /></Link> : null;
     }
     case 'copiar':
       return accion.copiar ? <BotonCopiar valor={accion.copiar} texto={verbo} /> : null;
@@ -87,14 +87,24 @@ export function FilaProblema({ fila, puedeEscribir, grupo }: { fila: FilaDato; p
   );
 }
 
-export function Bandeja({ grupos, puedeEscribir, filtro, hora }: { grupos: GrupoDato[] | null; puedeEscribir: boolean; filtro?: string | null; hora?: string | null }) {
+// Vacía: «✓ Nada que atender» solo si el módulo se miró; si ningún chequeo se comprobó en una auditoría terminada,
+// «Sin revisar» en gris (nunca verde sin mirar), con «Revisar ahora». La hora va una sola vez, en la barra del módulo.
+export function Bandeja({ grupos, puedeEscribir, filtro, sinRevisar, enlaceRevisar }: {
+  grupos: GrupoDato[] | null; puedeEscribir: boolean; filtro?: string | null; sinRevisar?: boolean; enlaceRevisar?: string;
+}) {
   if (!grupos) return <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>;
   const f = filtro?.toLowerCase();
   const casa = (x: FilaDato) => !f || [x.objeto, x.etiqueta, x.sub].some((t) => t?.toLowerCase().includes(f));
   // Los grupos se pintan en el orden en que llegan: el servidor ya los ordena (L1).
   const visibles = grupos.map((g) => ({ ...g, filas: g.filas.filter(casa) })).filter((g) => g.filas.length > 0);
+  if (visibles.length === 0 && sinRevisar && !f) return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-5 text-[15px] text-muted-foreground">
+      <span className="flex-1 basis-64">Sin revisar: ninguna auditoría terminada ha mirado este módulo todavía.</span>
+      {enlaceRevisar ? <Link to={enlaceRevisar} className={cn(enlace, 'border-foreground text-foreground hover:bg-muted')}>Revisar ahora<ChevronRight className="size-4" /></Link> : null}
+    </div>
+  );
   if (visibles.length === 0)
-    return <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender{hora ? `${SEP}revisado ${cuando(hora)}` : ''}</div>;
+    return <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender</div>;
   return (
     <div className="flex flex-col gap-4">
       {visibles.map((g) => {

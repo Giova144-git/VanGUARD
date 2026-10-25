@@ -56,7 +56,7 @@ describe('TarjetaRevisionCodigo', () => {
   it('los enlaces a Ajustes («Cambiar», «añade uno en Ajustes») solo para owner y admin; el viewer ve el dato en neutro', () => {
     const sinContactos = { ...fx.alertPrefs, whatsapp_ready_contacts: 0 };
     const viewer = tarjeta(VIEWER, ESPERANDO);
-    expect(viewer).toContain('Te avisamos por WhatsApp desde');
+    expect(viewer).toContain('Te avisamos por WhatsApp de severidad');
     expect(viewer).not.toContain('settings#avisos');
     const viewer0 = tarjeta(VIEWER, ESPERANDO, undefined, sinContactos);
     expect(viewer0).toContain('Aún no hay contactos con WhatsApp verificado');
@@ -72,7 +72,7 @@ describe('TarjetaRevisionCodigo', () => {
     expect(html).toContain(ESPERANDO.config!.webhook_url!);
     expect(html).toContain('Termina en ••');
     expect(html).not.toContain('vgw_');
-    expect(html).toContain('Te avisamos por WhatsApp desde <span class="font-semibold">Alta</span>');
+    expect(html).toContain('Te avisamos por WhatsApp de severidad <span class="font-semibold">alta</span> o más');
   });
 
   it('con el aviso sin enviar (cupo) y voice_pending, la fila abierta no promete un WhatsApp que no salió', () => {

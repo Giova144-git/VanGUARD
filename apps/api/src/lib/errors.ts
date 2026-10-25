@@ -17,6 +17,7 @@ const STATUS: Record<ErrorCode, ContentfulStatusCode> = {
   ai_disabled: 503,
   provider_unavailable: 502,
   internal: 500,
+  preview_unsupported: 503, // algo que no corre en una vista previa de Workers (E11 sin cola)
 };
 
 // `details` solo lleva datos nuestros (missing_permissions, reason, attempts_left…), nunca texto de terceros.

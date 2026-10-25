@@ -9,7 +9,7 @@ import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { useOrg } from '@/app/guardas';
-import { useIncidentes } from '@/lib/consultas';
+import { useIncidentes, useOverview } from '@/lib/consultas';
 import { cuando, miles } from '@/lib/formato';
 import { entradaNav } from '@/lib/nav';
 import { SEVERIDAD, deMapa, type Rol } from '@/lib/severidad';
@@ -42,6 +42,9 @@ export default function PaginaIncidentes() {
   const vistos = useRef<Set<string> | null>(null);
   const [nuevo, setNuevo] = useState<{ id: string; texto: string } | null>(null);
   const e = entradaNav('incidents')!;
+  // UX P0-4: «vigilando» solo con eventos de ingesta en la última hora (Overview.last_ingest_at); sin ellos no hay qué vigilar.
+  const ingesta = useOverview(org.id).data?.last_ingest_at;
+  const vigilando = !!ingesta && Date.now() - Date.parse(ingesta) < 3_600_000;
 
   // Un incidente con id no visto se anuncia por aria-live y su fila lleva tinte info 5 s.
   useEffect(() => {
@@ -74,7 +77,8 @@ export default function PaginaIncidentes() {
       {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
       {!q.data ? <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>
         : lista.length === 0 ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">
-            {estado === 'all' ? '0 ✓ Sin incidentes · vigilando' : '0 ✓ Sin incidentes abiertos · vigilando'}
+            {vigilando ? (estado === 'all' ? '0 ✓ Sin incidentes · vigilando' : '0 ✓ Sin incidentes abiertos · vigilando')
+              : `${estado === 'all' ? 'Sin incidentes' : 'Sin incidentes abiertos'}. Sin tráfico de tu app en la última hora: conecta la ingesta o simula un ataque.`}
           </div>
         : (
           <ul className="@container overflow-hidden rounded-xl border bg-card" aria-label="Incidentes">

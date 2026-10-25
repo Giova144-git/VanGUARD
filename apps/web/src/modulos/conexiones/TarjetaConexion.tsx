@@ -160,7 +160,7 @@ function LineaConexion({ c, titulo, alQuitar, conEstados }: { c: ConnectionPubli
           aviso={avisoQuitar(c, conEstados)}
           onConfirmar={async () => { const r = await quitar.mutateAsync(c.id); alQuitar({ en: new Date().toISOString(), revocar: r.revocar, nombre }); }} />
       </div>
-      {solo ? <span className="text-[12.5px] text-texto-3">{solo}</span> : null}
+      {/* «Modo demo: solo lectura» una vez por línea: ya lo pone «Quitar» (ConfirmarEnSitio) a su lado (UX P1-15). */}
     </div>
   );
 }

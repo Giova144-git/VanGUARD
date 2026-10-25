@@ -10,7 +10,7 @@ import { deMapa, type Rol } from '@/lib/severidad';
 type TextoPaso = { nombre: string; detalle: string; modulo: Module | null };
 export const TEXTO_PASO: Record<ScanStep['name'], TextoPaso> = {
   supabase:   { nombre: 'Supabase',       detalle: 'Advisors, RLS, políticas y funciones sin freno', modulo: 'supabase' },
-  cloudflare: { nombre: 'Cloudflare',     detalle: 'Tu zona: tráfico, IPs y configuración',           modulo: 'cloudflare' },
+  cloudflare: { nombre: 'Cloudflare',     detalle: 'Tu zona o tu sitio: tráfico, IPs y configuración',           modulo: 'cloudflare' },
   repo:       { nombre: 'Codebase',       detalle: '.env, secretos y dependencias con CVE',           modulo: 'codebase' },
   zip:        { nombre: 'Tu ZIP',         detalle: 'Dependencias contra OSV (lo abrimos en tu navegador)', modulo: 'codebase' },
   psi:        { nombre: 'Rendimiento',    detalle: 'Lighthouse con PageSpeed Insights',               modulo: 'performance' },

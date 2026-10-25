@@ -30,7 +30,7 @@ export function PuntajeBlindaje({ score = null, band = null, coverage, enlaceCon
       <span className="min-h-[1.5em] text-[15px] text-muted-foreground">
         {coverage?.missing.length ? <>
           {/* Un módulo fuera de contrato sale tal cual llega: con los controles bidi a la vista (lib/bidi.ts). */}
-          Falta: {sinBidi(coverage.missing.map((m) => deMapa(NOMBRE_MODULO, m, String(m))).join(', '))}
+          Sin revisar: {sinBidi(coverage.missing.map((m) => deMapa(NOMBRE_MODULO, m, String(m))).join(', '))}
           {enlaceConectar ? <> · <Link to={enlaceConectar} className="font-medium text-foreground underline underline-offset-4">Conectar</Link></> : null}
         </> : null}
       </span>

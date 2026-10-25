@@ -53,7 +53,7 @@ export type Guia = { titulo: string; pasos: string[]; pasosLectura?: string[] };
 export const GUIAS: Record<IdNav, Guia> = {
   overview: { titulo: '¿Cómo leer el resumen?', pasos: [
     'El número grande es tu puntaje de blindaje (0 a 100). Al lado te decimos cuántas de tus 4 fuentes pudimos mirar: un puntaje sin todas las fuentes no está completo.',
-    '«Ahora» es la lista de lo que conviene atender primero. Cada fila trae su botón para verlo y corregirlo.',
+    '«Ahora» es la lista de lo que conviene atender primero. Cada fila trae su botón para verlo.',
     '«Auditar todo» revisa Supabase, Cloudflare y tu repo de una vez y actualiza esta pantalla.',
   ] },
   supabase: { titulo: '¿Cómo leer este módulo?', pasos: [
@@ -112,7 +112,7 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Después de guardar, solo verás los últimos 4 caracteres del token.',
   ] },
   settings: { titulo: '¿Qué puedes ajustar?', pasos: [
-    'A quién avisamos y por qué canal: siempre por WhatsApp y, en un ataque crítico, también te llama Guardia si lo activas en el contacto.',
+    'A quién avisamos y por qué canal: siempre por WhatsApp y, en un ataque crítico, te llega un botón para llamar a Guardia si lo activas en el contacto. La llamada de la revisión de código llega próximamente.',
     'Prueba WhatsApp antes de una emergencia para saber que el aviso llega.',
   ] },
 };

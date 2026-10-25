@@ -10,7 +10,7 @@ import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { sinBidi } from '@/lib/bidi';
-import { useConexiones, useEstadoModulo } from '@/lib/consultas';
+import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { rutaDe } from '@/lib/destino';
 import { reposGithub } from '@/lib/repos';
 import { cuando } from '@/lib/formato';
@@ -52,6 +52,10 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
   const caida = proveedor === 'github' ? repos.some((x) => x.status !== 'active') : !!c && c.status !== 'active';
   const filtro = params.get('filtro');
   const est = q.data;
+  // UX P0-1: «✓ Nada que atender» solo si el módulo se miró en la última auditoría terminada. Lo dice
+  // Overview.module_checks (6782e5b); sin él, que ningún chequeo esté comprobado.
+  const visto = useOverview(org.id).data?.module_checks?.[modulo];
+  const sinRevisar = visto !== undefined ? visto !== 'done' : !!est && est.checks.length > 0 && !est.checks.some((x) => x.comprobado);
   // L3: la chapa roja de la conexión lleva al lado la acción que la arregla.
   const arreglo = !proveedor ? null
     : est?.error === 'token_invalido' || caida ? 'Reconectar'
@@ -119,7 +123,8 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
             </button>
           ) : null}
         </div>
-        <Bandeja grupos={est?.ahora ?? null} puedeEscribir={org.puedeEscribir} filtro={filtro} hora={est?.hora} />
+        <Bandeja grupos={est?.ahora ?? null} puedeEscribir={org.puedeEscribir} filtro={filtro}
+          sinRevisar={sinRevisar} enlaceRevisar={`/o/${org.id}/audit`} />
       </section>
       {children}
       {est?.checks.length ? (

@@ -104,8 +104,9 @@ export const herramientas: Herramienta[] = [
       + 'última auditoría y lo más urgente ahora.',
     input: z.object({}),
     // armarOverview: 6 lecturas (findings del puntaje, top 10, incidentes, su conteo, scan_runs, rpc vg_ai_status) + 5
-    // conteos por severidad + 4 de calcularCobertura = 15.
-    subpeticiones: 15,
+    // conteos por severidad + 4 de calcularCobertura + 3 de la revisión de UX (última full_audit terminada, conexiones
+    // ingest y su último edge_hit) = 18.
+    subpeticiones: 18,
     run: async (_a, c) => sobre('get_overview', await armarOverview(c.env, orgDe(c), c.get('rid'))),
   },
   {

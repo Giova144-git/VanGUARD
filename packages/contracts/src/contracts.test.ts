@@ -445,3 +445,15 @@ describe('convivencia de las funciones nuevas', () => {
     expect(c.CodeReviewQuery.parse({})).toEqual({});   // el FRONT de hoy llama a E45 sin ?connection_id
   });
 });
+
+describe('E57 simular ataque', () => {
+  it('kind por defecto path_scan y solo los tres tipos', () => {
+    expect(c.SimulateAttackIn.parse({}).kind).toBe('path_scan');
+    expect(c.SimulateAttackIn.safeParse({ kind: 'ddos' }).success).toBe(false);
+  });
+  it('la respuesta dice qué hizo cada canal', () => {
+    const r = { incident_id: '00000000-0000-4000-a000-0000000000a1', code: 'AB12CD', whatsapp: 'queued', voice: 'skipped' };
+    expect(c.SimulateAttackOut.parse(r)).toEqual(r);
+    expect(c.SimulateAttackOut.safeParse({ ...r, voice: 'sent' }).success).toBe(false);
+  });
+});

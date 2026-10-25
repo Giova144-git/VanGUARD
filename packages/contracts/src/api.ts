@@ -496,3 +496,19 @@ export type UnderAttackPropose = z.infer<typeof UnderAttackPropose>;
 export const UnderAttackProposal = ProposeResponse.extend({ scope: UnderAttackScope, target: HostOZona,
   zone_name: z.string().max(253), ttl_s: z.number().int().min(300).max(3600), validado: z.boolean() });
 export type UnderAttackProposal = z.infer<typeof UnderAttackProposal>;
+
+// ── Simular ataque y llamada de voz (E57; asignaciones/llamada-ataque.md) ───────────────────────────────────────────
+// E57 POST /api/orgs/:org/incidents/simulate · solo admin/owner y solo en la org de demo (403 si no). Crea un incidente
+// crítico REAL por el motor de siempre (vg_upsert_incident) con details.simulated = true y una IP de TEST-NET
+// (203.0.113.0/24), y lo avisa con el despachador de siempre: WhatsApp con botones y, si hay contacto verificado con
+// voz, la llamada de Guardia. 429 si ya hubo una simulación en los últimos 2 min.
+export const SimulateAttackKind = z.enum(['path_scan', 'ip_flood', 'attack_tool']);
+export type SimulateAttackKind = z.infer<typeof SimulateAttackKind>;
+export const SimulateAttackIn = z.object({ kind: SimulateAttackKind.default('path_scan') });
+export type SimulateAttackIn = z.infer<typeof SimulateAttackIn>;
+// whatsapp/voice: lo que hizo el despachador con cada canal (queued = la fila notifications quedó en cola o enviada;
+// skipped = no aplica o sin contacto; failed = el envío falló al primer intento; el estado final se ve en E8).
+export const SimulateAttackChannel = z.enum(['queued', 'skipped', 'failed']);
+export const SimulateAttackOut = z.object({ incident_id: Id, code: z.string().regex(/^[A-Z0-9]{6}$/),
+  whatsapp: SimulateAttackChannel, voice: SimulateAttackChannel });
+export type SimulateAttackOut = z.infer<typeof SimulateAttackOut>;

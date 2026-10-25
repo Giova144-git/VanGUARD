@@ -25,6 +25,14 @@ regla (crítico) → Worker: WhatsApp con botones → POST /operator/api/outboun
   → Gemini Live: saludo fijo → explica → end_call → terminate
 ```
 
+## Despliegue (Render, plan gratis)
+
+Web Service con raíz `apps/voz`, runtime Docker (usa el `Dockerfile`), health check `/healthz`. Variables: las genera
+`node scripts/voz-railway-env.mjs` (herramienta local del equipo) y se pegan en Environment → Add from .env. Con
+`KAPSO_REGISTER_WEBHOOK=1`, al arrancar se registra como webhook de Meta del número (con `RENDER_EXTERNAL_HOSTNAME`)
+si no tiene uno. El plan gratis se duerme tras 15 min sin tráfico: el cron del Worker le hace `GET /healthz` cada
+10 min.
+
 ## Despliegue (Railway)
 
 Servicio con raíz `apps/voz` (usa el `Dockerfile`). Variables: las genera `node scripts/voz-railway-env.mjs`

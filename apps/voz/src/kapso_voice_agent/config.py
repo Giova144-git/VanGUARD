@@ -57,7 +57,7 @@ class Settings:
     caller_key_secret: str = ""
     ice_servers_json: str = "[]"
     # KAPSO_REGISTER_WEBHOOK=1: at startup, point the number's Meta webhook at this server when the
-    # number has none (app.register_webhook). Needs the host's public name: RAILWAY_PUBLIC_DOMAIN.
+    # number has none (app.register_webhook). Needs the host's public name: RAILWAY_PUBLIC_DOMAIN (or Render's RENDER_EXTERNAL_HOSTNAME).
     register_webhook: bool = False
     public_domain: str = ""
     max_session_seconds: int = 320
@@ -171,7 +171,7 @@ def load_settings(environ=None, env_file=None):
         caller_key_secret=get("CALLER_KEY_SECRET"),
         ice_servers_json=ice,
         register_webhook=_flag(get("KAPSO_REGISTER_WEBHOOK", "0"), "KAPSO_REGISTER_WEBHOOK"),
-        public_domain=get("RAILWAY_PUBLIC_DOMAIN"),
+        public_domain=get("RAILWAY_PUBLIC_DOMAIN") or get("RENDER_EXTERNAL_HOSTNAME"),  # VanGUARD: también Render
         max_session_seconds=_int(get("MAX_SESSION_SECONDS", "320"), "MAX_SESSION_SECONDS", 30, 3600),
         max_concurrent_calls=_int(get("MAX_CONCURRENT_CALLS", "1"), "MAX_CONCURRENT_CALLS", 1, 20),
         local_capture=_flag(get("LOCAL_CAPTURE", "0"), "LOCAL_CAPTURE"),

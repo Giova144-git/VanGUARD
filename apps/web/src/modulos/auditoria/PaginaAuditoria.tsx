@@ -204,8 +204,15 @@ function Corrida({ id }: { id: string }) {
   // `in` también da true con «__proto__» o «constructor»: textoPaso usa Object.hasOwn y, si no, el texto crudo.
   const actual = textoPasoActual(run.step, run.kind);
   const terminada = run.status === 'succeeded';
+  const fallida = run.status === 'failed';
   const medicion = esMedicion(run.kind);
   const nombre = medicion ? 'medición' : 'auditoría';
+  // Una auditoría cortada después de terminar algún paso (el limpiador la marca failed aunque ya guardara resumen y
+  // hallazgos) enseña lo guardado debajo del error, igual que una terminada.
+  const conGuardado = fallida && !medicion && run.steps.some((s) => s.status === 'done');
+  const progreso = terminada ? (medicion ? 'Medición terminada' : 'Auditoría terminada')
+    : fallida ? (actual ? `Se cortó en: ${actual}` : medicion ? 'Medición interrumpida' : 'Auditoría interrumpida')
+    : actual ? `Paso actual: ${actual}` : 'Preparando…';
   // En una medición, solo los hallazgos de Rendimiento (PF_*): el resto no es de esta corrida.
   const ordenados = [...(hallazgos.data ?? [])].filter((f) => !medicion || f.module === 'performance')
     .sort((a, b) => orden(a.severity) - orden(b.severity));
@@ -216,12 +223,12 @@ function Corrida({ id }: { id: string }) {
       <BarraModulo titulo={medicion ? 'Medición de rendimiento' : 'Auditoría'} descripcion={`Lanzada ${cuando(run.created_at)}`} extra={<Etiqueta texto={est.texto} rol={est.rol} />} />
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Progreso">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-          <span className="font-medium">{terminada ? (medicion ? 'Medición terminada' : 'Auditoría terminada') : actual ? `Paso actual: ${actual}` : 'Preparando…'}</span>
+          <span className="font-medium">{progreso}</span>
           <span className="text-muted-foreground">Tiempo: <Transcurrido run={run} /></span>
           <span className="ml-auto font-mono tabular-nums">{run.progress} %</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={run.progress} aria-label={`Progreso de la ${nombre}`}>
-          <div className="h-full bg-info transition-[width]" style={{ width: `${run.progress}%` }} />
+          <div className={`h-full transition-[width] ${fallida ? 'bg-texto-3' : 'bg-info'}`} style={{ width: `${run.progress}%` }} />
         </div>
         <p className="sr-only" aria-live="polite">{actual ? `Paso actual: ${actual}` : ''} {est.texto}</p>
       </section>
@@ -229,6 +236,7 @@ function Corrida({ id }: { id: string }) {
         <div className="flex flex-col gap-3">
           {/* ApiError para que mensajeDe muestre el `run.error` del servidor (con un Error suelto saldría «Algo falló»). */}
           <ErrorBloque error={new ApiError(0, 'run_failed', textoFallo(run.error, run.kind))} />
+          {conGuardado ? <p className="text-[15px] text-muted-foreground">Lo que alcanzó a guardar antes de cortarse sigue abajo.</p> : null}
           {/* Una medición se repite desde Rendimiento (URL y estrategia); «Reintentar auditoría» lanzaría un full_audit. */}
           {medicion ? <Button asChild variant="principal" size="grande" className="w-fit"><Link to={aRendimiento}><Gauge />Volver a Rendimiento</Link></Button>
             : <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>}
@@ -248,8 +256,8 @@ function Corrida({ id }: { id: string }) {
           <p className="min-w-0 flex-1 basis-64 text-[15px] text-muted-foreground">Medición guardada: el puntaje, las métricas y la comparación con la anterior están en Rendimiento.</p>
           <Button asChild variant="principal" size="grande"><Link to={aRendimiento}><Gauge />Ver en Rendimiento</Link></Button>
         </section>
-      ) : terminada ? <Resumen run={run} porId={porId} /> : null}
-      {terminada && ordenados.length ? (
+      ) : terminada || (conGuardado && run.summary) ? <Resumen run={run} porId={porId} /> : null}
+      {(terminada || conGuardado) && ordenados.length ? (
         <section className="flex flex-col gap-3" aria-labelledby="hallazgos-abiertos">
           <h3 id="hallazgos-abiertos" className="text-[17px] font-semibold">Hallazgos abiertos</h3>
           <ul className="overflow-hidden rounded-xl border bg-card">

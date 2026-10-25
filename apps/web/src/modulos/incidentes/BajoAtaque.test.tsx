@@ -478,3 +478,30 @@ describe('BajoAtaque · los tres casos con el router de fixtures', () => {
     expect(otraVez.html).not.toContain('vista previa');
   }, 15_000);
 });
+
+// Riesgo (b) del informe de pausa: en un incidente de IP sin blindaje la página ya pinta «Activa el Modo blindaje» encima;
+// la vista previa con sin_conexion no repite la llamada ni el enlace a Conexiones, y conserva «Copiar pasos».
+describe('BajoAtaque · sin_conexion con la tarjeta de blindaje encima', () => {
+  const conArriba = (org: OrgActual, o: UnderAttackOffer) => renderToStaticMarkup(
+    <QueryClientProvider client={(() => { const qc = nuevaCache(); qc.setQueryData(clave(), o); return qc; })()}>
+      <MemoryRouter initialEntries={[`/o/${ORG}/incidents/${INC}`]}>
+        <OrgDePrueba org={org}><BajoAtaque org={ORG} incidentId={INC} puedeEscribir={org.puedeEscribir} ejecutada={undefined} blindajeArriba /></OrgDePrueba>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+
+  it('una sola llamada a activar el Modo blindaje: sin «Ir a Conexiones», con «Copiar pasos»', () => {
+    const html = conArriba(ADMIN, SIN_CONEXION);
+    expect(html).toContain('Modo bajo ataque · vista previa');
+    expect(html).not.toContain('Para activarlo desde aquí, activa el Modo blindaje');
+    expect(html).toContain('Con el Modo blindaje de arriba también lo activas desde aquí');
+    expect(html).not.toContain(`href="/o/${ORG}/connections"`);
+    expect(html).toContain('Copiar pasos para hacerlo a mano');
+  });
+
+  it('sin_permiso no cambia: su arreglo es otro (el permiso del token) y sí lleva a Conexiones', () => {
+    const html = conArriba(ADMIN, SIN_PERMISO);
+    expect(html).toContain('Para activarlo desde aquí, añade Zone · Config Rules · Edit a tu token de Modo blindaje');
+    expect(html).toContain(`href="/o/${ORG}/connections"`);
+  });
+});

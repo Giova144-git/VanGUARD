@@ -58,6 +58,7 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
   const bajoAtaque = i.actions.find((a) => a.kind === 'under_attack_on' && a.status === 'executed');
   const silenciado = i.muted_until && Date.parse(i.muted_until) > Date.now();
   const esIp = i.resource.startsWith('ip:');
+  const ctaBlindaje = esIp && !blindaje && !ejecutada && !conexiones.isPending;   // la tarjeta «Activa el Modo blindaje» de abajo
   const solo = puedeEscribir ? undefined : SOLO_LECTURA;
   // Con el incidente ya visto, si fue con «Lo estoy viendo» del WhatsApp se dice en el sitio del botón (anexo de botones).
   return (
@@ -80,7 +81,7 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
       {/* Solo ante una inundación (o con el modo ya activo); si E55 aún no existe en el BACK, no pinta nada. Su clave no
           repite la de BloquearIp: dos hermanos con la misma clave se duplican u omiten al cambiar el de al lado. */}
       {i.rule_ids.includes('CF_IP_FLOOD') || bajoAtaque
-        ? <BajoAtaque key={`bajo-ataque:${i.id}`} org={org} incidentId={i.id} puedeEscribir={puedeEscribir} ejecutada={bajoAtaque} /> : null}
+        ? <BajoAtaque key={`bajo-ataque:${i.id}`} org={org} incidentId={i.id} puedeEscribir={puedeEscribir} ejecutada={bajoAtaque} blindajeArriba={ctaBlindaje} /> : null}
       <BotonSimularWhatsApp org={org} incidentId={i.id} />
     </section>
   );

@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AiUsage, AlertPrefs, AuditDelta, CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  AiUsage, AlertPrefs, AuditDelta, type CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   UnderAttackOffer,
   type Module, type Severity,
 } from '@vanguard/contracts';
@@ -11,6 +11,7 @@ import { api } from './api';
 import { USA_FIXTURES } from './env';
 import { esApiError } from './errores';
 import { esId } from './ids';
+import { CodeReviewStateTolerante } from './revision-tolerante';
 import { useVivo } from './vivo';
 
 const base = { refetchIntervalInBackground: false, placeholderData: keepPreviousData } as const;
@@ -180,8 +181,9 @@ export const useWikiDoc = (org: string, id: string | null, listo: boolean) => us
 // refresca al momento; el sondeo es el respaldo, siempre con la pestaña visible: cada 5 s hasta `rapidoHasta` (al montar
 // o volver a la pestaña, y tras activar) o mientras haya una revisión en curso de menos de 2 min; si no, cada 30 s.
 // Un 404 (E45 aún sin desplegar) no se sondea: la tarjeta no se pinta. Los reintentos, los de main.tsx (solo 5xx). El cuerpo
-// se valida aquí con zod aunque api() en producción solo avise: un E45 o E48 fuera de contrato deja la consulta en error y
-// la tarjeta no se pinta, en vez de tumbar la página de Codebase en el render. La clave es 'revision' (no
+// se valida aquí con zod aunque api() en producción solo avise. E45 con el esquema tolerante (revision-tolerante.ts): un
+// valor nuevo del BACK degrada su pieza y la tarjeta se sigue pintando; un E48 fuera de contrato, o un E45 roto de
+// verdad, deja la consulta en error y la tarjeta no se pinta, en vez de tumbar la página de Codebase en el render. La clave es 'revision' (no
 // 'code-review', que la espec propone): lint-seguridad lee «code» como un secreto en una clave de Query.
 // Varias codebases (§6.2): siempre por conexión, también con un solo repo (un BACK sin B6 ignora el parámetro), y la
 // conexión va en la clave: setQueryData de E46 escribe en la de su pestaña.
@@ -189,7 +191,7 @@ const revisando = (s: CodeReviewState | undefined) => (s?.recent ?? []).some((r)
   (r.status === 'queued' || r.status === 'running') && Date.now() - Date.parse(r.created_at) < 120_000);
 const consultaRevision = (org: string, connectionId: string) => ({
   queryKey: ['org', org, 'revision', connectionId], refetchIntervalInBackground: false,
-  queryFn: async () => CodeReviewState.parse(await api(`/api/orgs/${org}/code-review?connection_id=${encodeURIComponent(connectionId)}`, { esquema: CodeReviewState })),
+  queryFn: async () => CodeReviewStateTolerante.parse(await api(`/api/orgs/${org}/code-review?connection_id=${encodeURIComponent(connectionId)}`, { esquema: CodeReviewStateTolerante })),
 });
 export const useRevisionCodigo = (org: string, rapidoHasta: number, connectionId: string) => useQuery({
   ...consultaRevision(org, connectionId),

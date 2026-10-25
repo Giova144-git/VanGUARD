@@ -424,11 +424,47 @@ describe('modo bajo ataque (E55, E56, E21 y E22; asignaciones/modo-bajo-ataque.m
     expect(await fallo(`/api/orgs/${DEMO}/actions/${r.action_id}/undo`, 'POST', {})).toMatchObject({ status: 409 });
   });
 
-  it('sin Modo blindaje: E55 dice sin_conexion y E56 da 409 no_action_connection', async () => {
-    const lista = await pedir<ConnectionPublic[]>(`/api/orgs/${DEMO}/connections`);
-    const accion = lista.find((c) => c.provider === 'cloudflare' && c.kind === 'action')!;
-    await pedir(`/api/orgs/${DEMO}/connections/${accion.id}`, 'DELETE');
-    expect(await pedir(E55())).toMatchObject({ ofrece: false, motivo: 'sin_conexion', connection_id: null });
+  // Los tres casos de la vista previa con la forma de leerOfertaBajoAtaque: la regla sigue ofreciéndolo (ofrece: true) y
+  // lo que falta es el token o su permiso, con los pasos para hacerlo a mano en `copiar`; con permiso, la oferta de siempre.
+  const blindaje = async () => (await pedir<ConnectionPublic[]>(`/api/orgs/${DEMO}/connections`)).find((c) => c.provider === 'cloudflare' && c.kind === 'action');
+  const conectar = (action_token: string) => pedir<ConnectionCreated>(`/api/orgs/${DEMO}/connections`, 'POST',
+    { provider: 'cloudflare', zone_id: '14d12778b0249e6d6854a67876c37e72', read_token: 'cf_lectura_prueba', action_token });
+  const PASOS_SIN_ZONA = fx.underAttackOfferSinPermiso.copiar.replace(/^.*\n/, 'Para activarlo a mano en Cloudflare:\n');
+
+  it('el token de Modo blindaje de la demo trae Config Rules · Edit: permiso ok, y «Probar conexión» lo dice', async () => {
+    const accion = (await blindaje())!;
+    expect(accion.capabilities).toMatchObject({ firewall_read: true, config_rules_edit: true });
+    expect(await pedir(E55())).toMatchObject({ motivo: null, permiso: 'ok', scopes: ['host'], copiar: null, connection_id: accion.id });
+    expect((await pedir<{ checks: unknown[] }>(`/api/orgs/${DEMO}/connections/${accion.id}/test`, 'POST', {})).checks)
+      .toContainEqual({ permission: 'config_rules_edit', ok: true, required: false });
+  });
+
+  it('sin Modo blindaje: E55 dice sin_conexion (ofrece sigue true, sin zona ni permiso, con los pasos) y E56 da 409 no_action_connection', async () => {
+    await pedir(`/api/orgs/${DEMO}/connections/${(await blindaje())!.id}`, 'DELETE');
+    const o = await pedir<Record<string, unknown>>(E55());
+    expect(o).toEqual({ ...fx.underAttackOffer, motivo: 'sin_conexion', scopes: [], zone_name: null, connection_id: null, permiso: null, copiar: PASOS_SIN_ZONA });
+    expect(o.copiar).toMatch(/^Para activarlo a mano en Cloudflare:\n1\. Rules → Configuration Rules → Create rule\.\n2\. If incoming requests match: Hostname · equals · demo\.officialvanguard\.com\./);
     expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 409, details: { reason: 'no_action_connection' } });
+    expect(await pedir(E55(DEMO, fx.incidents[1]!.id))).toMatchObject({ motivo: 'no_aplica', copiar: null });   // sin inundación, nada que copiar
+  });
+
+  it('con un token de Modo blindaje sin Config Rules · Edit: sin_permiso con los pasos de fx.underAttackOfferSinPermiso y E56 da 409 sin_permiso', async () => {
+    const creada = await conectar('cf_acciones_sin-config_prueba');
+    const accion = creada.action_connection!;
+    expect(accion.capabilities).toMatchObject({ config_rules_edit: false });
+    expect(await pedir(E55())).toEqual({ ...fx.underAttackOfferSinPermiso, connection_id: accion.id });
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 409,
+      details: { reason: 'sin_permiso', copiar: fx.underAttackOfferSinPermiso.copiar } });
+    expect((await pedir<{ ok: boolean; checks: unknown[] }>(`/api/orgs/${DEMO}/connections/${accion.id}/test`, 'POST', {})))
+      .toMatchObject({ ok: true, checks: expect.arrayContaining([{ permission: 'config_rules_edit', ok: false, required: false, error_code: 'forbidden' }]) });
+    sesion.tipo = 'anonima';
+    expect(await pedir(E55())).toMatchObject({ motivo: 'sin_permiso' });              // el viewer también ve la vista previa
+  });
+
+  it('al volver a conectarlo con el permiso, la oferta de siempre (permiso ok, botón y E56 con su código)', async () => {
+    await pedir(`/api/orgs/${DEMO}/connections/${(await blindaje())!.id}`, 'DELETE');
+    const accion = (await conectar('cf_acciones_prueba')).action_connection!;
+    expect(await pedir(E55())).toEqual({ ...fx.underAttackOffer, connection_id: accion.id });
+    expect(await pedir(`${E55()}/propose`, 'POST', {})).toMatchObject({ approval_id: fx.underAttackProposal.approval_id, validado: true });
   });
 });

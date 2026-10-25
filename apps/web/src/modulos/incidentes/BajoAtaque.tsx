@@ -3,7 +3,8 @@
 // ese host bajo el desafío de Cloudflare y caduca sola. La activa un admin con la simulación (dry_run de Cloudflare) y el
 // código de un solo uso, como el bloqueo: reposo → simulando → vista → escribiendo → hecho, sin modal (L6). Lo que se ve lo
 // manda E55 (la oferta y el modo vivo del host). Bandera del servidor: mientras E55 no responda (404 sin desplegar o quitado
-// en el corte de §13.1), no se pinta nada.
+// en el corte de §13.1), no se pinta nada. Sin Modo blindaje o sin Config Rules · Edit en su token, la misma propuesta en
+// vista previa (sin confirmar) con lo que falta y los pasos para hacerlo a mano.
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Cable, RotateCcw, ShieldAlert, ShieldOff, TriangleAlert, type LucideIcon } from 'lucide-react';
@@ -18,12 +19,14 @@ import { useOfertaBajoAtaque } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { useBajoAtaque } from '@/lib/mutaciones';
+import { nombrePermiso } from '@/lib/permisos';
 import { TINTE, deMapa, type Rol } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
-import { Propuesta } from './BloquearIp';
+import { MARCO_PROPUESTA, Propuesta, TextosPropuesta } from './BloquearIp';
 
 const SOLO_PRODUCCION = 'Solo disponible en officialvanguard.com';
-const FALTA_PERMISO = 'Te falta el permiso Zone · Config Rules · Edit en el token de Modo blindaje';
+const CONFIG_RULES = nombrePermiso('config_rules_edit');                 // «Zone · Config Rules · Edit»
+const FALTA_PERMISO = `Te falta el permiso ${CONFIG_RULES} en el token de Modo blindaje`;
 const EJEMPLO_HOST = 'demo.officialvanguard.com';
 // details.reason de E56 (tabla de §5) → texto. Los que traen un dato del servidor (zona, cupo del plan, código de
 // Cloudflare) no están: sale el mensaje del servidor, que ApiError ya sanea.
@@ -49,6 +52,23 @@ const PARTE = 'h-auto max-w-full whitespace-normal py-2 text-center';
 // error o aviso de RespuestaEscritura: llega como dato, no como ApiError (que ya sanea su message).
 const motivo = (m: unknown, respaldo: string) => (typeof m === 'string' ? sinBidi(m) : respaldo);
 const host = (h: string) => <span className="font-mono normal-case wrap-anywhere"><bdi dir="ltr">{sinBidi(h)}</bdi></span>;
+
+/** ttl_s de E55 (300..3600 en el contrato) → «30 min», «1 h», «1 h 30 min»: la duración la manda el servidor. */
+export function plazo(s: number) {
+  const m = Math.max(1, Math.round(s / 60)), h = Math.floor(m / 60), r = m % 60;
+  return h === 0 ? `${m} min` : r === 0 ? `${h} h` : `${h} h ${r} min`;
+}
+// Qué hace la regla, dicho igual en la nota del botón y en la vista previa (con el host ya en <bdi>).
+const ipsALaVez = (n: number) => `Llega tráfico de ${n} IPs a la vez: bloquearlas una a una no basta.`;
+const desafio = (h: ReactNode, ttl_s: number) => <>Cada visitante de {h} pasa un desafío de Cloudflare durante {plazo(ttl_s)}.</>;
+const SOLO_ESE_HOST = 'Solo ese host: el resto de tu zona de Cloudflare sigue igual.';
+// Qué falta para activarlo desde aquí. Owner y admin lo leen con el enlace a Conexiones y «Copiar pasos»; el viewer y el
+// anónimo de la demo, el mismo dato en neutro y sin controles (como «añade uno en Ajustes» en la revisión de código).
+const FALTA = {
+  sin_conexion: { admin: 'Para activarlo desde aquí, activa el Modo blindaje', lectura: 'Sin el Modo blindaje no se puede activar desde aquí.' },
+  sin_permiso: { admin: `Para activarlo desde aquí, añade ${CONFIG_RULES} a tu token de Modo blindaje`,
+    lectura: `Al token de Modo blindaje le falta ${CONFIG_RULES}: no se puede activar desde aquí.` },
+};
 
 function errorPropuesta(e: unknown): { error: string; copiar?: string } {
   if (esApiError(e) && e.status === 403) return { error: SOLO_PRODUCCION };
@@ -179,7 +199,6 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada }: {
   // deja la última: no esconde un modo activo con su «Desactivar ahora».
   if (!o) return null;
 
-  const minutos = Math.round(o.ttl_s / 60);
   const vencido = !!vivo?.expira && Date.parse(vivo.expira) <= Date.now();
   const estado = pantalla === 'hecho' && vivo && !vivo.fallida
     ? vencido ? `Modo bajo ataque vencido a las ${cuando(vivo.expira)}` : `Bajo ataque · ${sinBidi(vivo.host)}${vivo.expira ? ` · hasta ${cuando(vivo.expira)}` : ''}`
@@ -243,39 +262,43 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada }: {
       verbo="Activar bajo ataque" icono={ShieldAlert} conBotonWhatsapp={false} />
   );
 
-  const atacado = o.hostname ? host(o.hostname) : 'el host atacado';
+  // Sin host (el nombre de la conexión de ingesta no lo es) no hay qué proponer ni qué previsualizar, sea cual sea el motivo.
+  // Un modo vivo o una propuesta abierta, arriba, sí se pintan: traen su propio host.
+  if (!o.hostname) return null;
+  const atacado = host(o.hostname);
   if (o.ofrece && o.motivo === null) return marco(
     <div className="flex flex-col gap-1">
       <Button ref={botonActivar} variant="secundaria" size="grande" disabled={!puedeEscribir} aria-busy={fase.f === 'simulando' || undefined}
         onClick={fase.f === 'simulando' ? undefined : simular}>
         {fase.f === 'simulando' ? <Spinner /> : <ShieldAlert />}Activar modo bajo ataque
       </Button>
-      <span className={NOTA}>
-        Llega tráfico de {o.ips} IPs a la vez: bloquearlas una a una no basta. Cada visitante de {atacado} pasa un desafío de
-        Cloudflare durante {minutos} min.
-      </span>
+      <span className={NOTA}>{ipsALaVez(o.ips)} {desafio(atacado, o.ttl_s)}</span>
       {soloLectura}
       {fase.f === 'reposo' && fase.error ? <span role="alert" className="text-sm text-mal">{fase.error}</span> : null}
       {fase.f === 'reposo' && fase.copiar ? <BotonCopiar valor={fase.copiar} texto="Copiar pasos para hacerlo a mano" className={cn(PARTE, 'min-h-11')} /> : null}
     </div>
   );
 
-  if (o.motivo === 'sin_permiso') return marco(
-    <div className="flex flex-col gap-2 rounded-xl border p-4">
-      <p className="text-[15px] font-semibold">Para activarlo desde aquí, añade Zone · Config Rules · Edit a tu token de Modo blindaje</p>
-      <p className={NOTA}>
-        Llega tráfico de {o.ips} IPs a la vez a {atacado}. Mientras tanto, puedes poner ese host en modo bajo ataque a mano en
-        el panel de Cloudflare.
-      </p>
-      <div className="flex flex-wrap items-center gap-2">
-        {o.copiar ? <BotonCopiar valor={o.copiar} texto="Copiar pasos para hacerlo a mano" tam="grande" className={cn(PARTE, 'min-h-14')} /> : null}
-        <Button asChild variant="fantasma" size="grande"><Link to={`/o/${org}/connections`}><Cable />Ir a Conexiones</Link></Button>
+  // Sin Modo blindaje o sin el permiso: la propuesta en vista previa (el mismo aspecto que la de E56, sin código ni botón de
+  // confirmar), lo que falta para activarlo desde aquí y los pasos para hacerlo a mano. `copiar` va tal cual al portapapeles.
+  if (o.motivo === 'sin_conexion' || o.motivo === 'sin_permiso') {
+    const falta = o.motivo === 'sin_conexion' ? FALTA.sin_conexion : FALTA.sin_permiso;
+    return marco(
+      <div className={MARCO_PROPUESTA}>
+        <Etiqueta texto="Modo bajo ataque · vista previa" icono={ShieldAlert} className="h-auto min-h-6 w-fit py-1 whitespace-normal" />
+        <TextosPropuesta efecto={desafio(atacado, o.ttl_s)} avisos={[ipsALaVez(o.ips), SOLO_ESE_HOST]} />
+        {puedeEscribir ? <>
+          <p className="text-[15px] font-semibold">{falta.admin}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="fantasma" size="grande"><Link to={`/o/${org}/connections`}><Cable />Ir a Conexiones</Link></Button>
+            {o.copiar ? <BotonCopiar valor={o.copiar} texto="Copiar pasos para hacerlo a mano" tam="grande" className={cn(PARTE, 'min-h-14')} /> : null}
+          </div>
+        </> : <p className="text-sm text-muted-foreground">{falta.lectura}</p>}
       </div>
-    </div>
-  );
+    );
+  }
 
-  // Una línea en neutro con el motivo; no_aplica, cerrado y sin_conexion (el bloque de Bloquear IP ya ofrece el Modo
-  // blindaje) no pintan nada, igual que un motivo fuera de contrato.
+  // Una línea en neutro con el motivo; no_aplica y cerrado no pintan nada, igual que un motivo fuera de contrato.
   const linea = deMapa<string, ReactNode>({
     una_ip: 'Viene de una sola IP: con «Bloquear IP» basta.',
     host_protegido: 'Ese host es VanGUARD: ponerlo bajo ataque cortaría tu panel y tus avisos.',

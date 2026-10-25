@@ -180,6 +180,17 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
   );
 }
 
+// Aspecto de una propuesta: el marco en rojo, el efecto en negrita y los avisos en ámbar. Lo comparten <Propuesta/> (con
+// el campo del código) y la vista previa de solo lectura de BajoAtaque (sin token o sin permiso), para que se parezcan.
+// Quien llama ya pasó el texto del servidor por sinBidi; la clave es la posición (dos avisos iguales no chocan).
+export const MARCO_PROPUESTA = 'flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4';
+export function TextosPropuesta({ efecto, avisos }: { efecto: ReactNode; avisos: readonly ReactNode[] }) {
+  return <>
+    <p className="text-[15px] font-semibold text-mal">{efecto}</p>
+    {avisos.map((a, k) => <p key={k} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{a}</p>)}
+  </>;
+}
+
 // Vista de la propuesta (efecto, avisos y code del servidor) con el campo del código. Presentación pura: el estado vive
 // en BloquearIp (y en BajoAtaque, que cambia el verbo y el icono, y no tiene botón en el WhatsApp). Exportada para el
 // arnés de XSS.
@@ -190,9 +201,8 @@ export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, camp
   verbo?: string; icono?: LucideIcon; conBotonWhatsapp?: boolean;
 }) {
   return (
-    <form onSubmit={alConfirmar} className="flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4">
-      <p className="text-[15px] font-semibold text-mal">{sinBidi(p.efecto)}</p>
-      {p.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{sinBidi(a)}</p>)}
+    <form onSubmit={alConfirmar} className={MARCO_PROPUESTA}>
+      <TextosPropuesta efecto={sinBidi(p.efecto)} avisos={p.avisos.map(sinBidi)} />
       <p className="text-sm text-muted-foreground">
         {p.delivery === 'whatsapp'
           ? `Te lo enviamos por WhatsApp.${conBotonWhatsapp ? ' También puedes aprobar con el botón del mensaje.' : ''}`

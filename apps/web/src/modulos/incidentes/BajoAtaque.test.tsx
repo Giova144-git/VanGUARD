@@ -9,8 +9,8 @@ import { fixtures as fx, IncidentDetail, UnderAttackOffer, type ActionPublic } f
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
 import { ApiError } from '@/lib/errores';
 import { useBajoAtaque } from '@/lib/mutaciones';
-import { BajoAtaque, vivoDe } from './BajoAtaque';
-import { Propuesta } from './BloquearIp';
+import { BajoAtaque, plazo, vivoDe } from './BajoAtaque';
+import { MARCO_PROPUESTA, Propuesta } from './BloquearIp';
 import PaginaIncidente from './PaginaIncidente';
 
 // renderToStaticMarkup no mira las claves, pero el cliente sí: dos hermanos con la misma duplican u omiten hijos al
@@ -87,7 +87,7 @@ describe('BajoAtaque · bandera del servidor y motivos de E55', () => {
     expect(tarjeta(ADMIN, new ApiError(500, 'internal', 'Algo falló'))).toBe('');
   });
 
-  it.each(['no_aplica', 'cerrado', 'sin_conexion', 'motivo_fuera_de_contrato'])('con motivo %s no pinta nada', (motivo) => {
+  it.each(['no_aplica', 'cerrado', 'motivo_fuera_de_contrato'])('con motivo %s no pinta nada', (motivo) => {
     expect(tarjeta(ADMIN, { ...OFERTA, ofrece: false, motivo: motivo as UnderAttackOffer['motivo'], scopes: [] })).toBe('');
   });
 
@@ -122,6 +122,16 @@ describe('BajoAtaque · bandera del servidor y motivos de E55', () => {
     const boton = html.match(/<button[^>]*>(?:(?!<\/button>).)*Copiar pasos para hacerlo a mano/)?.[0] ?? '';
     expect(boton).toContain('whitespace-normal');
     expect(boton).not.toContain('whitespace-nowrap');
+  });
+
+  it('sin host (hostname null) no pinta nada, sea cual sea el motivo', () => {
+    const motivos: UnderAttackOffer['motivo'][] = [null, 'una_ip', 'sin_conexion', 'sin_permiso', 'en_curso', 'host_protegido', 'fuera_de_zona', 'sin_host', 'no_aplica', 'cerrado'];
+    for (const motivo of motivos) {
+      const o = UnderAttackOffer.parse({ ...OFERTA, hostname: null, motivo, ofrece: motivo === null || motivo === 'sin_conexion' || motivo === 'sin_permiso',
+        scopes: motivo === null ? ['host'] : [], copiar: motivo === 'sin_conexion' || motivo === 'sin_permiso' ? 'Para activarlo a mano en Cloudflare:' : null });
+      expect(tarjeta(ADMIN, o), String(motivo)).toBe('');
+      expect(tarjeta(VIEWER, o), String(motivo)).toBe('');
+    }
   });
 
   it('en_curso, host_protegido, fuera_de_zona y sin_host: una línea con el motivo, sin botón', () => {
@@ -173,6 +183,100 @@ describe('BajoAtaque · bandera del servidor y motivos de E55', () => {
       expect(html).not.toContain('<script');
       expect(html).not.toContain('‮');
       expect(html).toContain(`<bdi dir="ltr">${VISTO}</bdi>`);
+    }
+  });
+});
+
+// Las dos ofertas de vista previa con la forma real de leerOfertaBajoAtaque: ofrece sigue true (la regla lo ofrece) y lo
+// que falta es el token (sin conexión: ni zona, ni conexión, ni permiso; los pasos sin zona) o su permiso.
+const PASOS_SIN_ZONA = fx.underAttackOfferSinPermiso.copiar.replace(/^.*\n/, 'Para activarlo a mano en Cloudflare:\n');
+const SIN_CONEXION = UnderAttackOffer.parse({ ...OFERTA, motivo: 'sin_conexion', scopes: [], zone_name: null, connection_id: null,
+  permiso: null, copiar: PASOS_SIN_ZONA });
+const SIN_PERMISO = UnderAttackOffer.parse(fx.underAttackOfferSinPermiso);
+const HOST_BDI = '<span class="font-mono normal-case wrap-anywhere"><bdi dir="ltr">demo.officialvanguard.com</bdi></span>';
+const LECTURA = {
+  sin_conexion: 'Sin el Modo blindaje no se puede activar desde aquí.',
+  sin_permiso: 'Al token de Modo blindaje le falta Zone · Config Rules · Edit: no se puede activar desde aquí.',
+};
+
+describe('BajoAtaque · vista previa de la propuesta sin token o sin permiso', () => {
+  it.each([
+    ['sin_conexion', SIN_CONEXION, 'Para activarlo desde aquí, activa el Modo blindaje'],
+    ['sin_permiso', SIN_PERMISO, 'Para activarlo desde aquí, añade Zone · Config Rules · Edit a tu token de Modo blindaje'],
+  ] as const)('%s: host, IPs, duración y qué hace la regla, sin confirmar; enlace a Conexiones y «Copiar pasos»', (_m, o, falta) => {
+    const html = tarjeta(ADMIN, o);
+    expect(html).toContain('Modo bajo ataque · vista previa');
+    expect(html).toContain(`<div class="${MARCO_PROPUESTA}">`);                    // el marco de <Propuesta/>
+    expect(html).toContain(`<p class="text-[15px] font-semibold text-mal">Cada visitante de ${HOST_BDI} pasa un desafío de Cloudflare durante 30 min.</p>`);
+    expect(html).toContain('Llega tráfico de 2 IPs a la vez: bloquearlas una a una no basta.');
+    expect(html).toContain('Solo ese host: el resto de tu zona de Cloudflare sigue igual.');
+    expect(html).toContain(falta);
+    expect(html).toContain(`href="/o/${ORG}/connections"`);
+    expect(html).toContain('Copiar pasos para hacerlo a mano');
+    // Sin nada que confirmar: ni campo del código, ni botón de enviar, ni «Activar».
+    for (const no of ['<form', '<input', 'type="submit"', 'Código de 6 dígitos', 'Activar modo bajo ataque', 'Activar bajo ataque', 'Confirmar'])
+      expect(html).not.toContain(no);
+    // Los controles, de 56 px.
+    const controles = html.match(/<(?:button|a)\b[^>]*>/g) ?? [];
+    expect(controles).toHaveLength(2);
+    for (const c of controles) expect(c).toMatch(/\b(?:min-)?h-14\b/);
+  });
+
+  it('se parece a la propuesta real: el mismo marco y el efecto con la misma letra', () => {
+    const p = { ...fx.underAttackProposal, expires_at: '2099-01-01T00:00:00.000Z' };
+    const real = renderToStaticMarkup(<Propuesta p={p} codigo="" alCambiarCodigo={() => {}} escribiendo={false} alConfirmar={() => {}}
+      alCancelar={() => {}} alVencer={() => {}} verbo="Activar bajo ataque" conBotonWhatsapp={false} />);
+    expect(real).toContain(`<form class="${MARCO_PROPUESTA}">`);
+    expect(real).toContain('<p class="text-[15px] font-semibold text-mal">Modo bajo ataque solo en demo.officialvanguard.com');
+    expect(real).toContain('<p class="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">Cloudflare validó la regla sin publicarla</p>');
+    const previa = tarjeta(ADMIN, SIN_PERMISO);
+    expect(previa).toContain('<p class="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">Solo ese host');
+  });
+
+  it('con token y permiso ok (motivo null), o sin probar, el botón de siempre y sin vista previa', () => {
+    for (const o of [OFERTA, { ...OFERTA, permiso: 'sin_probar' as const }]) {
+      const html = tarjeta(ADMIN, o);
+      expect(html).toContain('Activar modo bajo ataque');
+      expect(html).not.toContain('vista previa');
+      expect(html).not.toContain('Copiar pasos');
+    }
+  });
+
+  it('la duración sale de ttl_s (minutos u horas), nunca un «30 min» fijo', () => {
+    expect([300, 900, 1800, 2700, 3600, 5400, 7200].map(plazo)).toEqual(['5 min', '15 min', '30 min', '45 min', '1 h', '1 h 30 min', '2 h']);
+    const hora = tarjeta(ADMIN, { ...SIN_PERMISO, ttl_s: 3600 });
+    expect(hora).toContain('pasa un desafío de Cloudflare durante 1 h.');
+    expect(hora).not.toContain('30 min');
+    const cuarto = tarjeta(ADMIN, { ...SIN_CONEXION, ttl_s: 900 });
+    expect(cuarto).toContain('durante 15 min.');
+    expect(cuarto).not.toContain('30 min');
+    const boton = tarjeta(ADMIN, { ...OFERTA, ttl_s: 2700 });                     // también la nota del botón
+    expect(boton).toContain('durante 45 min.');
+    expect(boton).not.toContain('30 min');
+  });
+
+  it.each([['sin_conexion', SIN_CONEXION], ['sin_permiso', SIN_PERMISO]] as const)('%s: el viewer y el anónimo de la demo ven la vista previa sin controles', (m, o) => {
+    const html = tarjeta(VIEWER, o);
+    expect(html).toContain('Modo bajo ataque · vista previa');
+    expect(html).toContain(`Cada visitante de ${HOST_BDI} pasa un desafío de Cloudflare durante 30 min.`);
+    expect(html).toContain('Llega tráfico de 2 IPs a la vez');
+    expect(html).toContain(LECTURA[m]);
+    for (const no of ['<button', '<a ', 'href=', 'Copiar pasos', 'Para activarlo desde aquí', '<form', '<input']) expect(html).not.toContain(no);
+  });
+
+  it('U+202E y <script> en hostname y copiar: escapados, el control a la vista y el host en <bdi dir="ltr">; copiar no se pinta', () => {
+    const MALO = '‮evil<script>alert(1)</script>.com';
+    const VISTO = '⟨U+202E⟩evil&lt;script&gt;alert(1)&lt;/script&gt;.com';
+    const PASOS = '‮pasos<script>alert(2)</script>';
+    for (const base of [SIN_CONEXION, SIN_PERMISO]) {
+      for (const org of [ADMIN, VIEWER]) {
+        const html = tarjeta(org, { ...base, hostname: MALO, copiar: PASOS });
+        expect(html).not.toContain('<script');
+        expect(html).not.toContain('‮');
+        expect(html).toContain(`<bdi dir="ltr">${VISTO}</bdi>`);
+        expect(html).not.toContain('alert(2)');                                // va tal cual al portapapeles, no al HTML
+      }
+      expect(tarjeta(ADMIN, { ...base, hostname: MALO, copiar: PASOS })).toContain('Copiar pasos para hacerlo a mano');
     }
   });
 });
@@ -290,4 +394,47 @@ describe('BajoAtaque · recorrido con el router de fixtures', () => {
     expect(html).toContain('Bajo ataque activado');                       // el hito ya no dice «IP bloqueada»
     expect(html).not.toContain('IP bloqueada');
   });
+});
+
+// Los tres casos tal como los arma el router de fixtures (la forma de leerOfertaBajoAtaque). Va el último: quita y vuelve
+// a crear el Modo blindaje de la demo.
+describe('BajoAtaque · los tres casos con el router de fixtures', () => {
+  beforeAll(() => { vi.spyOn(console, 'debug').mockImplementation(() => {}); });
+  afterAll(() => { vi.restoreAllMocks(); });
+
+  it('sin conexión de acciones y sin el permiso, la vista previa con sus pasos; con el permiso, el botón', async () => {
+    const { api } = await import('@/lib/api');
+    const pedir = <T,>(ruta: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', body?: unknown) => api(`/api/orgs/${ORG}${ruta}`, { method, body }) as Promise<T>;
+    const pintar = async () => {
+      const qc = nuevaCache();
+      qc.setQueryData(clave(), UnderAttackOffer.parse(await pedir(`/incidents/${INC}/under-attack`)));
+      return { o: qc.getQueryData<UnderAttackOffer>(clave())!, html: tarjeta(ADMIN, qc) };
+    };
+    const blindaje = async () => (await pedir<{ id: string; provider: string; kind: string }[]>('/connections'))
+      .find((c) => c.provider === 'cloudflare' && c.kind === 'action');
+    const conectar = (action_token: string) => pedir('/connections', 'POST',
+      { provider: 'cloudflare', zone_id: '14d12778b0249e6d6854a67876c37e72', read_token: 'cf_lectura_prueba', action_token });
+
+    const ok = await pintar();
+    expect(ok.o).toMatchObject({ motivo: null, permiso: 'ok', copiar: null });
+    expect(ok.html).toContain('Activar modo bajo ataque');
+
+    await pedir(`/connections/${(await blindaje())!.id}`, 'DELETE');
+    const sinConexion = await pintar();
+    expect(sinConexion.o).toMatchObject({ ofrece: true, motivo: 'sin_conexion', permiso: null, copiar: PASOS_SIN_ZONA });
+    expect(sinConexion.html).toContain('Para activarlo desde aquí, activa el Modo blindaje');
+    expect(sinConexion.html).toContain('Copiar pasos para hacerlo a mano');
+
+    await conectar('cf_acciones_sin-config_prueba');
+    const sinPermiso = await pintar();
+    expect(sinPermiso.o).toEqual({ ...SIN_PERMISO, connection_id: expect.any(String) });   // la conexión nueva, con otro id
+    expect(sinPermiso.html).toContain('añade Zone · Config Rules · Edit a tu token de Modo blindaje');
+
+    await pedir(`/connections/${(await blindaje())!.id}`, 'DELETE');
+    await conectar('cf_acciones_prueba');
+    const otraVez = await pintar();
+    expect(otraVez.o).toMatchObject({ motivo: null, permiso: 'ok', copiar: null });
+    expect(otraVez.html).toContain('Activar modo bajo ataque');
+    expect(otraVez.html).not.toContain('vista previa');
+  }, 15_000);
 });

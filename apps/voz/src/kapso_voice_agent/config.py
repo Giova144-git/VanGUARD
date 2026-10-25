@@ -116,6 +116,11 @@ class Settings:
         return secret
 
 
+def codespace_host(name, domain, port):
+    """VanGUARD: the public name of a GitHub Codespaces forwarded port, e.g. <name>-8080.app.github.dev."""
+    return f"{name}-{port}.{domain}" if name and domain else ""
+
+
 def load_settings(environ=None, env_file=None):
     """Process environment wins over the .env file. Unknown variables are ignored."""
     values = {}
@@ -174,8 +179,9 @@ def load_settings(environ=None, env_file=None):
         caller_key_secret=get("CALLER_KEY_SECRET"),
         ice_servers_json=ice,
         register_webhook=_flag(get("KAPSO_REGISTER_WEBHOOK", "0"), "KAPSO_REGISTER_WEBHOOK"),
-        # VanGUARD: también Render y Hugging Face Spaces.
-        public_domain=get("RAILWAY_PUBLIC_DOMAIN") or get("RENDER_EXTERNAL_HOSTNAME") or get("SPACE_HOST"),
+        # VanGUARD: también Render, Hugging Face Spaces y GitHub Codespaces (puerto 8080 público).
+        public_domain=get("RAILWAY_PUBLIC_DOMAIN") or get("RENDER_EXTERNAL_HOSTNAME") or get("SPACE_HOST")
+        or codespace_host(get("CODESPACE_NAME"), get("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN"), get("PORT", "8080")),
         max_session_seconds=_int(get("MAX_SESSION_SECONDS", "320"), "MAX_SESSION_SECONDS", 30, 3600),
         max_concurrent_calls=_int(get("MAX_CONCURRENT_CALLS", "1"), "MAX_CONCURRENT_CALLS", 1, 20),
         local_capture=_flag(get("LOCAL_CAPTURE", "0"), "LOCAL_CAPTURE"),

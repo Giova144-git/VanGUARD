@@ -2,14 +2,14 @@
 // la firma con el secreto viejo deja de verificar y la del nuevo verifica, aunque la clave vieja siguiera en la caché del
 // isolate (va por config + iv). Las llaves salen de deriveKeys con bytes fijos; nada de red ni de base.
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { b64, deriveKeys, newWebhookSecret, type Keys } from '@vanguard/core/crypto';
+import { b64, deriveKeys, fingerprint, newWebhookSecret, open, type Box, type Keys } from '@vanguard/core/crypto';
 
 const llaves = vi.hoisted(() => ({ keys: null as unknown, llamadas: 0 }));
 vi.mock('./keyring.ts', () => ({
   getKeys: async () => { llaves.llamadas++; return llaves.keys; },
   activeKid: async () => 'v1',
 }));
-const { claveWebhook, olvidarClaveWebhook, sellarSecretoWebhook } = await import('./credentials.ts');
+const { claveWebhook, olvidarClaveWebhook, rotarSecretoConexion, sellarSecretoWebhook } = await import('./credentials.ts');
 
 const ORG = '0f6c0000-0000-4000-8000-000000000001';
 const CFG = 'c4000000-0000-4000-8000-000000000001';
@@ -61,5 +61,42 @@ describe('secreto del webhook: sellar, verificar y rotar', () => {
     olvidarClaveWebhook(CFG);
     await claveWebhook(env, admin, cfg);
     expect(llaves.llamadas).toBe(antes + 1);            // olvidada: vuelve a abrir el sellado
+  });
+});
+
+// Bloqueo de merge (asignaciones/bloqueo-merge-criticos.md §2.8 y prueba B4 de §10.5): el token de acciones de GitHub se
+// cambia en la MISMA conexión. Una sola función para E53 y el «Reconectar» de varias-codebases.md §2.1.
+describe('rotarSecretoConexion', () => {
+  const CONN = 'c0000000-0000-4000-8000-000000000006';
+  const ctx = { orgId: ORG, connectionId: CONN, provider: 'github' as const, kind: 'action' as const };
+  const token = ['github', 'pat', 'r'.repeat(40)].join('_');
+  const conRpc = (r: { error: { code: string } | null }) => {
+    const llamadas: { name: string; args: Record<string, unknown> }[] = [];
+    const a = { rpc: async (name: string, args: Record<string, unknown>) => { llamadas.push({ name, args }); return r; } };
+    return { a: a as unknown as Parameters<typeof rotarSecretoConexion>[1], llamadas };
+  };
+
+  it('sella con el AAD de la misma conexión (se abre con ese ctx y no con otro) y manda huella, last4 y capacidades', async () => {
+    const { a, llamadas } = conRpc({ error: null });
+    await rotarSecretoConexion(env, a, ctx, token, { scopes: ['statuses:write'], capabilities: { statuses: true },
+      expiresAt: '2026-11-23T20:00:00.000Z' });
+    const [{ name, args }] = llamadas as [{ name: string; args: Record<string, unknown> }];
+    expect(name).toBe('vg_rotate_secret');
+    expect(args).toMatchObject({ p_org: ORG, p_conn: CONN, p_last4: token.slice(-4), p_scopes: ['statuses:write'],
+      p_capabilities: { statuses: true }, p_expires_at: '2026-11-23T20:00:00.000Z' });
+    const secreto = args.p_secret as { sealed: Box; kid: string; fingerprint: string };
+    expect(secreto.fingerprint).toBe(await fingerprint(llaves.keys as Keys, ORG, token));
+    expect(JSON.stringify(args)).not.toContain(token);
+    expect(await open(llaves.keys as Keys, secreto.sealed, ctx)).toBe(token);
+    await expect(open(llaves.keys as Keys, secreto.sealed, { ...ctx, kind: 'read' })).rejects.toThrow();
+    await expect(open(llaves.keys as Keys, secreto.sealed, { ...ctx, connectionId: CFG })).rejects.toThrow();
+  });
+
+  it('23505 (esa huella ya está en la org) → conflict; P0002 → not_found; otro → internal, sin error.message', async () => {
+    for (const [code, esperado] of [['23505', 'conflict'], ['P0002', 'not_found'], ['08006', 'internal']] as const) {
+      const { a } = conRpc({ error: { code } });
+      await expect(rotarSecretoConexion(env, a, ctx, token, { scopes: [], capabilities: {}, expiresAt: null }))
+        .rejects.toMatchObject({ name: 'ApiError', code: esperado });
+    }
   });
 });

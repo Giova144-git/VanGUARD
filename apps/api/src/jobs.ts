@@ -13,7 +13,9 @@ export type DepCompacta = [string, string, string, 0 | 1];
 // DeepWiki (wiki/pasos.ts): un paso por mensaje; `area` solo con paso 'area' (nombre del área, no es un secreto).
 export type PasoWiki = 'arbol' | 'triage' | 'area' | 'sintesis';
 // Revisión de código en cada push (revision/pasos.ts, asignaciones/revision-codigo.md §2.1): diff → aviso. P1: 'osv'.
-export type PasoRevision = 'diff' | 'aviso';
+// 'estado' (revision/estado.ts, bloqueo-merge-criticos.md §2.4): publica el estado de commit «VanGUARD» y, con el anexo,
+// cierra el PR con críticos. Solo se encola con el bloqueo encendido.
+export type PasoRevision = 'diff' | 'aviso' | 'estado';
 
 export type JobMsg =
   | { v: 1; kind: 'scan'; scan_run_id: string; org_id: string; paso: Paso; cursor?: string; deps?: DepCompacta[] }

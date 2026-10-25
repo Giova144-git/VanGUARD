@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../env.ts';
 import { actions } from './actions.ts';
+import { bloqueo } from './bloqueo.ts';
 import { connections } from './connections.ts';
 import { contacts } from './contacts.ts';
 import { demo } from './demo.ts';
@@ -43,4 +44,5 @@ rutas.route('/', exportRuta);
 rutas.route('/', mcpTokens);
 rutas.route('/', perf);
 rutas.route('/', revision);
+rutas.route('/', bloqueo);
 rutas.route('/', ia);

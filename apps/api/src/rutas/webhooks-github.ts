@@ -143,9 +143,17 @@ async function marcarEvento(env: CloudflareBindings, cfg: Config, rid: string) {
 
 // Lo que E47 registra de un push o de un PR. pr = pull_request.number (null en el push); fork = PR de un fork de alguien
 // de fuera: la fila nace con alert_reason 'fork' y el paso diff lo pasa como sin_aviso (0013: solo en la app).
+// reabiertoAMano: un `reopened` cuyo sender es una persona (sender.type 'User'); solo cuenta si no trae commits nuevos
+// (mismo head: cae en repetido) y VanGUARD había cerrado ese PR (anexo bloqueo-merge-cierre-pr.md, punto 4).
 type Nueva = {
   event: 'push' | 'pull_request'; base: string; head: string; pr: number | null; commits: string[]; fork: boolean;
+  reabiertoAMano?: boolean;
 };
+// Al reabrir con «Redeliver», la revisión vuelve a empezar también para el bloqueo de merge (0016): la tarjeta no enseña
+// el error viejo, yaReclamada vuelve a ver «sin publicar» y un «Dar por bueno» anterior no sobrevive a la nueva revisión.
+const GATE_LIMPIO = { gate_blocking: null, gate_findings: [], gate_state: null, gate_error: null, gate_published_at: null,
+  gate_override_by: null, gate_override_at: null, gate_override_reason: null, gate_pr_action: null, gate_pr_error: null,
+  gate_pr_at: null };
 const LOG_EVENTO = { push: 'github.push', pull_request: 'github.pr' } as const;
 const datosLog = (r: Nueva) => ({ sha7: r.head.slice(0, 7), ...(r.pr ? { pr: r.pr, fork: r.fork } : {}) });
 
@@ -165,11 +173,21 @@ async function repetido(c: Context<AppEnv>, cfg: Config, r: Nueva, delivery: str
     return fail(c, 'internal', 'No pudimos registrar el evento');
   }
   const atascada = fila.status === 'queued' && !fila.started_at && Date.now() - Date.parse(String(fila.created_at)) > ATASCADA_MS;
-  if (fila.status !== 'failed' && !atascada) return ignorado(c, cfg, r.event, 'repetido');
+  if (fila.status !== 'failed' && !atascada) {
+    // Una persona reabrió sin commits nuevos el PR que cerró VanGUARD: se respeta (no se vuelve a cerrar; el ✗ se queda)
+    // y la revisión lo dice. CAS desde 'closed': si lo reabrió VanGUARD («Reabrir el PR»), ya dice 'reopened'.
+    if (r.reabiertoAMano) {
+      const { data: marcada, error: em } = await admin.from('code_reviews').update({ gate_pr_action: 'reopened_by_human' })
+        .eq('id', id).eq('org_id', cfg.org_id).eq('gate_pr_action', 'closed').select('id');
+      if (em) log('warn', 'github.reabierto_sin_marca', { rid, config: cfg.id, code: em.code ?? null });
+      if (Array.isArray(marcada) && marcada.length) return ignorado(c, cfg, r.event, 'reabierto_a_mano');
+    }
+    return ignorado(c, cfg, r.event, 'repetido');
+  }
   // created_at = este encolado (no hay queued_at): la regla de 2 min, el «interrumpida» de E45 (15 min) y alert.seconds
   // miden desde aquí; si no, otra entrega inmediata vería atascada una failed antigua recién reabierta.
   let q = admin.from('code_reviews').update({ status: 'queued', error_code: null, started_at: null, finished_at: null,
-    partial: false, delivery_id: delivery, created_at: new Date().toISOString(),
+    partial: false, delivery_id: delivery, created_at: new Date().toISOString(), ...GATE_LIMPIO,
     ...(r.fork ? { alert_reason: 'fork' } : {}) })
     .eq('id', id).eq('org_id', cfg.org_id).eq('status', String(fila.status));
   if (atascada) q = q.is('started_at', null);
@@ -260,7 +278,8 @@ async function topeFork(c: Context<AppEnv>, cfg: Config) {
 // PR con la rama del fork de un extraño, y cada push del extraño llega como synchronize con la asociación del autor y
 // sender = quien empujó). Si no (fork de alguien de fuera, o head.repo null porque el fork se borró), alert_reason
 // 'fork': se revisa solo en la app, con el tope por hora de TOPE_FORK_HORA. Del PR solo se leen acción, número, base,
-// head (sha y repo.id), author_association y los ids numéricos de user y sender; título, autor y ramas nunca.
+// head (sha y repo.id), author_association, los ids numéricos de user y sender y sender.type (un `reopened` de una
+// persona sin commits nuevos: el PR que cerró VanGUARD no se vuelve a cerrar); título, autor y ramas nunca.
 async function pullRequest(c: Context<AppEnv>, cfg: Config, payload: Obj) {
   const accion = typeof payload.action === 'string' ? payload.action : '';
   if (!ACCIONES_PR.has(accion)) return ignorado(c, cfg, 'pull_request', 'evento');
@@ -282,7 +301,8 @@ async function pullRequest(c: Context<AppEnv>, cfg: Config, payload: Obj) {
     const corte = await topeFork(c, cfg);
     if (corte) return corte;
   }
-  return registrar(c, cfg, { event: 'pull_request', base: baseSha, head: headSha, pr: n, commits: [], fork });
+  const reabiertoAMano = accion === 'reopened' && obj(payload.sender).type === 'User';
+  return registrar(c, cfg, { event: 'pull_request', base: baseSha, head: headSha, pr: n, commits: [], fork, reabiertoAMano });
 }
 
 webhooksGithub.post('/github/:id', async (c) => {

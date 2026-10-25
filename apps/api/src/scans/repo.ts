@@ -56,6 +56,90 @@ export async function probarGithub(token: string, repo: string): Promise<Sondeo>
   };
 }
 
+// ── Token de acciones de GitHub (bloqueo de merge, asignaciones/bloqueo-merge-criticos.md §2.8 y §4.1; anexo de cierre
+// de PR). Solo lecturas y sondeos sin efecto: nunca escribe. La rama va siempre con encodeURIComponent. ─────────────
+type Respuesta = { status: number } | { code: ProviderErrorCode };
+// El código HTTP, con el 403 de límite como rate_limited (codigoGithub); red o plazo como código. El cuerpo no se lee.
+async function respuestaGh(url: string, init: RequestInit): Promise<Respuesta> {
+  try {
+    const r = await pedir(url, init, PLAZO);
+    await r.body?.cancel();
+    return r.status === 403 && codigoGithub(r) === 'rate_limited' ? { code: 'rate_limited' } : { status: r.status };
+  } catch (e) {
+    return { code: e instanceof ProviderError ? e.code : 'unavailable' };
+  }
+}
+const caida = (x: Respuesta) => 'code' in x || x.status === 429 || x.status >= 500;
+
+/** E9 con la conexión GitHub `action`: GET /commits/{rama}/status (Commit statuses: read, que trae write). 200 → active;
+ *  401 → revoked; 403 o 404 → error. Un solo check: E9 no reescribe capabilities (pull_requests e issues los fija E53). */
+export async function probarEstadosGithub(token: string, repo: string, rama: string): Promise<Sondeo> {
+  if (!NOMBRE_REPO.test(repo) || !rama) {
+    return sondeoFallido('rechazado', [{ permission: 'statuses:read', ok: false, required: true, error_code: 'invalid' }],
+      { faltan: ['statuses:read'], mensaje: 'La conexión de estados no tiene repo o rama: vuelve a guardar el token.' });
+  }
+  const x = await respuestaGh(`${GH}/repos/${repo}/commits/${encodeURIComponent(rama)}/status`, { headers: ghHeaders(token) });
+  if ('status' in x && x.status >= 200 && x.status < 300) {
+    return { estado: 'ok', faltan: [], checks: [{ permission: 'statuses:read', ok: true, required: true }],
+      capabilities: {}, scopes: [], meta: {}, label: '', expiresAt: null };
+  }
+  const error_code = 'code' in x ? x.code : codigoHttp(x.status);
+  const c: PermCheck[] = [{ permission: 'statuses:read', ok: false, required: true, error_code }];
+  if (caida(x)) return sondeoFallido('caido', c, { mensaje: 'GitHub no respondió. Vuelve a intentarlo.' });
+  if ('status' in x && x.status === 401) {
+    return sondeoFallido('rechazado', c, { motivo: 'unauthorized', faltan: ['statuses:read'],
+      mensaje: 'El token de estados no es válido o caducó.' });
+  }
+  return sondeoFallido('rechazado', c, { faltan: ['statuses:read'],
+    mensaje: `El token de estados no ve ${repo}: márcalo en Only select repositories con Commit statuses.` });
+}
+
+/** El último commit de la rama vigilada con el token de LECTURA (Contents: read): GET /branches/{rama} (≤ 64 KB). */
+export type Rama = { tipo: 'ok'; sha: string } | { tipo: 'sin_rama' } | { tipo: 'token' } | { tipo: 'caido' };
+export async function leerRama(token: string, repo: string, rama: string): Promise<Rama> {
+  let r: Response;
+  try { r = await pedir(`${GH}/repos/${repo}/branches/${encodeURIComponent(rama)}`, { headers: ghHeaders(token) }, PLAZO); }
+  catch { return { tipo: 'caido' }; }
+  if (!r.ok) {
+    await r.body?.cancel();
+    const code = codigoGithub(r);
+    return r.status === 404 ? { tipo: 'sin_rama' } : code === 'unauthorized' || code === 'forbidden' ? { tipo: 'token' }
+      : { tipo: 'caido' };
+  }
+  try {
+    const { texto, cortado } = await leerAcotado(r, 64_000);
+    const sha = cortado ? null : (JSON.parse(texto) as { commit?: { sha?: unknown } }).commit?.sha;
+    return typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? { tipo: 'ok', sha } : { tipo: 'caido' };
+  } catch { return { tipo: 'caido' }; }
+}
+
+/** Sondeo NEGATIVO del token de acciones antes de escribir nada (§4.1 paso 5): GET /keys (Administration: read) y, solo
+ *  en un repo privado, GET /branches/{rama} (Contents: read; en uno público responde 200 con cualquier token). Un 200 →
+ *  ese permiso sobra. 5xx, 429 o plazo en alguno → caido (falla cerrado: nada se guarda). No usa …/protection: con la
+ *  rama sin proteger responde 404 aunque el token tenga Administration. */
+export async function sondeoNegativoEstados(token: string, repo: string, rama: string, privado: boolean):
+  Promise<{ sobra: string[]; caido: boolean }> {
+  const [keys, rama200] = await Promise.all([
+    respuestaGh(`${GH}/repos/${repo}/keys`, { headers: ghHeaders(token) }),
+    privado ? respuestaGh(`${GH}/repos/${repo}/branches/${encodeURIComponent(rama)}`, { headers: ghHeaders(token) }) : null,
+  ]);
+  const ok = (x: Respuesta | null) => !!x && 'status' in x && x.status >= 200 && x.status < 300;
+  const sobra = [...(ok(keys) ? ['administration'] : []), ...(ok(rama200) ? ['contents'] : [])];
+  return { sobra, caido: caida(keys) || (rama200 !== null && caida(rama200)) };
+}
+
+/** Anexo de cierre de PR y botón «Crear issue»: ¿puede el token cerrar PR y crear issues? Sin efecto: POST /pulls y POST
+ *  /issues con un cuerpo vacío. Con el permiso, GitHub valida el cuerpo y responde 422 (faltan head/base o title): no
+ *  crea nada. Sin él, 403 (o 404/410 si no ve el repo o tiene los issues apagados). 5xx, 429 o plazo → caido. */
+export async function sondeoEscrituraPr(token: string, repo: string):
+  Promise<{ pull_requests: boolean; issues: boolean; caido: boolean }> {
+  const post = { method: 'POST', headers: { ...ghHeaders(token), 'Content-Type': 'application/json' }, body: '{}' };
+  const [pr, iss] = await Promise.all([respuestaGh(`${GH}/repos/${repo}/pulls`, post),
+    respuestaGh(`${GH}/repos/${repo}/issues`, post)]);
+  const puede = (x: Respuesta) => 'status' in x && x.status === 422;
+  return { pull_requests: puede(pr), issues: puede(iss), caido: caida(pr) || caida(iss) };
+}
+
 // ── Paso repo de la auditoría (§09.4): árbol por sha, archivos de riesgo acotados y contenido solo en memoria ──
 export type EntradaArbol = { path: string; size: number };
 export const LIM_REPO = { archivos: 20, bytesArchivo: 1_000_000, bytesTotal: 3_000_000, lockfiles: 6, envs: 5 };

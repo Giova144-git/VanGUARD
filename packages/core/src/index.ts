@@ -24,6 +24,7 @@ export * from './lockfiles/composer.ts';
 export * from './secrets/rules.ts';
 export * from './secrets/entropy.ts';
 export * from './revision/diff.ts';
+export * from './revision/bloqueo.ts';
 export * from './ip.ts';
 export * from './stack.ts';
 

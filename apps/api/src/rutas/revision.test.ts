@@ -1,5 +1,5 @@
 // E45, E46, E48 y E49 (revisión de código, asignaciones/revision-codigo.md §4.1 y las pruebas de B3 en §8.2).
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AlertPrefs, CodeReviewSaved, CodeReviewState } from '@vanguard/contracts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 import { envDoble } from '../test/dobles.ts';
@@ -31,6 +31,7 @@ let revisiones: Record<string, unknown>[];
 let avisos: Record<string, unknown>[];
 let tabla: (op: Op) => Resp | undefined;
 let doble: ReturnType<typeof dbDoble>;
+let estados: Record<string, unknown> | null;   // conexión GitHub kind 'action' (bloqueo de merge)
 
 const filaConfig = (o: Record<string, unknown> = {}) => ({ id: CFG, connection_id: CONN, enabled: true, branch: 'main',
   secret_last4: 'Q7xk', hook_events: ['push', 'pull_request'], last_ping_at: '2026-10-24T18:20:03+00:00',
@@ -39,12 +40,13 @@ const filaConfig = (o: Record<string, unknown> = {}) => ({ id: CFG, connection_i
 beforeEach(() => {
   rol = 'owner'; anon = false; sello.llamadas = []; sello.olvidadas = [];
   conexion = { id: CONN, status: 'active', meta: { repo_full_name: 'acme/tienda', default_branch: 'main' } };
-  config = null; revisiones = []; avisos = []; tabla = () => undefined;
+  config = null; revisiones = []; avisos = []; tabla = () => undefined; estados = null;
   doble = dbDoble({
     tabla: (op) => {
       const propia = tabla(op);
       if (propia) return propia;
       if (op.table === 'org_members') return { data: { role: rol } };
+      if (op.table === 'connections' && eqDe(op, 'kind') === 'action') return { data: estados ? [estados] : [] };
       if (op.table === 'connections') {
         const pideOtra = eqDe(op, 'id') !== undefined && eqDe(op, 'id') !== CONN;
         return { data: conexion && eqDe(op, 'org_id') === ORG && !pideOtra ? [conexion] : [] };
@@ -147,6 +149,82 @@ describe('E45 · GET code-review', () => {
     expect(s.recent[2]!.alert).toMatchObject({ delivery: 'failed', delivery_error: '131047' });
     const sel = doble.ops.find((o) => o.table === 'notifications')!;
     expect(eqDe(sel, 'org_id')).toBe(ORG);
+  });
+});
+
+// Bloqueo de merge (asignaciones/bloqueo-merge-criticos.md §4.1 E45 y pruebas B4 de §10.5; anexo de cierre de PR).
+describe('E45 · gate', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => { fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const fetchCalls = () => fetchMock.mock.calls.length;   // E45 nunca llama a GitHub
+  const accion =(o: Record<string, unknown> = {}) => ({ id: 'c0000000-0000-4000-8000-000000000006', status: 'active',
+    last4: 'k9Qz', expires_at: '2026-11-23T20:00:00+00:00', capabilities: { statuses: true, pull_requests: true },
+    meta: { repo_full_name: 'acme/tienda', branch: 'main' }, ...o });
+  const gateDe = async (cfg: Record<string, unknown>) => {
+    config = filaConfig(cfg);
+    return CodeReviewState.parse(await (await pedir('code-review')).json()).config!.gate;
+  };
+  const revBase = { event: 'pull_request', branch: 'main', pr_number: 7, base_sha: SHA, head_sha: 'b'.repeat(40),
+    error_code: null, partial: false, files_changed: 1, lines_added: 14, counts: { critical: 1 }, max_severity: 'critical',
+    new_findings: [], alert_state: 'sent', alert_reason: null, voice_pending: false, notified_at: null, status: 'done',
+    created_at: '2026-10-24T19:45:08+00:00', finished_at: '2026-10-24T19:45:12+00:00' };
+
+  it('state: off, needs_token, unchecked y error; close_pr solo si el token puede cerrar PR', async () => {
+    expect(await gateDe({ gate_enabled: false })).toMatchObject({ enabled: false, state: 'off', context: 'VanGUARD',
+      statuses_connection: null, protection: null });
+    expect(await gateDe({ enabled: false, gate_enabled: true })).toMatchObject({ state: 'off' });
+    expect(await gateDe({ gate_enabled: true })).toMatchObject({ state: 'needs_token', can_close_pr: false, close_pr: false });
+    estados = accion();
+    expect(await gateDe({ gate_enabled: true, gate_min: 'high', gate_close_pr: true })).toMatchObject({ state: 'unchecked',
+      min_severity: 'high', can_close_pr: true, close_pr: true,
+      statuses_connection: { status: 'active', last4: 'k9Qz', expires_at: '2026-11-23T20:00:00.000Z' } });
+    expect(await gateDe({ gate_enabled: true, gate_last_error: 'forbidden' })).toMatchObject({ state: 'error',
+      last_error: 'forbidden' });
+    estados = accion({ status: 'revoked' });
+    expect(await gateDe({ gate_enabled: true, gate_last_error: 'token' })).toMatchObject({ state: 'needs_token',
+      last_error: 'token' });
+    estados = accion({ capabilities: { statuses: true } });
+    expect(await gateDe({ gate_enabled: true, gate_close_pr: true })).toMatchObject({ can_close_pr: false, close_pr: false });
+    expect(fetchCalls()).toBe(0);
+  });
+
+  it('el token de acciones es de otro repo → config sin gate (el FRONT no pinta la sección)', async () => {
+    estados = accion({ meta: { repo_full_name: 'acme/otro', branch: 'main' } });
+    expect(await gateDe({ gate_enabled: true })).toBeUndefined();
+  });
+
+  it('cada revisión lleva gate solo si alguna gate_* tiene algo; con pr_action y pr_close_error del anexo', async () => {
+    config = filaConfig({ gate_enabled: true });
+    revisiones = [
+      { ...revBase, id: REV, gate_blocking: 1, gate_state: 'failure', gate_error: null, gate_published_at: '2026-10-24T19:45:12.7+00:00',
+        gate_override_at: null, gate_pr_action: 'close_failed', gate_pr_error: 'forbidden',
+        gate_findings: [{ finding_id: null, rule_id: 'CB_SECRET_STRIPE_LIVE', severity: 'critical', title: 'Clave live de Stripe',
+          resource: 'src/lib/cobros.ts:3' }] },
+      { ...revBase, id: 'c4000000-0000-4000-8000-000000000012', gate_blocking: null, gate_state: null, gate_error: null,
+        gate_findings: [] },
+      { ...revBase, id: 'c4000000-0000-4000-8000-000000000013', gate_blocking: null, gate_state: null, gate_error: 'sin_token',
+        gate_findings: [] },
+    ];
+    const s = CodeReviewState.parse(await (await pedir('code-review')).json());
+    expect(s.recent[0]!.gate).toEqual({ blocking: 1, state: 'failure', error: null, published_at: '2026-10-24T19:45:12.700Z',
+      override_at: null, pr_action: 'close_failed', pr_close_error: 'forbidden', findings: [expect.objectContaining({
+        rule_id: 'CB_SECRET_STRIPE_LIVE', finding_id: null })] });
+    expect('gate' in s.recent[1]!).toBe(false);
+    expect(s.recent[2]!.gate).toMatchObject({ blocking: null, state: null, error: 'sin_token' });
+    const sel = doble.ops.find((o) => o.table === 'code_reviews')!;
+    expect(sel.columns).toContain('gate_pr_action');
+  });
+
+  it('una org con el bloqueo apagado no tiene gate en ninguna revisión; ≤ 5 subpeticiones y la de acciones por org_id', async () => {
+    config = filaConfig();
+    revisiones = [{ ...revBase, id: REV, gate_blocking: null, gate_state: null, gate_error: null, gate_findings: [] }];
+    const s = CodeReviewState.parse(await (await pedir('code-review')).json());
+    expect(s.recent.every((r) => !('gate' in r))).toBe(true);
+    const ops = doble.ops.filter((o) => o.table !== 'org_members' && o.table !== 'orgs');
+    expect(ops.length).toBeLessThanOrEqual(5);
+    const acc = ops.find((o) => o.table === 'connections' && eqDe(o, 'kind') === 'action')!;
+    expect([eqDe(acc, 'org_id'), eqDe(acc, 'provider')]).toEqual([ORG, 'github']);
   });
 });
 

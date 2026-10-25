@@ -13,7 +13,8 @@ import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
 import { esHostProduccion } from '../mw/prod-host.ts';
 import { probarCloudflareAcciones, probarCloudflareLectura } from '../scans/cloudflare.ts';
-import { probarGithub } from '../scans/repo.ts';
+import { mismoRepoGh } from '../revision/acciones-pr.ts';
+import { probarEstadosGithub, probarGithub } from '../scans/repo.ts';
 import type { Sondeo } from '../scans/sondeo.ts';
 import { normalizarRef, probarSupabase } from '../scans/supabase.ts';
 
@@ -151,8 +152,9 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
       throw new ApiError('invalid_body', 'Revisa los campos marcados',
         { field_errors: { pat: ['No parece un token fine-grained de GitHub (empieza por github_pat_).'] } });
     }
+    // Solo las de lectura: el token de acciones del bloqueo de merge (kind 'action', E53) no es «un repo conectado».
     const { count, error } = await admin.from('connections').select('id', { count: 'exact', head: true })
-      .eq('org_id', orgId).eq('provider', 'github').eq('status', 'active');
+      .eq('org_id', orgId).eq('provider', 'github').eq('kind', 'read').eq('status', 'active');
     if (error) throw new ApiError('internal', 'No pudimos comprobar tus conexiones');
     if ((count ?? 0) > 0) throw new ApiError('conflict', 'Ya hay un repo conectado. Quítalo antes de conectar otro.');
     sondeo = await probarGithub(token, body.repo_full_name);
@@ -200,6 +202,11 @@ connections.post('/orgs/:org/connections/:id/test', requireAdmin, async (c) => {
   const ctx: SecretCtx = { orgId, connectionId: fila.id, provider: fila.provider, kind: fila.kind };
   const sondeo = await withSecret(c.env, admin, ctx, async (t) => {
     if (fila.provider === 'supabase') return probarSupabase(t, String(meta.project_ref ?? ''));
+    // El token de acciones del bloqueo de merge no tiene Contents: probarGithub lo daría por roto. Solo lee los estados
+    // de la rama vigilada (meta.branch), sin escribir nada.
+    if (fila.provider === 'github' && fila.kind === 'action') {
+      return probarEstadosGithub(t, String(meta.repo_full_name ?? ''), String(meta.branch ?? ''));
+    }
     if (fila.provider === 'github') return probarGithub(t, String(meta.repo_full_name ?? ''));
     const zoneId = String(meta.zone_id ?? '');
     return fila.kind === 'action'
@@ -231,11 +238,13 @@ connections.delete('/orgs/:org/connections/:id', requireAdmin, async (c) => {
   if (!id.success) throw new ApiError('not_found', 'Conexión no encontrada');
   const admin = db(c.env);
   const orgId = c.get('orgId');
-  const { data: fila, error } = await admin.from('connections').select('id, provider, kind')
+  const { data: fila, error } = await admin.from('connections').select('id, provider, kind, meta')
     .eq('id', id.data).eq('org_id', orgId).maybeSingle();
   if (error) throw new ApiError('internal', 'No pudimos leer la conexión');
   if (!fila) throw new ApiError('not_found', 'Conexión no encontrada');
-  if (fila.kind === 'action') {
+  // Solo los tokens de acciones de CLOUDFLARE tienen bloqueos de IP: el de GitHub (bloqueo de merge) no consulta
+  // `actions`, así que un «Bloquear IP» recién propuesto en la org no impide quitarlo.
+  if (fila.kind === 'action' && fila.provider === 'cloudflare') {
     // Antes de borrar un token de acciones se deshacen (como E22) sus bloqueos executed; si alguno no se puede retirar,
     // 409 y no se borra nada (§05.8). Retirar toca Cloudflare: solo desde el host de producción (S15 15.3). Un
     // executeBlock en marcha (proposed reciente) aún no tiene previous.connection_id: también 409 hasta que termine.
@@ -262,7 +271,22 @@ connections.delete('/orgs/:org/connections/:id', requireAdmin, async (c) => {
   }
   const { error: ed } = await admin.from('connections').delete().eq('id', fila.id).eq('org_id', orgId);
   if (ed) throw new ApiError('internal', 'No pudimos borrar la conexión');
-  log('info', 'connection.borrada', { rid: c.get('rid'), provider: fila.provider });
+  // Bloqueo de merge (bloqueo-merge-criticos.md §2.8; varias-codebases.md §2.6, punto 6): al quitar la GitHub de lectura
+  // se quita también el token de acciones de la org, solo si es del MISMO repo (repo_id; sin él, el nombre). La config
+  // del bloqueo ya cae en cascada con la de revisión. Mejor esfuerzo: la de lectura ya no está.
+  let conEstados = false;
+  if (fila.provider === 'github' && fila.kind === 'read') {
+    const { data: acc, error: ea } = await admin.from('connections').select('id, meta').eq('org_id', orgId)
+      .eq('provider', 'github').eq('kind', 'action').limit(1);
+    const a = (Array.isArray(acc) ? acc[0] : acc) as { id: string; meta: Record<string, unknown> } | null | undefined;
+    if (ea) log('warn', 'connection.estados_sin_leer', { rid: c.get('rid'), code: ea.code ?? null });
+    else if (a && mismoRepoGh(a.meta ?? {}, (fila.meta ?? {}) as Record<string, unknown>)) {
+      const { error: eb } = await admin.from('connections').delete().eq('id', a.id).eq('org_id', orgId);
+      if (eb) log('warn', 'connection.estados_sin_borrar', { rid: c.get('rid'), code: eb.code ?? null });
+      else conEstados = true;
+    }
+  }
+  log('info', 'connection.borrada', { rid: c.get('rid'), provider: fila.provider, con_estados: conEstados });
   const revoke = REVOKE_URL[fila.provider];
   if (revoke) c.header('X-VG-Revoke-Url', revoke);
   return c.body(null, 204);

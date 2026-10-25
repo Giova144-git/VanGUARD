@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobMsg, MsgRevision } from '../jobs.ts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 import { envDoble } from '../test/dobles.ts';
+import { dedupeKey } from '@vanguard/core/crypto';
 
 // Paso 'diff' de la revisión de código sin red (asignaciones/revision-codigo.md §2.2–2.5 y pruebas B4+B5 de §8.2):
 // GitHub con fetch simulado, supabase-js con el doble, el token y las llaves con dobles. El paso 'aviso' se prueba en
@@ -34,6 +35,9 @@ vi.mock('../lib/keyring.ts', () => {
 });
 const aviso = vi.hoisted(() => ({ fn: vi.fn(async () => 'ack' as const) }));
 vi.mock('../notify/revision.ts', () => ({ avisarRevision: aviso.fn }));
+// Paso 'estado' (bloqueo de merge): aquí solo el enrutado; se prueba en revision/estado.test.ts.
+const paso = vi.hoisted(() => ({ estado: vi.fn(async () => 'ack' as const), dlq: vi.fn(async () => 'ack' as const) }));
+vi.mock('./estado.ts', () => ({ pasoEstado: paso.estado, cierreEstadoDlq: paso.dlq }));
 
 const { cierreRevisionDlq, LIM_REVISION, ocultarRutas, pasoRevision } = await import('./pasos.ts');
 
@@ -60,6 +64,8 @@ let gh: () => Response;
 let fetchMock: ReturnType<typeof vi.fn>;
 let doble: ReturnType<typeof dbDoble>;
 let entorno: ReturnType<typeof envDoble>;
+let ignorados: Fila[];                       // findings ignored de la org (bloqueo de merge)
+let gateError: Resp['error'];                // error del update de gate_* (p. ej. 23514)
 
 const cumple = (f: Fila, op: Op) => op.filters.every(([c, o, v]) =>
   o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : o === 'is' ? (f[c] ?? null) === v : true);
@@ -79,14 +85,21 @@ beforeEach(() => {
   secretoError = null;
   estado.ctx = null;
   aviso.fn.mockClear();
+  paso.estado.mockClear();
+  paso.dlq.mockClear();
+  ignorados = [];
+  gateError = null;
   doble = dbDoble({
     tabla: (op): Resp | undefined => {
       if (op.table === 'code_review_configs' && op.action === 'select') return { data: eqDe(op, 'id') === CFG ? config : null };
       if (op.table === 'connections') return { data: eqDe(op, 'id') === CONN ? conexion : null };
       if (op.table === 'connection_secrets') return { error: secretoError };
+      if (op.table === 'findings') return { data: ignorados };
       if (op.table !== 'code_reviews') return undefined;
       const hit = cumple(fila, op) ? fila : null;
       if (op.action === 'select') return { data: hit };
+      if (op.action === 'update' && gateError && 'gate_findings' in (op.payload as object)
+        && (op.payload as Fila & { gate_findings: unknown[] }).gate_findings.length) return { error: gateError };
       // Como PostgREST, un update().select(cols) devuelve solo esas columnas: el claim tiene que pedir lo que usa.
       if (op.action === 'update') {
         if (hit) Object.assign(fila, op.payload);
@@ -496,7 +509,144 @@ describe('ocultarRutas', () => {
   });
 });
 
+// Bloqueo de merge (asignaciones/bloqueo-merge-criticos.md §2.5 y pruebas B3 de §10.5).
+describe('paso diff · bloqueo de merge', () => {
+  const estadoEncolado = (): JobMsg => ({ v: 1, kind: 'review', org_id: ORG, review_id: REV, paso: 'estado' });
+  const gateUpdates = () => de('code_reviews', 'update').filter((o) => 'gate_blocking' in (o.payload as object));
+  const encender = (o: Fila = {}) => { config = { id: CFG, connection_id: CONN, enabled: true, gate_enabled: true,
+    gate_min: 'critical', ...o }; };
+
+  it('apagado: ni ignorados, ni gate_*, ni estado (las mismas subpeticiones que antes); fallar() tampoco encola', async () => {
+    expect(await correr()).toBe('ack');
+    expect(de('findings', 'select')).toEqual([]);
+    expect(gateUpdates()).toEqual([]);
+    expect(entorno.enviados).toEqual([avisoEncolado()]);
+    Object.assign(fila, { status: 'queued' });
+    entorno.enviados.length = 0;
+    gh = () => new Response('Not Found', { status: 404 });
+    expect(await correr()).toBe('ack');
+    expect(fila).toMatchObject({ status: 'failed', error_code: 'not_found' });
+    expect(entorno.enviados).toEqual([]);
+  });
+
+  it('encendido: gate_blocking y gate_findings ANTES de la RPC (CAS running) y encola estado tras el aviso', async () => {
+    encender();
+    let alCerrar: unknown = 'sin llamar';
+    const rpcReal = doble.client.rpc;
+    doble.client.rpc = async (name: string, a: Record<string, unknown>) => { alCerrar = fila.gate_blocking; return rpcReal(name, a); };
+    expect(await correr()).toBe('ack');
+    expect(alCerrar).toBe(1);
+    const q = de('findings', 'select')[0]!;
+    expect(q.columns).toBe('dedupe_key, rule_id, fp:evidence->>fingerprint_short');
+    expect(q.filters).toEqual([['org_id', 'eq', ORG], ['status', 'eq', 'ignored'], ['rule_id', 'in', ['CB_SECRET_STRIPE_LIVE']]]);
+    const u = gateUpdates()[0]!;
+    expect(u.payload).toEqual({ gate_blocking: 1, gate_findings: [{ finding_id: null, rule_id: 'CB_SECRET_STRIPE_LIVE',
+      severity: 'critical', title: 'Clave live de Stripe en el código', resource: 'src/lib/pagos.ts:3' }] });
+    expect(u.filters).toEqual([['id', 'eq', REV], ['org_id', 'eq', ORG], ['status', 'eq', 'running']]);
+    expect(JSON.stringify(u.payload)).not.toContain(STRIPE);
+    expect(entorno.enviados).toEqual([avisoEncolado(), estadoEncolado()]);
+  });
+
+  it('un ignored con el mismo valor en el mismo sitio tapa (gate_blocking 0); el estado se publica igual', async () => {
+    encender();
+    ignorados = [{ dedupe_key: await dedupeKey(ORG, 'CB_SECRET_STRIPE_LIVE', 'src/lib/pagos.ts:3'),
+      rule_id: 'CB_SECRET_STRIPE_LIVE', fp: null }];
+    await correr();
+    expect(gateUpdates()[0]!.payload).toEqual({ gate_blocking: 0, gate_findings: [] });
+    expect(entorno.enviados).toContainEqual(estadoEncolado());
+  });
+
+  it('PR con dos pushes y la misma clave: la RPC no ve nada nuevo pero gate_blocking = 1 y encola estado', async () => {
+    encender();
+    Object.assign(fila, { event: 'pull_request' });
+    rpcAlerta = 'none';
+    const rpcReal = doble.client.rpc;
+    doble.client.rpc = async (name: string, a: Record<string, unknown>) => {
+      const r = await rpcReal(name, a);
+      return { ...r, data: { ...(r.data as object), nuevos: 0 } };   // reported_keys de la revisión anterior del PR
+    };
+    expect(await correr()).toBe('ack');
+    expect(fila).toMatchObject({ status: 'done', gate_blocking: 1 });
+    expect(entorno.enviados).toEqual([estadoEncolado()]);   // sin aviso repetido, con estado
+  });
+
+  it('sin candidatas ≥ umbral → no consulta ignorados y escribe 0', async () => {
+    encender();
+    gh = () => new Response(diff(...nuevo('src/a.ts', ['export const a = 1;'])));
+    rpcAlerta = 'none';
+    await correr();
+    expect(de('findings', 'select')).toEqual([]);
+    expect(gateUpdates()[0]!.payload).toEqual({ gate_blocking: 0, gate_findings: [] });
+  });
+
+  it('la base rechaza gate_findings (23514) → se repite con [] y solo el número', async () => {
+    encender();
+    gateError = { code: '23514' };
+    expect(await correr()).toBe('ack');
+    expect(gateUpdates().map((o) => o.payload)).toEqual([
+      { gate_blocking: 1, gate_findings: expect.any(Array) }, { gate_blocking: 1, gate_findings: [] }]);
+  });
+
+  it('fallar() con el bloqueo ya leído encola estado; antes de leer la config (sha_invalido) no', async () => {
+    encender();
+    gh = () => new Response('Not Found', { status: 404 });
+    expect(await correr()).toBe('ack');
+    expect(fila).toMatchObject({ status: 'failed', error_code: 'not_found' });
+    expect(entorno.enviados).toEqual([estadoEncolado()]);
+    Object.assign(fila, { status: 'queued', head_sha: 'no-es-un-sha' });
+    entorno.enviados.length = 0;
+    expect(await correr()).toBe('ack');
+    expect(fila.error_code).toBe('sha_invalido');
+    expect(entorno.enviados).toEqual([]);
+  });
+
+  it('falla encolar estado tras cerrar → retry; la reentrega (yaReclamada) lo reencola sin repetir el diff', async () => {
+    encender();
+    rpcAlerta = 'none';
+    entorno.cola.send.mockRejectedValueOnce(new Error('cola caída'));
+    expect(await correr(1)).toEqual({ retry: 10 });
+    expect(fila).toMatchObject({ status: 'done', gate_blocking: 1 });
+    expect(await correr(2)).toBe('ack');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(entorno.enviados).toEqual([estadoEncolado()]);
+  });
+
+  it('yaReclamada: done con gate_blocking y nada publicado → reencola estado; con gate_state o bloqueo apagado, no', async () => {
+    encender();
+    Object.assign(fila, { status: 'done', alert_state: 'sent', gate_blocking: 1, gate_state: null, gate_error: null });
+    expect(await correr(2)).toBe('ack');
+    expect(entorno.enviados).toEqual([estadoEncolado()]);
+    fila.gate_state = 'failure';
+    expect(await correr(3)).toBe('ack');
+    fila.gate_state = null;
+    config!.gate_enabled = false;
+    expect(await correr(4)).toBe('ack');
+    Object.assign(fila, { gate_blocking: null });   // done sin cálculo (se encendió después): tampoco
+    config!.gate_enabled = true;
+    expect(await correr(5)).toBe('ack');
+    expect(entorno.enviados).toHaveLength(1);
+  });
+
+  it('pasoRevision con paso estado → revision/estado.ts con attempts', async () => {
+    const m: MsgRevision = { ...msg(), paso: 'estado' };
+    expect(await pasoRevision(entorno.env, m, 3)).toBe('ack');
+    expect(paso.estado).toHaveBeenCalledWith(entorno.env, m, 3);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('DLQ de la revisión', () => {
+  it('estado agotado → cierreEstadoDlq; diff agotado → además encola estado (mejor esfuerzo)', async () => {
+    const m: MsgRevision = { ...msg(), paso: 'estado' };
+    expect(await cierreRevisionDlq(entorno.env, m)).toBe('ack');
+    expect(paso.dlq).toHaveBeenCalledWith(entorno.env, m);
+    fila.status = 'running';
+    expect(await cierreRevisionDlq(entorno.env, msg('diff'))).toBe('ack');
+    expect(entorno.enviados).toEqual([{ v: 1, kind: 'review', org_id: ORG, review_id: REV, paso: 'estado' }]);
+    entorno.cola.send.mockRejectedValueOnce(new Error('cola caída'));
+    expect(await cierreRevisionDlq(entorno.env, msg('diff'))).toBe('ack');
+  });
+
   it('diff agotado → failed/dlq si sigue queued o running; done con aviso pendiente → not_sent/dlq', async () => {
     fila.status = 'running';
     expect(await cierreRevisionDlq(entorno.env, msg('diff'))).toBe('ack');

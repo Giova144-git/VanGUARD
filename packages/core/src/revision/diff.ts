@@ -58,7 +58,7 @@ function bloquesPem(lineas: readonly LineaDiff[]): { contexto: Set<number>; cieg
 type Abierto = {
   cab: string; estado: ArchivoDiff['estado']; binario: boolean; comillas: boolean;
   mas: string | null; menos: string | null; renombre: string | null;   // `+++ b/…`, `--- a/…`, `rename to …`
-  decidido: boolean; fuera: boolean; lineas: LineaDiff[];
+  decidido: boolean; fuera: boolean; lock: boolean; lineas: LineaDiff[];
 };
 /** `diff --git a/P b/P` → P. En un renombre las dos mitades no coinciden y la ruta sale de `rename to`. */
 function rutaCabecera(cab: string): string | null {
@@ -71,7 +71,10 @@ function rutaCabecera(cab: string): string | null {
 /** cortado: tope de archivos o de texto, ruta entre comillas, binario que no es multimedia, texto (con hunks) con una
  *  extensión que scanArchivo salta, o bloque de clave privada tocado sin su BEGIN o su END a la vista. Salta
  *  node_modules, vendor, dist, build y .git sin cortar. Una ruta entre comillas (git cita las que no son ASCII) se salta
- *  en P0 (P1: decodificarla); un borrado no corta nunca: no añade nada que escanear. */
+ *  en P0 (P1: decodificarla); un borrado no corta nunca: no añade nada que escanear. Los lockfiles (esLockfile) siguen en
+ *  `archivos` pero sin líneas: nunca se escanean, y contarlos para el tope de texto añadido dejaba parcial (y, con el
+ *  bloqueo de merge, bloqueado en cada push) cualquier PR de dependencias grande (bloqueo-merge-criticos.md §2.5). El
+ *  tope de 1 MB de lectura del diff (revision/pasos.ts) sí los incluye. */
 export function parsearDiff(texto: string, lim: Readonly<{ archivos: number; bytesAnadidos: number }> = LIM_DIFF):
   { archivos: ArchivoDiff[]; cortado: boolean } {
   const archivos: ArchivoDiff[] = [];
@@ -97,6 +100,7 @@ export function parsearDiff(texto: string, lim: Readonly<{ archivos: number; byt
       return true;
     }
     if (archivos.length >= lim.archivos) { cortado = true; x.fuera = true; return false; }
+    x.lock = esLockfile(path);
     // Un binario que no es multimedia no se escanea: así un `.ts` con un NUL no esconde una clave.
     if (x.binario && x.estado !== 'deleted' && !EXT_BINARIA.test(path)) cortado = true;
     archivos.push({ path, estado: x.estado, binario: x.binario, lineas: x.lineas });
@@ -109,7 +113,7 @@ export function parsearDiff(texto: string, lim: Readonly<{ archivos: number; byt
       const c = l[0];
       if (c === '\\') continue;                     // \ No newline at end of file
       if (c === '+') {
-        if (!a.fuera) {
+        if (!a.fuera && !a.lock) {
           const t = l.slice(1);
           if (bytes + t.length + 1 > lim.bytesAnadidos) { cortado = true; a = null; break; }
           bytes += t.length + 1;
@@ -118,9 +122,9 @@ export function parsearDiff(texto: string, lim: Readonly<{ archivos: number; byt
         nuevo--; sig++;
         continue;
       }
-      if (c === '-') { if (!a.fuera) a.lineas.push({ t: '-', texto: l.slice(1), linea: null }); viejo--; continue; }
+      if (c === '-') { if (!a.fuera && !a.lock) a.lineas.push({ t: '-', texto: l.slice(1), linea: null }); viejo--; continue; }
       if (c === ' ' || l === '') {                  // contexto (vacío si alguien quitó el espacio del final)
-        if (!a.fuera) a.lineas.push({ t: ' ', texto: l.slice(1), linea: sig });
+        if (!a.fuera && !a.lock) a.lineas.push({ t: ' ', texto: l.slice(1), linea: sig });
         viejo--; nuevo--; sig++;
         continue;
       }
@@ -130,7 +134,7 @@ export function parsearDiff(texto: string, lim: Readonly<{ archivos: number; byt
       if (a && !decidir(a)) { a = null; break; }
       const cab = l.slice(11);
       a = { cab, estado: 'modified', binario: false, comillas: cab.includes('"'), mas: null, menos: null, renombre: null,
-        decidido: false, fuera: false, lineas: [] };
+        decidido: false, fuera: false, lock: false, lineas: [] };
       enParche = false;
       continue;
     }

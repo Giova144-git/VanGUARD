@@ -323,3 +323,35 @@ describe('envDelDiff', () => {
     expect(envDelDiff(r.archivos, compactos(r.archivos))).toEqual([]);
   });
 });
+
+// Bloqueo de merge (asignaciones/bloqueo-merge-criticos.md §2.5 y §10.5 B2): los lockfiles no cuentan para el tope de
+// texto añadido; lo demás sigue cortando igual.
+describe('parsearDiff · lockfiles fuera del tope de texto añadido', () => {
+  const linea = 'x'.repeat(99);                                           // 100 caracteres con el salto
+  const lock = Array.from({ length: 2000 }, (_, i) => `  /paquete-${i}@1.0.0: ${linea.slice(0, 90)}`);   // > 200 KB
+  it('200 KB en pnpm-lock.yaml y una clave en src/x.ts → no cortado, la clave sale y el lockfile sigue listado', async () => {
+    const d = diff(...nuevo('pnpm-lock.yaml', lock), ...nuevo('src/x.ts', [`const k = '${T.stripe}';`]));
+    expect(d.length).toBeGreaterThan(200_000);
+    const r = parsearDiff(d);
+    expect(r.cortado).toBe(false);
+    expect(r.archivos.map((a) => [a.path, a.lineas.length])).toEqual([['pnpm-lock.yaml', 0], ['src/x.ts', 1]]);
+    const hs = await secretosDelDiff(compactos(r.archivos));
+    expect(hs.map((h) => [h.rule_id, h.resource])).toEqual([['CB_SECRET_STRIPE_LIVE', 'src/x.ts:1']]);
+  });
+  it('package-lock.json, yarn.lock y un composer.lock anidado tampoco cuentan', () => {
+    const r = parsearDiff(diff(...nuevo('package-lock.json', lock), ...nuevo('web/yarn.lock', lock),
+      ...nuevo('api/composer.lock', lock), ...nuevo('src/a.ts', ['export const a = 1;'])));
+    expect(r.cortado).toBe(false);
+    expect(r.archivos.find((a) => a.path === 'src/a.ts')!.lineas).toHaveLength(1);
+  });
+  it('200 KB en src/datos.ts → cortado; un binario raro y una ruta entre comillas siguen cortando', () => {
+    expect(parsearDiff(diff(...nuevo('src/datos.ts', Array.from({ length: 2000 }, () => linea)))).cortado).toBe(true);
+    const bin = diff(`diff --git a/hoja.xlsx b/hoja.xlsx`, 'new file mode 100644', 'index 0000000..1111111',
+      'Binary files /dev/null and b/hoja.xlsx differ', ...nuevo('pnpm-lock.yaml', ['x']));
+    expect(parsearDiff(bin).cortado).toBe(true);
+    const ruta = '"b/docs/Gu\\303\\255a.md"';
+    const citada = diff(`diff --git "a/docs/Gu\\303\\255a.md" ${ruta}`, 'new file mode 100644', 'index 0000000..1111111',
+      '--- /dev/null', `+++ ${ruta}`, '@@ -0,0 +1 @@', '+hola', ...nuevo('pnpm-lock.yaml', ['x']));
+    expect(parsearDiff(citada).cortado).toBe(true);
+  });
+});

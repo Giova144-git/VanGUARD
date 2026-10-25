@@ -10,6 +10,8 @@ import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
+import { aGateConfig, aGateRevision, COLUMNAS_ESTADOS, COLUMNAS_GATE_CONFIG, COLUMNAS_GATE_REVISION, esRepoDelBloqueo }
+  from './bloqueo.ts';
 
 // Revisión de código en cada push (docs/plan_maestro_trabajo/asignaciones/revision-codigo.md §4.1). E45 y E48 los lee
 // cualquier miembro (también el anónimo de la demo, sin URL ni secreto); E46 y E49 solo admins. El webhook (E47) y los
@@ -54,7 +56,7 @@ async function conexionGithub(c: Context<AppEnv>, connectionId?: string): Promis
 // state: off si está apagada; error si el último fallo es posterior al último ping y al último evento; waiting_ping sin
 // ping ni eventos; si no, connected. webhook_url solo en producción y para owner/admin (en local APP_ORIGIN es la SPA
 // en http y el contrato exige https; el anónimo de la demo no la ve).
-function aConfig(c: Context<AppEnv>, f: Fila, repo: string): CodeReviewConfig {
+function aConfig(c: Context<AppEnv>, f: Fila, repo: string, gate?: CodeReviewConfig['gate']): CodeReviewConfig {
   const ping = ms(f.last_ping_at), evento = ms(f.last_event_at), fallo = ms(f.last_error_at);
   const ultimo = Math.max(Number.isNaN(ping) ? -Infinity : ping, Number.isNaN(evento) ? -Infinity : evento);
   const state = !f.enabled ? 'off'
@@ -71,7 +73,7 @@ function aConfig(c: Context<AppEnv>, f: Fila, repo: string): CodeReviewConfig {
     hook_events: Array.isArray(f.hook_events)
       ? f.hook_events.filter((e): e is string => typeof e === 'string' && e.length <= 40).slice(0, 30) : [],
     last_ping_at: isoN(f.last_ping_at), last_event_at: isoN(f.last_event_at),
-    last_error: typeof f.last_error === 'string' ? f.last_error : null });
+    last_error: typeof f.last_error === 'string' ? f.last_error : null, ...(gate ? { gate } : {}) });
 }
 
 function aRevision(f: Fila, avisos: Fila[], ahora: number): CodeReview | null {
@@ -83,6 +85,7 @@ function aRevision(f: Fila, avisos: Fila[], ahora: number): CodeReview | null {
   const errorFila = delivery === 'failed' ? avisos.find((a) => a.status === 'failed' && typeof a.error === 'string')?.error : null;
   const notificada = ms(f.notified_at);
   const cuentas = (f.counts ?? {}) as Fila;
+  const gate = aGateRevision(f);   // bloqueo de merge (0016): solo si alguna columna gate_* tiene algo
   const r = CodeReview.safeParse({ id: f.id, event: f.event, branch: f.branch, pr_number: f.pr_number ?? null,
     base_sha: f.base_sha, head_sha: f.head_sha,
     status: interrumpida ? 'failed' : f.status, error_code: interrumpida ? 'interrumpida' : f.error_code ?? null,
@@ -93,26 +96,31 @@ function aRevision(f: Fila, avisos: Fila[], ahora: number): CodeReview | null {
       delivery_error: typeof errorFila === 'string' && ERROR_ENTREGA.test(errorFila) ? errorFila : null,
       voice_pending: f.voice_pending === true, notified_at: isoN(f.notified_at),
       seconds: Number.isNaN(notificada) || Number.isNaN(creada) ? null : Math.max(0, (notificada - creada) / 1000) },
-    created_at: iso(String(f.created_at)), finished_at: isoN(f.finished_at) });
+    created_at: iso(String(f.created_at)), finished_at: isoN(f.finished_at), ...(gate ? { gate } : {}) });
   return r.success ? r.data : null;
 }
 
-// E45 · GET /api/orgs/:org/code-review · user · P0 → CodeReviewState. ≤ 4 subpeticiones: conexión, config y revisiones
-// (en paralelo) y los WhatsApp de esas revisiones.
+// E45 · GET /api/orgs/:org/code-review · user · P0 → CodeReviewState. ≤ 5 subpeticiones: conexión, config, revisiones y
+// la conexión de acciones de GitHub del bloqueo de merge (en paralelo), y los WhatsApp de esas revisiones. Ninguna a
+// GitHub. config.gate solo en el repo del bloqueo (bloqueo-merge-criticos.md §4.1; varias-codebases.md §2.6).
 revision.get('/orgs/:org/code-review', async (c) => {
   const orgId = c.get('orgId');
   const admin = db(c.env);
-  const [conn, cfg, revs] = await Promise.all([
+  const [conn, cfg, revs, acc] = await Promise.all([
     conexionGithub(c),
-    admin.from('code_review_configs').select(COLUMNAS_CONFIG).eq('org_id', orgId).order('created_at', { ascending: false })
+    admin.from('code_review_configs').select(`${COLUMNAS_CONFIG}, ${COLUMNAS_GATE_CONFIG}`).eq('org_id', orgId)
+      .order('created_at', { ascending: false }).limit(1),
+    admin.from('code_reviews').select(`${COLUMNAS_REVISION}, ${COLUMNAS_GATE_REVISION}`).eq('org_id', orgId)
+      .order('created_at', { ascending: false }).limit(10),
+    admin.from('connections').select(COLUMNAS_ESTADOS).eq('org_id', orgId).eq('provider', 'github').eq('kind', 'action')
       .limit(1),
-    admin.from('code_reviews').select(COLUMNAS_REVISION).eq('org_id', orgId).order('created_at', { ascending: false })
-      .limit(10),
   ]);
-  if (cfg.error || revs.error) {
-    log('error', 'revision.estado_error', { rid: c.get('rid'), code: cfg.error?.code ?? revs.error?.code ?? null });
+  if (cfg.error || revs.error || acc.error) {
+    log('error', 'revision.estado_error', { rid: c.get('rid'),
+      code: cfg.error?.code ?? revs.error?.code ?? acc.error?.code ?? null });
     throw new ApiError('internal', 'No pudimos leer la revisión de código');
   }
+  const estados = ((Array.isArray(acc.data) ? acc.data[0] : acc.data) ?? null) as Fila | null;
   if (!conn) return c.json(CodeReviewState.parse({ available: false, reason: 'sin_conexion', config: null, recent: [] }));
   const filaCfg = ((cfg.data ?? []) as unknown as Fila[]).find((f) => f.connection_id === conn.id) ?? null;
   const filas = (revs.data ?? []) as unknown as Fila[];
@@ -134,9 +142,11 @@ revision.get('/orgs/:org/code-review', async (c) => {
     else log('warn', 'revision.fila_fuera_de_contrato', { rid: c.get('rid') });
   }
   const repo = typeof conn.meta.repo_full_name === 'string' ? conn.meta.repo_full_name : '';
+  // Hoy E45 sirve siempre la conexión principal; con ?connection_id= (varias-codebases B6) el 3.er argumento dirá si lo es.
+  const gate = filaCfg && esRepoDelBloqueo(conn.meta, estados, true) ? aGateConfig(filaCfg, estados) : undefined;
   return c.json(CodeReviewState.parse({ available: conn.status === 'active',
     reason: conn.status === 'active' ? null : 'conexion_inactiva',
-    config: filaCfg ? aConfig(c, filaCfg, repo) : null, recent }));
+    config: filaCfg ? aConfig(c, filaCfg, repo, gate) : null, recent }));
 });
 
 // E46 · PUT /api/orgs/:org/code-review · admin · P0 → CodeReviewSaved. Sin config: la crea con su secreto vgw_ sellado

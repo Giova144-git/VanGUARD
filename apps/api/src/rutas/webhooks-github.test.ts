@@ -646,6 +646,59 @@ describe('E47 · pull_request de forks: topes', () => {
   });
 });
 
+// Bloqueo de merge (asignaciones/bloqueo-merge-criticos.md §4.1 E47 y prueba B3 de §10.5) y anexo de cierre de PR
+// (punto 4: respeto a la decisión humana).
+describe('E47 · bloqueo de merge', () => {
+  const GATE = { gate_blocking: 2, gate_findings: [{ rule_id: 'CB_SECRET_AWS' }], gate_state: 'error', gate_error: 'red',
+    gate_published_at: '2026-10-24T19:20:41Z', gate_override_by: '7b1e0000-0000-4000-8000-000000000001',
+    gate_override_at: '2026-10-24T19:30:00Z', gate_override_reason: 'revisado a mano', gate_pr_action: 'close_failed',
+    gate_pr_error: 'forbidden', gate_pr_at: '2026-10-24T19:20:42Z' };
+  const humano = (o: Fila = {}) => prP({}, { action: 'reopened', sender: { login: AUTOR, id: 31337, type: 'User' }, ...o });
+
+  it('«Redeliver» de una failed con gate_error y gate_override_at → todas las gate_* a null y gate_findings vacío', async () => {
+    await enviar('push', pushP());
+    Object.assign(revisiones[0]!, { status: 'failed', error_code: 'unavailable' }, GATE);
+    const x = await enviar('push', pushP(), { delivery: 'a1b2c3d4-0000-4000-8000-000000000998' });
+    expect(x.json).toMatchObject({ reintento: true });
+    expect(revisiones[0]).toMatchObject({ status: 'queued', gate_blocking: null, gate_findings: [], gate_state: null,
+      gate_error: null, gate_published_at: null, gate_override_by: null, gate_override_at: null, gate_override_reason: null,
+      gate_pr_action: null, gate_pr_error: null, gate_pr_at: null });
+  });
+
+  it('una persona reabre sin commits nuevos el PR que cerró VanGUARD → reopened_by_human, sin revisión nueva', async () => {
+    await enviar('pull_request', prP());
+    Object.assign(revisiones[0]!, { status: 'done', gate_state: 'failure', gate_pr_action: 'closed' });
+    doble.ops.length = 0;
+    const x = await enviar('pull_request', humano());
+    expect(x.json).toEqual({ ok: true, ignorado: 'reabierto_a_mano' });
+    expect(x.enviados).toEqual([]);
+    expect(revisiones).toHaveLength(1);
+    expect(revisiones[0]).toMatchObject({ status: 'done', gate_state: 'failure', gate_pr_action: 'reopened_by_human' });
+    const u = de('code_reviews', 'update')[0]!;
+    expect(u.filters).toContainEqual(['gate_pr_action', 'eq', 'closed']);
+    expect(eqDe(u, 'org_id')).toBe(ORG);
+  });
+
+  it('reabierto sin cierre de VanGUARD, ya reabierto por «Reabrir el PR» o por un bot → repetido sin tocar', async () => {
+    await enviar('pull_request', prP());
+    for (const [accion, cuerpo] of [[null, humano()], ['reopened', humano()],
+      ['closed', humano({ sender: { login: 'bot', id: 1, type: 'Bot' } })]] as const) {
+      Object.assign(revisiones[0]!, { status: 'done', gate_pr_action: accion });
+      const x = await enviar('pull_request', cuerpo);
+      expect(x.json).toEqual({ ok: true, ignorado: 'repetido' });
+      expect(revisiones[0]!.gate_pr_action).toBe(accion);
+    }
+  });
+
+  it('reabierto con commits nuevos (otro head) → revisión nueva: el paso estado decide de nuevo', async () => {
+    await enviar('pull_request', prP());
+    Object.assign(revisiones[0]!, { status: 'done', gate_pr_action: 'closed' });
+    const x = await enviar('pull_request', humano({ pull_request: { ...prP().pull_request, head: { sha: MEDIO, repo: REPO } } }));
+    expect(x.json).toEqual({ ok: true, review_id: 'rev-2' });
+    expect(revisiones[0]!.gate_pr_action).toBe('closed');
+  });
+});
+
 describe('commitsDelPush', () => {
   it('los últimos 49 SHA de commits, sin repetir ni ilegibles, más after (≤ 50)', () => {
     const sha = (i: number) => i.toString(16).padStart(40, '0');

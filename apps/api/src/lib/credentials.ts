@@ -18,6 +18,23 @@ export async function createConnectionWithSecret(env: CloudflareBindings, admin:
   if (error) throw new ApiError('internal', 'No se pudo guardar la conexión.');   // nunca error.message
 }
 
+/** Cambiar el token de una conexión SIN cambiar su id (vg_rotate_secret, 0003): sella el token nuevo con el AAD de la
+ *  MISMA conexión (org, id existente, proveedor, kind), calcula su huella y deja la conexión active con sus scopes,
+ *  capabilities y caducidad nuevos. Lo usa E53 para el token de acciones de GitHub (bloqueo-merge-criticos.md §2.8) y es
+ *  la misma función que pide varias-codebases.md §2.1 para «Reconectar» en E8 (una sola para los dos). 23505 (esa huella
+ *  ya está en la org) → conflict; P0002 (la conexión no tiene secreto) → not_found; nunca error.message. */
+export async function rotarSecretoConexion(env: CloudflareBindings, admin: SupabaseClient, ctx: SecretCtx, token: string,
+  c: { scopes: string[]; capabilities: Record<string, boolean>; expiresAt: string | null }) {
+  const keys = await getKeys(env, admin, await activeKid(admin));
+  const sealed = await seal(keys, token, ctx);
+  const { error } = await admin.rpc('vg_rotate_secret', { p_org: ctx.orgId, p_conn: ctx.connectionId,
+    p_secret: { sealed, kid: keys.kid, fingerprint: await fingerprint(keys, ctx.orgId, token) }, p_last4: last4(token),
+    p_scopes: c.scopes, p_capabilities: c.capabilities, p_expires_at: c.expiresAt });
+  if (error?.code === '23505') throw new ApiError('conflict', 'Ese token ya está conectado en esta organización.');
+  if (error?.code === 'P0002') throw new ApiError('not_found', 'Conexión no encontrada');
+  if (error) throw new ApiError('internal', 'No se pudo guardar la conexión.');   // nunca error.message
+}
+
 /** El token existe solo dentro de fn: prohibido devolverlo, registrarlo o meterlo en un error, un prompt o un MCP. */
 export async function withSecret<T>(env: CloudflareBindings, admin: SupabaseClient, ctx: SecretCtx,
                                     fn: (token: string) => Promise<T>): Promise<T> {

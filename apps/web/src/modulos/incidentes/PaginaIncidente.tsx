@@ -200,7 +200,7 @@ function Detalle({ incidentId }: { incidentId: string }) {
             {ip ? <p className="font-mono text-[15px]"><bdi dir="ltr">{sinBidi(ip)}</bdi></p>
               : <p className="font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(i.resource)}</bdi></p>}
           </header>
-          <section className="flex flex-col gap-1 rounded-xl border bg-card p-5" aria-label="Cronómetro">
+          <section className="flex flex-col gap-1 rounded-xl border bg-card p-5" aria-label="Cronómetro" data-info="cronometro">
             <span className="text-[12.5px] font-medium text-muted-foreground">{finDe(i) ? 'Del ataque al bloqueo' : 'Desde el primer ataque'}</span>
             <Cronometro desde={t0De(i)} hasta={finDe(i)} />
           </section>

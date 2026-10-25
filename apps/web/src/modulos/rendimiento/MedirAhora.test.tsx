@@ -381,7 +381,7 @@ describe('Medir ahora · verificación', () => {
 
   it('E24 en 404: Rendimiento queda igual que la pantalla genérica, sin la sección ni un hueco', () => {
     const o = { datos: conRuns(undefined).slice(0, 2), error: [['org', ORG, 'perf'], new ApiError(404, 'not_found', 'Ruta inexistente')] as [QueryKey, ApiError] };
-    expect(pintar(<PaginaRendimiento />, o)).toBe(pintar(<PantallaModulo modulo="performance" proveedor={null} />, o));
+    expect(pintar(<PaginaRendimiento />, o)).toBe(pintar(<PantallaModulo modulo="performance" proveedor={null} data-info="modulo-rendimiento" />, o));
   });
 
   it('el BACK de hoy: step «psi» se lee como medición y un runtime_error no sale como «Hecho» en verde', () => {

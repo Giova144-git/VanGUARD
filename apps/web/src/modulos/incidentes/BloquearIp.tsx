@@ -139,7 +139,7 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
   const bloqueada = fase.f === 'hecho' ? `Bloqueada · ${cuando(fase.accion.en)}${expira ? ` · caduca ${cuando(expira)}` : ''}` : '';
   // Región siempre montada: las ramas se montan ya con su texto y así el lector sí anuncia el resultado.
   const marco = (hijo: ReactNode) => (
-    <div ref={raiz}>
+    <div ref={raiz} data-info="bloquear-ip">
       <p className="sr-only" role="status">{fase.f === 'hecho' ? bloqueada : fase.f === 'deshecho' ? `Desbloqueada · ${cuando(fase.en)}` : ''}</p>
       {hijo}
     </div>

@@ -69,7 +69,7 @@ export default function PaginaCodebase() {
   const sinGithub = !!conexiones.data && !repos.length;
   return (
     <div className="flex flex-col gap-6">
-      <PantallaModulo modulo="codebase" proveedor="github">
+      <PantallaModulo modulo="codebase" proveedor="github" data-info="modulo-codebase">
         {repos.length >= 2 ? <PestanasRepos repos={repos} /> : repos[0] ? <PestanaRepo conexion={repos[0]} varios={false} /> : null}
         {sinGithub ? null : <AnalizarZip key={org.id} />}
       </PantallaModulo>

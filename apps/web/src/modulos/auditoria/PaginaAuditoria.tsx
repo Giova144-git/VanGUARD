@@ -18,6 +18,10 @@ import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
+import { DistintivoEnvio } from '@/modulos/hallazgos/EnviarAMiIA';
+import { ESPERAS, textosEspera } from '@/componentes/vigia/esperas';
+import { useEspera } from '@/componentes/vigia/useEspera';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { invalidarPerf } from '@/modulos/rendimiento/medir';
 import { SIN_COLA, useDeltaAuditoria, useHallazgos, useOverview, useScan, useVistaPrevia } from '@/lib/consultas';
@@ -30,7 +34,7 @@ import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
 import { useRepoDeConexion } from '@/lib/repos';
 import { Cambios } from './Cambios';
-import { PINTA_PASO, esMedicion, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
+import { PINTA_PASO, esMedicion, faseEspera, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
 const ORDEN_SEV: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -191,9 +195,15 @@ function Corrida({ id }: { id: string }) {
   const previa = useVistaPrevia(org.id);
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   // «Nuevo» en «Hallazgos abiertos»: nuevo frente a la auditoría anterior (E51; sin foto o con 404, sin etiqueta).
-  const delta = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded' && !esMedicion(q.data.kind)).data;
+  const deltaQ = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded' && !esMedicion(q.data.kind));
+  const delta = deltaQ.data;
   const nuevos = useMemo(() => new Set(delta?.available && !delta.first ? delta.new.items.map((i) => i.finding_id) : []), [delta]);
   const run = q.data;
+  const espera = esMedicion(run?.kind) ? ESPERAS.medicion : ESPERAS.auditoria;
+  // Terminada pero esperando el delta: las frases del último paso (resumen), así no vuelve a «Preparo la auditoría…».
+  const pasosAhora = run?.status === 'succeeded' ? ['resumen_ia']
+    : [run?.step, ...(Array.isArray(run?.steps) ? run.steps : []).filter((s) => s?.status === 'running').map((s) => s.name)];
+  useEspera(faseEspera(run, { cargando: deltaQ.isLoading, datos: delta }), textosEspera(pasosAhora, espera), espera.fin);
   const qc = useQueryClient();
   // Medición cerrada (bien o mal): al volver a Rendimiento, el histórico y el estado del módulo se releen.
   const medicionCerrada = esMedicion(run?.kind) && (run?.status === 'succeeded' || run?.status === 'failed');
@@ -264,7 +274,7 @@ function Corrida({ id }: { id: string }) {
           <h3 id="hallazgos-abiertos" className="text-[17px] font-semibold">Hallazgos abiertos</h3>
           <ul className="overflow-hidden rounded-xl border bg-card">
             {ordenados.map((f) => (
-              <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
+              <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0" {...marcaHallazgo(f)}>
                 <ChapaSeveridad severity={f.severity} />
                 <ChipRepo repo={repoDe(f.connection_id)} />
                 {nuevos.has(f.id) ? <Etiqueta texto="Nuevo" rol="info" /> : null}
@@ -272,6 +282,7 @@ function Corrida({ id }: { id: string }) {
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>
                 </div>
+                <DistintivoEnvio org={org.id} findingId={f.id} />
                 <Link to={`?finding=${encodeURIComponent(f.id)}`} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">Ver y corregir<ChevronRight className="size-4" /></Link>
               </li>
             ))}

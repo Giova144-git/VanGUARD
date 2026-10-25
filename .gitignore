@@ -24,7 +24,8 @@ coverage/
 *.pem
 *.key
 packages/deepwiki/out/
-
+# Carpeta que uso para almacenar elementos externos al repo, pero pertenecientes al proyecto
+/Externos/
 # Siembra de Rendimiento (plan §10.10): los LHR crudos de PSI no se versionan, solo el resumen
 demo/perf-lhr/*
 !demo/perf-lhr/resumen.json

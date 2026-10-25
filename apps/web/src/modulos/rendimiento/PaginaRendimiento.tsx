@@ -117,7 +117,7 @@ function Historico() {
     : `Con la próxima medición${comparables.length ? ` en ${EN[estrategia]}` : ''} verás la comparación con la anterior.`;
   return (
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-labelledby="t-historico">
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1" data-info="lighthouse">
         <h3 id="t-historico" className="text-[17px] font-semibold">Histórico</h3>
         <p className="text-sm text-muted-foreground">Cada medición de Lighthouse vía PageSpeed Insights (con varias pasadas, su mediana). Solo lectura.</p>
       </div>
@@ -189,7 +189,7 @@ function Comparacion({ serie, metrica, estrategia, nombre, peorQueAntes }: {
 
 export default function PaginaRendimiento() {
   return (
-    <PantallaModulo modulo="performance" proveedor={null} arriba={<MedirAhora />}>
+    <PantallaModulo modulo="performance" proveedor={null} arriba={<MedirAhora />} data-info="modulo-rendimiento">
       <Historico />
     </PantallaModulo>
   );

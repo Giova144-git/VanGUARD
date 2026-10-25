@@ -128,3 +128,10 @@ export const T_EV_VIE = '2026-10-23T18:04:05.000Z';
 // Hora de la foto de Codebase de cada push (vg_review_snapshot, al cerrar el diff).
 export const T_SNAP_JUEVES = '2026-10-22T19:10:02.600Z';
 export const T_SNAP_LIMPIA = '2026-10-24T18:31:42.300Z';
+
+// ── «Enviar a mi IA» (cola fix_requests, 0023) ────────────────────────────────
+export const FIX_REQ_ENVIADO = 'f1c00000-0000-4000-8000-000000000001';
+export const FIX_REQ_ARREGLANDO = 'f1c00000-0000-4000-8000-000000000002';
+export const FIX_REQ_CORREGIDO = 'f1c00000-0000-4000-8000-000000000003';
+export const T_FIX_REQ_ENVIADO = '2026-10-24T19:30:00.000Z';
+export const T_FIX_REQ_ARREGLANDO = '2026-10-24T19:31:10.000Z';

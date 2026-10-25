@@ -5,10 +5,10 @@ const RELLENO: Partial<Record<Rol, string>> = { mal: 'bg-mal/80', aviso: 'bg-avi
 
 // Barra de 8 px + leyenda «Crítica 2 · Alta 3» (S14 §14.7). El tramo crítico lleva borde mal-borde.
 // n = null (aún cargando) → «—» en la leyenda y barra vacía, con el mismo alto (L4, L7).
-export function BarraSegmentada({ tramos }: { tramos: { etiqueta: string; n: number | null; rol: Rol; fuerte?: boolean }[] }) {
+export function BarraSegmentada({ tramos, 'data-info': info }: { tramos: { etiqueta: string; n: number | null; rol: Rol; fuerte?: boolean }[]; 'data-info'?: string }) {
   const total = tramos.reduce((s, t) => s + (t.n ?? 0), 0);
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2" data-info={info}>
       <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted" role="img"
         aria-label={tramos.map((t) => `${t.etiqueta} ${t.n ?? 'sin dato'}`).join(' · ')}>
         {total > 0 ? tramos.filter((t) => (t.n ?? 0) > 0).map((t) => (

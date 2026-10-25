@@ -1,0 +1,266 @@
+/* Vigía (Vigia.tsx): paleta fija del concept art (negro, blanco, grises, cian y violeta), animaciones por pose y por
+   fase, y los estilos de la guía. Pivotes: raíz, manos, cabeza y melena con transform-box: view-box y el pivote dentro
+   del transform (el gesto de la mano gira desde la muñeca); mechones con su raíz (fill-box, 50% 0).
+   prefers-reduced-motion lo apaga todo (globals.css). */
+.vigia {
+  --vg-traje: #0c0f18;
+  --vg-cara: #0a0d16;
+  --vg-cara-sombra: #161b2a;
+  --vg-cristal: #0b1322;
+  --vg-pelo: #f3f5fc;
+  --vg-pelo-sombra: #b4bbcf;
+  --vg-placa: #f3f5fc;
+  --vg-placa-sombra: #959eb6;
+  --vg-borde: #0c0f18;
+  --vg-contorno: #0c0f18;
+  --vg-cian: #2df5d2;
+  --vg-violeta: #8d5bff;
+  --vg-gris: #8a91a8;
+  --vg-lente: #f6f8ff;
+  --vg-boca: #b9a2ff;
+  --vg-boca-dentro: #241443;
+  --vg-vena: #ff4f7e;
+  overflow: visible;
+  display: block;
+}
+/* Sobre fondo oscuro, un filo gris separa el traje negro del fondo. */
+.dark .vigia { --vg-contorno: #343c55; }
+
+.vigia .vg-cian { fill: var(--vg-cian); }
+.vigia .vg-violeta { fill: var(--vg-violeta); }
+
+.vigia .vg-raiz, .vigia .vg-mano, .vigia .vg-mano-gesto, .vigia .vg-cabeza, .vigia .vg-melena {
+  transform-box: view-box;
+  transform-origin: 0 0;
+}
+.vigia .vg-raiz { transition: transform 520ms cubic-bezier(.3, 1.25, .45, 1); }
+.vigia .vg-mano { transition: transform 460ms cubic-bezier(.34, 1.35, .5, 1); }
+.vigia .vg-cabeza { transition: transform 600ms cubic-bezier(.3, 1.2, .45, 1); }
+.vigia .vg-melena { transition: transform 700ms cubic-bezier(.3, 1.1, .45, 1); }
+.vigia .vg-suave { transition: transform 260ms cubic-bezier(.3, 1.3, .5, 1), opacity 200ms ease; }
+.vigia .vg-eco { opacity: .3; transform: translate(3px, 2.5px); animation: vg-eco 7s steps(1) infinite; }
+
+/* ── Reposo: flota, la melena se mece como un péndulo y las esquirlas derivan ─────────────────────────────── */
+.vigia .vg-flota { animation: vg-flotar 3.6s ease-in-out infinite; }
+.vigia .vg-pelo {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+  animation: vg-pelo 4.4s ease-in-out infinite;
+  animation-delay: calc(var(--i) * -.37s);
+}
+.vigia .vg-flequillo .vg-pelo { animation-name: vg-pelo-corto; }
+.vigia .vg-fragmento, .vigia .vg-esquirla {
+  transform-box: fill-box;
+  transform-origin: center;
+  stroke-width: 5px;
+  stroke-opacity: .28;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+.vigia .vg-fragmento.vg-cian, .vigia .vg-esquirla.vg-cian { stroke: var(--vg-cian); }
+.vigia .vg-fragmento.vg-violeta, .vigia .vg-esquirla.vg-violeta { stroke: var(--vg-violeta); }
+.vigia .vg-fragmento { animation: vg-deriva 6.2s ease-in-out infinite; animation-delay: calc(var(--i) * -.9s); }
+.vigia .vg-esquirla { animation: vg-orbita 5.4s ease-in-out infinite; animation-delay: calc(var(--i) * -1.1s); }
+
+/* Las manos flotan a su aire, desfasadas de la cabeza y entre sí. */
+.vigia .vg-mano-gesto { animation: vg-mano-flota 3.2s ease-in-out infinite; }
+.vigia .vg-mano-izq .vg-mano-gesto { animation-delay: -1.4s; }
+@keyframes vg-flotar { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes vg-mano-flota { 0%, 100% { transform: translate(0, 0) rotate(0); } 50% { transform: translate(-2px, 0) rotate(-4deg); } }
+@keyframes vg-pelo { 0%, 100% { transform: rotate(-2.4deg); } 50% { transform: rotate(2.4deg); } }
+@keyframes vg-pelo-corto { 0%, 100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
+@keyframes vg-deriva {
+  0%, 100% { transform: translate(0, 0) rotate(0); opacity: 1; }
+  50% { transform: translate(-2px, 7px) rotate(-6deg); opacity: .7; }
+}
+@keyframes vg-orbita {
+  0%, 100% { transform: translate(0, 0) rotate(0) scale(1); }
+  33% { transform: translate(3px, -5px) rotate(40deg) scale(1.2); }
+  66% { transform: translate(-3px, 2px) rotate(-30deg) scale(.8); }
+}
+@keyframes vg-eco {
+  0%, 88%, 100% { transform: translate(3px, 2.5px); }
+  90% { transform: translate(-4px, 1px); }
+  93% { transform: translate(5px, -2px); }
+  96% { transform: translate(2px, 3px); }
+}
+
+/* ── Apuntar: golpecitos de la mano hacia el objetivo ────────────────────────────────────────────────────── */
+.vigia[data-pose="apuntar"] .vg-mano-apunta .vg-mano-gesto { animation: vg-golpe 1.1s cubic-bezier(.4, 0, .2, 1) infinite; }
+@keyframes vg-golpe { 0%, 100% { transform: translateX(0); } 40% { transform: translateX(6px); } 60% { transform: translateX(4px); } }
+
+/* ── Hablar: gesto de la mano abierta ─────────────────────────────────────────────────────────────────────── */
+.vigia[data-pose="hablar"] .vg-mano-der .vg-mano-gesto { animation: vg-gesto 1.7s ease-in-out infinite; }
+@keyframes vg-gesto { 0%, 100% { transform: rotate(0); } 30% { transform: rotate(-16deg); } 60% { transform: rotate(8deg); } }
+
+/* ── Pensar: el dedo en la mejilla da golpecitos ────────────────────────────────────────────────────────── */
+.vigia[data-pose="pensar"] .vg-flota { animation: vg-flotar 4.6s ease-in-out infinite; }
+.vigia[data-pose="pensar"] .vg-mano-der .vg-mano-gesto { animation: vg-tamborilear 2.2s ease-in-out infinite; }
+@keyframes vg-tamborilear { 0%, 60%, 100% { transform: rotate(0); } 70%, 90% { transform: rotate(-5deg); } 80% { transform: rotate(2deg); } }
+
+/* ── Celebrar: saltos, manos agitándose y esquirlas que irradian ─────────────────────────────────────────── */
+.vigia[data-pose="celebrar"] .vg-flota { animation: vg-salto 1.1s cubic-bezier(.3, 0, .4, 1) infinite; }
+.vigia[data-pose="celebrar"] .vg-mano-gesto { animation: vg-agitar .32s ease-in-out infinite alternate; }
+.vigia[data-pose="celebrar"] .vg-fragmento, .vigia[data-pose="celebrar"] .vg-esquirla { animation: vg-irradiar 1.1s cubic-bezier(.2, .8, .3, 1) infinite; }
+@keyframes vg-salto {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  12% { transform: translateY(2px) scale(1.05, .93); }
+  45% { transform: translateY(-20px) scale(.97, 1.04); }
+  75% { transform: translateY(0) scale(1.03, .96); }
+}
+@keyframes vg-agitar { from { transform: rotate(-14deg); } to { transform: rotate(12deg); } }
+@keyframes vg-irradiar {
+  0% { transform: translate(0, 0) scale(.6); opacity: .4; }
+  40% { transform: translate(calc(var(--dx) * 16px), calc(var(--dy) * 16px)) scale(1.25); opacity: 1; }
+  100% { transform: translate(0, 0) scale(1); opacity: .9; }
+}
+
+/* ── Alerta: tiembla y la melena se eriza ────────────────────────────────────────────────────────────────── */
+.vigia[data-pose="alerta"] .vg-flota { animation: vg-alerta 1.6s linear infinite; }
+.vigia[data-pose="alerta"] .vg-pelo { animation: vg-pelo-alerta 1.1s ease-in-out infinite; animation-delay: calc(var(--i) * -.09s); }
+@keyframes vg-alerta {
+  0%, 30%, 100% { transform: translate(0, 0); }
+  4%, 12%, 20% { transform: translate(-3px, 0); }
+  8%, 16%, 24% { transform: translate(3px, -1px); }
+}
+@keyframes vg-pelo-alerta { 0%, 100% { transform: rotate(-1.5deg) scaleY(1.04); } 50% { transform: rotate(1.5deg) scaleY(.97); } }
+
+/* ── Dormir: respira despacio y la melena cae ────────────────────────────────────────────────────────────── */
+.vigia[data-pose="dormir"] .vg-flota { animation: vg-respirar 5s ease-in-out infinite; }
+.vigia[data-pose="dormir"] .vg-pelo { animation: vg-pelo-dormir 5s ease-in-out infinite; }
+.vigia[data-pose="dormir"] .vg-fragmentos { opacity: .35; }
+@keyframes vg-respirar { 0%, 100% { transform: translateY(4px) scale(1); } 50% { transform: translateY(6px) scale(1.012, .988); } }
+@keyframes vg-pelo-dormir { 0%, 100% { transform: rotate(0) scaleY(1.02); } 50% { transform: rotate(1deg) scaleY(1.04); } }
+
+/* ── Volar: la melena entera se va hacia atrás desde la coronilla y las esquirlas dejan estela ─────────────── */
+.vigia[data-pose="volar"] .vg-melena { transform: translate(120px, 30px) rotate(46deg) translate(-120px, -30px); }
+.vigia[data-pose="volar"] .vg-pelo { animation: vg-pelo-volar .5s ease-in-out infinite alternate; animation-delay: calc(var(--i) * -.07s); }
+.vigia[data-pose="volar"] .vg-fragmento, .vigia[data-pose="volar"] .vg-esquirla { animation: vg-estela .7s ease-in-out infinite; animation-delay: calc(var(--i) * -.1s); }
+@keyframes vg-pelo-volar { from { transform: rotate(-3deg) scaleY(1.04); } to { transform: rotate(3deg) scaleY(.98); } }
+@keyframes vg-estela { 0%, 100% { transform: translate(-6px, 1px); opacity: .9; } 50% { transform: translate(-14px, 3px); opacity: .4; } }
+
+/* ── Saludar: la mano se agita desde la muñeca ────────────────────────────────────────────────────────── */
+.vigia[data-pose="saludar"] .vg-mano-der .vg-mano-gesto { animation: vg-saludo .9s ease-in-out infinite alternate; }
+@keyframes vg-saludo { from { transform: rotate(-16deg); } to { transform: rotate(22deg); } }
+
+/* ── Recordar: el dedo en alto se mueve como un metrónomo ─────────────────────────────────────────────────── */
+.vigia[data-pose="recordar"] .vg-mano-der .vg-mano-gesto { animation: vg-recordar .9s ease-in-out infinite alternate; }
+@keyframes vg-recordar { from { transform: rotate(-9deg); } to { transform: rotate(9deg); } }
+
+/* ── Alerta: las manos en las mejillas tiemblan con la cabeza ─────────────────────────────────────────────── */
+.vigia[data-pose="alerta"] .vg-mano-gesto { animation: none; }
+
+/* ── Reparar: manos juntas trabajando y esquirlas girando alrededor ──────────────────────────────────────── */
+.vigia[data-pose="reparar"] .vg-flota { animation: vg-flotar 5s ease-in-out infinite; }
+.vigia[data-pose="reparar"] .vg-mano-gesto { animation: vg-ajustar .6s ease-in-out infinite alternate; }
+.vigia[data-pose="reparar"] .vg-mano-izq .vg-mano-gesto { animation-delay: -.3s; }
+.vigia .vg-taller-giro { transform-box: fill-box; transform-origin: center; animation: vg-girar 2.4s linear infinite; }
+.vigia .vg-chispa { transform-box: fill-box; transform-origin: center; animation: vg-chispa .8s ease-in-out infinite alternate; }
+.vigia .vg-taller path { stroke-width: 4px; stroke-opacity: .3; paint-order: stroke; }
+.vigia .vg-taller .vg-cian { stroke: var(--vg-cian); }
+.vigia .vg-taller .vg-violeta { stroke: var(--vg-violeta); }
+@keyframes vg-ajustar { from { transform: rotate(-4deg); } to { transform: rotate(5deg); } }
+@keyframes vg-girar { to { transform: rotate(360deg); } }
+@keyframes vg-chispa { from { transform: scale(.5) rotate(0); opacity: .5; } to { transform: scale(1.2) rotate(45deg); opacity: 1; } }
+
+/* ── Aparecer (ensamblado con glitch) y desaparecer (se rompe en esquirlas) ──────────────────────────────── */
+.vigia .vg-aparicion { transform-box: view-box; transform-origin: 120px 88px; }
+.vigia[data-fase="entrar"] .vg-aparicion { animation: vg-entrar 760ms cubic-bezier(.2, 1.3, .4, 1) both; }
+.vigia[data-fase="entrar"] .vg-fragmento, .vigia[data-fase="entrar"] .vg-esquirla { animation: vg-ensamblar 760ms cubic-bezier(.2, 1, .3, 1) both; }
+.vigia[data-fase="salir"] .vg-aparicion { animation: vg-salir 480ms cubic-bezier(.5, 0, .9, .4) both; }
+.vigia[data-fase="salir"] .vg-fragmento, .vigia[data-fase="salir"] .vg-esquirla { animation: vg-romper 480ms cubic-bezier(.5, 0, .9, .4) both; }
+@keyframes vg-entrar {
+  0% { transform: scale(.15) rotate(-28deg); opacity: 0; clip-path: inset(0 0 100% 0); }
+  18% { opacity: 1; clip-path: inset(0 0 55% 0); transform: scale(.55) rotate(-10deg) translateX(-6px); }
+  26% { clip-path: inset(30% 0 20% 0); transform: scale(.7) rotate(-6deg) translateX(8px); }
+  34% { clip-path: inset(0 0 0 0); }
+  62% { transform: scale(1.08) rotate(3deg); }
+  100% { transform: scale(1) rotate(0); opacity: 1; clip-path: inset(0 0 0 0); }
+}
+@keyframes vg-ensamblar {
+  0% { transform: translate(calc(var(--dx) * 70px), calc(var(--dy) * 70px)) rotate(120deg) scale(0); opacity: 0; }
+  100% { transform: translate(0, 0) rotate(0) scale(1); opacity: 1; }
+}
+@keyframes vg-salir {
+  0% { transform: scale(1); opacity: 1; clip-path: inset(0 0 0 0); }
+  30% { transform: scale(1.06) rotate(-3deg); clip-path: inset(10% 0 30% 0); }
+  50% { clip-path: inset(40% 0 0 0); transform: scale(.8) translateX(6px); }
+  100% { transform: scale(.1) rotate(30deg); opacity: 0; clip-path: inset(50% 0 50% 0); }
+}
+@keyframes vg-romper {
+  to { transform: translate(calc(var(--dx) * 90px), calc(var(--dy) * 90px)) rotate(-140deg) scale(.4); opacity: 0; }
+}
+
+/* ── Adornos de la cara ───────────────────────────────────────────────────────────────────────────────────── */
+.vigia .vg-zeta { animation: vg-zeta 3s ease-in-out infinite both; animation-delay: calc(var(--i) * .6s); }
+@keyframes vg-zeta { 0% { opacity: 0; translate: 0 6px; } 30%, 70% { opacity: 1; } 100% { opacity: 0; translate: 6px -10px; } }
+.vigia .vg-gota { transform-box: fill-box; transform-origin: 50% 0; animation: vg-gota 2.2s ease-in infinite; }
+@keyframes vg-gota { 0%, 40% { transform: translateY(0) scale(.6); opacity: 0; } 55% { opacity: 1; transform: scale(1); } 100% { transform: translateY(16px); opacity: 0; } }
+.vigia .vg-exclamacion { transform-box: fill-box; transform-origin: 50% 100%; animation: vg-pop 1.6s cubic-bezier(.3, 1.6, .5, 1) infinite; }
+@keyframes vg-pop { 0% { transform: scale(0); } 18%, 80% { transform: scale(1); } 90%, 100% { transform: scale(.85); } }
+.vigia .vg-brillo { transform-box: fill-box; transform-origin: center; animation: vg-brillo 1.2s ease-in-out infinite; animation-delay: calc(var(--i) * .25s); }
+@keyframes vg-brillo { 0%, 100% { transform: scale(0) rotate(0); opacity: 0; } 50% { transform: scale(1) rotate(45deg); opacity: 1; } }
+
+/* Galería (?pausa=1): congela las animaciones para capturas estáticas. */
+.vg-galeria-pausa .vigia, .vg-galeria-pausa .vigia * { animation-play-state: paused !important; }
+
+/* ── Guía: la viajera, el resalte del objetivo y la burbuja ───────────────────────────────────────────────── */
+.vg-viajera { position: fixed; left: 0; top: 0; z-index: 60; }
+.vg-viajera > button { display: block; cursor: pointer; background: none; border: 0; padding: 0; }
+.vg-resalte {
+  position: fixed; z-index: 55; pointer-events: none; border-radius: 10px;
+  outline: 2px solid var(--info); outline-offset: 3px;
+  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--background) 45%, transparent);
+  transition: left 500ms ease, top 500ms ease, width 500ms ease, height 500ms ease;
+  animation: vg-latido 1.8s ease-in-out infinite;
+}
+@keyframes vg-latido { 0%, 100% { outline-offset: 3px; } 50% { outline-offset: 7px; } }
+.vg-burbuja { position: fixed; z-index: 61; transition: left 500ms ease, top 500ms ease; }
+
+/* ── Teletransporte (Escena.tsx): se deshace en el origen y se rehace en el destino ──────────────────────────────
+   ida (230 ms): cortes horizontales con clip-path, tirones a los lados y desplazamiento cromático cian/violeta; los
+   píxeles salen despedidos de la figura. vuelta (300 ms): los píxeles convergen, glitch breve y aparece. El rastro
+   cruza de un sitio a otro mientras tanto. Todo con duración fija: nada en bucle. */
+.vg-viajera[data-salto="ida"] .vigia { animation: vg-tp-ida 230ms linear both; }
+.vg-viajera[data-salto="vuelta"] .vigia { animation: vg-tp-vuelta 300ms linear both; }
+@keyframes vg-tp-ida {
+  0% { opacity: 1; clip-path: inset(0 0 0 0); transform: translate(0, 0); filter: none; }
+  14% { clip-path: inset(0 0 0 0); transform: translate(-3px, 0);
+    filter: drop-shadow(-4px 0 rgb(45 245 210 / .9)) drop-shadow(4px 0 rgb(141 91 255 / .9)); }
+  28% { clip-path: inset(12% 0 46% 0); transform: translate(7px, 0); }
+  42% { clip-path: inset(52% 0 14% 0); transform: translate(-9px, 0) scaleX(1.06);
+    filter: drop-shadow(6px 0 rgb(45 245 210 / .9)) drop-shadow(-6px 0 rgb(141 91 255 / .9)); }
+  56% { clip-path: inset(28% 0 50% 0); transform: translate(12px, 0) scaleX(1.12); opacity: .85; }
+  70% { clip-path: inset(64% 0 26% 0); transform: translate(-14px, 0) scaleX(1.2); opacity: .6; }
+  85% { clip-path: inset(40% 0 52% 0); transform: translate(16px, 0) scale(1.3, .6); opacity: .35; }
+  100% { clip-path: inset(50% 0 50% 0); transform: translate(0, 0) scale(1.4, .1); opacity: 0; }
+}
+@keyframes vg-tp-vuelta {
+  0%, 30% { opacity: 0; clip-path: inset(50% 0 50% 0); transform: scale(1.4, .1); filter: none; }
+  42% { opacity: .6; clip-path: inset(36% 0 40% 0); transform: translate(-12px, 0) scale(1.15, .8);
+    filter: drop-shadow(-6px 0 rgb(45 245 210 / .9)) drop-shadow(6px 0 rgb(141 91 255 / .9)); }
+  56% { opacity: .85; clip-path: inset(8% 0 30% 0); transform: translate(9px, 0) scaleX(1.06); }
+  70% { opacity: 1; clip-path: inset(30% 0 6% 0); transform: translate(-5px, 0);
+    filter: drop-shadow(3px 0 rgb(45 245 210 / .8)) drop-shadow(-3px 0 rgb(141 91 255 / .8)); }
+  84% { clip-path: inset(0 0 0 0); transform: translate(2px, 0); filter: drop-shadow(-1px 0 rgb(45 245 210 / .6)); }
+  100% { opacity: 1; clip-path: inset(0 0 0 0); transform: translate(0, 0); filter: none; }
+}
+.vg-pixeles { position: absolute; inset: 0; pointer-events: none; }
+.vg-rastro { position: fixed; inset: 0; z-index: 59; pointer-events: none; }
+.vg-pixel { position: absolute; display: block; opacity: 0; }
+.vg-pixel-cian { background: #2df5d2; box-shadow: 0 0 6px rgb(45 245 210 / .7); }
+.vg-pixel-violeta { background: #8d5bff; box-shadow: 0 0 6px rgb(141 91 255 / .7); }
+.vg-viajera[data-salto="ida"] .vg-pixel { animation: vg-px-ida 260ms cubic-bezier(.2, .7, .4, 1) var(--d) both; }
+.vg-viajera[data-salto="vuelta"] .vg-pixel { animation: vg-px-vuelta 230ms cubic-bezier(.6, 0, .8, .5) calc(var(--d) * .6) both; }
+.vg-rastro .vg-pixel { animation: vg-px-rastro 280ms ease-out var(--d) both; }
+@keyframes vg-px-ida {
+  0% { opacity: 0; transform: translate(0, 0) scale(.3); }
+  25% { opacity: 1; transform: translate(calc(var(--dx) * .2), calc(var(--dy) * .2)) scale(1); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(.5); }
+}
+@keyframes vg-px-vuelta {
+  0% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(.5); }
+  35% { opacity: 1; }
+  100% { opacity: 0; transform: translate(0, 0) scale(1.2); }
+}
+@keyframes vg-px-rastro { 0% { opacity: 0; transform: scale(.2); } 30% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(.4) translateY(3px); } }

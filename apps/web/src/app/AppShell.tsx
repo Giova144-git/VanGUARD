@@ -1,7 +1,9 @@
-// Cascarón (S14 §14.5): riel con módulos en orden fijo, cabecera de 56 px y una sola fila de estado global.
+// Cascarón (S14 §14.5): riel con módulos en orden fijo, cabecera de 56 px y una sola fila de estado global. Monta a
+// Vigía (GuiaProvider) con su botón del ojo; los data-guia (nav-<id>, buscar, menu, vigia) son los objetivos de sus
+// recorridos (componentes/vigia/tours.ts). MenuContextual cambia el clic derecho sobre un data-info por «Info» (vigia/info.ts).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
-import { Check, ChevronsUpDown, Clock, LogOut, PanelLeft, Search, Siren, TriangleAlert, WifiOff } from 'lucide-react';
+import { Check, ChevronsUpDown, Clock, Eye, LogOut, PanelLeft, Search, Siren, TriangleAlert, WifiOff } from 'lucide-react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { Module, Overview, Role } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
@@ -11,6 +13,8 @@ import { ChipGastoIA } from '@/componentes/vg/ChipGastoIA';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { MarcaNumero, MarcasContador } from '@/componentes/vg/MarcasContador';
 import { PaletaComandos } from '@/componentes/vg/PaletaComandos';
+import { GuiaProvider, useGuia } from '@/componentes/vigia/contexto';
+import { MenuContextual } from '@/componentes/vigia/MenuContextual';
 import { ESPERA_G_MS, leerTecla } from '@/lib/atajos';
 import { useConexiones, useEstadoModulo, useOverview, useUsoIA } from '@/lib/consultas';
 import { cuando } from '@/lib/formato';
@@ -45,7 +49,7 @@ function MarcaModulo({ org, modulo }: { org: string; modulo: Module }) {
 function ItemRiel({ entrada, compacto, marca, alNavegar }: { entrada: EntradaNav; compacto: boolean; marca?: ReactNode; alNavegar?: () => void }) {
   const Icono = entrada.icono;
   return (
-    <NavLink to={entrada.id} onClick={alNavegar} title={compacto ? entrada.nombre : undefined} aria-label={compacto ? entrada.nombre : undefined}
+    <NavLink to={entrada.id} onClick={alNavegar} data-guia={`nav-${entrada.id}`} data-info={`nav-${entrada.id}`} title={compacto ? entrada.nombre : undefined} aria-label={compacto ? entrada.nombre : undefined}
       className={({ isActive }) => cn(
         'flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring',
         isActive ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground',
@@ -138,6 +142,17 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
   );
 }
 
+// El ojo de la cabecera: llama a Vigía o la despide.
+function BotonVigia() {
+  const guia = useGuia();
+  return (
+    <Button variant="fantasma" size="icono" onClick={guia.alternar} data-guia="vigia" aria-pressed={guia.visible}
+      aria-label={guia.visible ? 'Despedir a Vigía, tu guía' : 'Llamar a Vigía, tu guía'} title="Vigía, tu guía">
+      <Eye className="size-5" />
+    </Button>
+  );
+}
+
 function FilaEstado({ overview, fallos, sinConexiones }: { overview: UseQueryResult<Overview>; fallos: number; sinConexiones: boolean }) {
   const org = useOrg();
   const critico = overview.data?.ahora.find((a) => a.kind === 'incident' && a.severity === 'critical');
@@ -217,36 +232,40 @@ export default function AppShell() {
 
   const usoIA = useUsoIA(org.id, org.puedeEscribir);   // misma consulta que ChipGastoIA (se comparte por clave)
   return (
-    <div className="flex min-h-svh bg-background">
-      {/* Con 13 entradas el riel mide ~860 px (~1010 en modo presentación): a 1280×720 se desplaza él solo, no se corta. */}
-      <aside className={cn('sticky top-0 hidden h-svh shrink-0 overflow-x-hidden overflow-y-auto border-r bg-sidebar transition-[width] md:block', compacto ? 'w-[4.5rem]' : 'w-60')}>
-        <Riel compacto={compacto} overview={overview} />
-      </aside>
-      <Sheet open={movilAbierto} onOpenChange={setMovilAbierto}>
-        <SheetContent side="left">
-          <SheetTitle className="sr-only">Menú</SheetTitle>
-          <SheetDescription className="sr-only">Módulos de VanGUARD</SheetDescription>
-          <Riel compacto={false} overview={overview} alNavegar={() => setMovilAbierto(false)} />
-        </SheetContent>
-      </Sheet>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/95 px-3 backdrop-blur md:px-4">
-          <Button variant="fantasma" size="icono" onClick={alternar} aria-label="Mostrar u ocultar el menú (Ctrl+B)"><PanelLeft className="size-5" /></Button>
-          <h1 className="flex-1 truncate text-[17px] font-semibold">{vista}</h1>
-          <Button variant="fantasma" size="icono" onClick={() => setPaleta(true)} aria-label="Ir a una pantalla (Ctrl+K)" title="Ir a… (Ctrl+K)">
-            <Search className="size-5" />
-          </Button>
-          {org.puedeEscribir ? null : <Etiqueta texto="Demo · solo lectura" rol="info" />}
-          {/* «IA en pausa» no trae acción al lado: neutra (L3). La dice E5 (overview.ai) o, para admin, E28. */}
-          {overview.data?.ai?.enabled === false || usoIA.data?.enabled === false ? <Etiqueta texto="IA en pausa" rol="neutra" /> : null}
-          <ChipGastoIA org={org.id} puedeEscribir={org.puedeEscribir} />
-        </header>
-        <FilaEstado overview={overview} fallos={fallos} sinConexiones={conexiones.data?.length === 0} />
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-6">
-          <Outlet />
-        </main>
+    <GuiaProvider org={org.id} soloLectura={!org.puedeEscribir}>
+      <div className="flex min-h-svh bg-background">
+        {/* Con 13 entradas el riel mide ~860 px (~1010 en modo presentación): a 1280×720 se desplaza él solo, no se corta. */}
+        <aside className={cn('sticky top-0 hidden h-svh shrink-0 overflow-x-hidden overflow-y-auto border-r bg-sidebar transition-[width] md:block', compacto ? 'w-[4.5rem]' : 'w-60')}>
+          <Riel compacto={compacto} overview={overview} />
+        </aside>
+        <Sheet open={movilAbierto} onOpenChange={setMovilAbierto}>
+          <SheetContent side="left">
+            <SheetTitle className="sr-only">Menú</SheetTitle>
+            <SheetDescription className="sr-only">Módulos de VanGUARD</SheetDescription>
+            <Riel compacto={false} overview={overview} alNavegar={() => setMovilAbierto(false)} />
+          </SheetContent>
+        </Sheet>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/95 px-3 backdrop-blur md:px-4">
+            <Button variant="fantasma" size="icono" onClick={alternar} data-guia="menu" aria-label="Mostrar u ocultar el menú (Ctrl+B)"><PanelLeft className="size-5" /></Button>
+            <h1 className="flex-1 truncate text-[17px] font-semibold">{vista}</h1>
+            <Button variant="fantasma" size="icono" onClick={() => setPaleta(true)} data-guia="buscar" aria-label="Ir a una pantalla (Ctrl+K)" title="Ir a… (Ctrl+K)">
+              <Search className="size-5" />
+            </Button>
+            {org.puedeEscribir ? null : <Etiqueta texto="Demo · solo lectura" rol="info" data-info="demo-solo-lectura" />}
+            {/* «IA en pausa» no trae acción al lado: neutra (L3). La dice E5 (overview.ai) o, para admin, E28. */}
+            {overview.data?.ai?.enabled === false || usoIA.data?.enabled === false ? <Etiqueta texto="IA en pausa" rol="neutra" data-info="ia-en-pausa" /> : null}
+            <ChipGastoIA org={org.id} puedeEscribir={org.puedeEscribir} />
+            <BotonVigia />
+          </header>
+          <FilaEstado overview={overview} fallos={fallos} sinConexiones={conexiones.data?.length === 0} />
+          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-6">
+            <Outlet />
+          </main>
+        </div>
+        <PaletaComandos abierta={paleta} onCambio={setPaleta} alIr={irA} />
       </div>
-      <PaletaComandos abierta={paleta} onCambio={setPaleta} alIr={irA} />
-    </div>
+      <MenuContextual />
+    </GuiaProvider>
   );
 }

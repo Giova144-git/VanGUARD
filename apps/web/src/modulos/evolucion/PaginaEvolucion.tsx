@@ -28,10 +28,11 @@ import { GraficaAbiertos, GraficaCambios, GraficaIncidentes, GraficaPuntaje, LEY
 type Dias = 7 | 30 | 90;
 const PERIODOS: [Dias, string][] = [[7, '7 días'], [30, '30 días'], [90, '90 días']];
 
-// El grupo de botones de Rendimiento (PaginaRendimiento), con valores numéricos.
-function Grupo<T extends string | number>({ valor, opciones, onCambio, etiqueta }: { valor: T; opciones: [T, string][]; onCambio: (v: T) => void; etiqueta: string }) {
+// El grupo de botones de Rendimiento (PaginaRendimiento), con valores numéricos. `data-info`: lo que Vigía explica con
+// clic derecho → «Info» (vigia/info.ts), aquí y en Dato y Seccion.
+function Grupo<T extends string | number>({ valor, opciones, onCambio, etiqueta, 'data-info': info }: { valor: T; opciones: [T, string][]; onCambio: (v: T) => void; etiqueta: string; 'data-info'?: string }) {
   return (
-    <div className="inline-flex w-fit max-w-full flex-wrap rounded-lg bg-muted p-1" role="group" aria-label={etiqueta}>
+    <div className="inline-flex w-fit max-w-full flex-wrap rounded-lg bg-muted p-1" data-info={info} role="group" aria-label={etiqueta}>
       {opciones.map(([v, t]) => (
         <button key={String(v)} type="button" aria-pressed={valor === v} onClick={() => onCambio(v)}
           className={cn('h-11 rounded-md px-3 text-sm font-medium', valor === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>{t}</button>
@@ -41,9 +42,9 @@ function Grupo<T extends string | number>({ valor, opciones, onCambio, etiqueta 
 }
 
 // Como Cifra, pero con alto mínimo en rem: las etiquetas de §6.4 ocupan dos líneas y en modo presentación crecen.
-function Dato({ etiqueta, valor, sub }: { etiqueta: string; valor: string; sub?: string }) {
+function Dato({ etiqueta, valor, sub, 'data-info': info }: { etiqueta: string; valor: string; sub?: string; 'data-info'?: string }) {
   return (
-    <div className="flex min-h-[6.5rem] flex-col justify-between gap-1 rounded-xl border bg-card px-4 py-3">
+    <div className="flex min-h-[6.5rem] flex-col justify-between gap-1 rounded-xl border bg-card px-4 py-3" data-info={info}>
       <span className="font-mono text-[12.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{etiqueta}</span>
       <span className={cn('text-3xl font-semibold tabular-nums', valor === '—' ? 'text-texto-3' : 'text-foreground')}>{valor}</span>
       {sub ? <span className="text-[12.5px] text-texto-3">{sub}</span> : null}
@@ -59,12 +60,12 @@ function Cifras({ evo, modulo }: { evo: Evolution; modulo: FiltroModulo }) {
   const global = modulo === 'todo' ? '' : GLOBAL;
   return (
     <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-3">
-      <Dato etiqueta="Puntaje en la última auditoría" valor={num(c.puntaje)}
+      <Dato etiqueta="Puntaje en la última auditoría" valor={num(c.puntaje)} data-info="evo-puntaje"
         sub={c.cambio == null ? (global ? global.slice(3) : undefined) : `${signo(c.cambio)} desde la primera del periodo${global}`} />
-      <Dato etiqueta="Abiertos al cerrarla" valor={num(c.abiertos)} sub={c.criticos == null ? undefined : `${c.criticos} ${c.criticos === 1 ? 'crítico' : 'críticos'}`} />
-      <Dato etiqueta={`Nuevos en ${evo.days} días`} valor={num(c.nuevos)} />
-      <Dato etiqueta={`Corregidos en ${evo.days} días`} valor={num(c.corregidos)} sub={c.comprobados == null ? undefined : `${c.comprobados} ${c.comprobados === 1 ? 'comprobado' : 'comprobados'}`} />
-      <Dato etiqueta="Tiempo hasta comprobar la corrección" valor={horas(c.mttr.media)}
+      <Dato data-info="evo-abiertos" etiqueta="Abiertos al cerrarla" valor={num(c.abiertos)} sub={c.criticos == null ? undefined : `${c.criticos} ${c.criticos === 1 ? 'crítico' : 'críticos'}`} />
+      <Dato etiqueta={`Nuevos en ${evo.days} días`} valor={num(c.nuevos)} data-info="evo-nuevos" />
+      <Dato data-info="evo-corregidos" etiqueta={`Corregidos en ${evo.days} días`} valor={num(c.corregidos)} sub={c.comprobados == null ? undefined : `${c.comprobados} ${c.comprobados === 1 ? 'comprobado' : 'comprobados'}`} />
+      <Dato data-info="evo-tiempo-comprobar" etiqueta="Tiempo hasta comprobar la corrección" valor={horas(c.mttr.media)}
         sub={`${c.mttr.n ? `mediana ${horas(c.mttr.mediana)} · ${c.mttr.n} ${c.mttr.n === 1 ? 'hallazgo' : 'hallazgos'}` : 'Aún ninguno comprobado'}${global}`} />
     </div>
   );
@@ -84,8 +85,8 @@ function Abiertos({ p, modulo }: { p: EvolutionPoint; modulo: FiltroModulo }) {
 const cambio = (p: EvolutionPoint, k: 'new' | 'fixed', modulo: FiltroModulo) =>
   (p.snapshot && !p.first && p[k] ? miles(totalMatriz(p[k], modulo)) : '—');
 function Marca({ p }: { p: EvolutionPoint }) {
-  if (!p.snapshot) return <Etiqueta texto="Anterior al historial" />;
-  return p.first ? <Etiqueta texto="Punto de partida" /> : null;
+  if (!p.snapshot) return <Etiqueta texto="Anterior al historial" data-info="evo-marca-version" />;
+  return p.first ? <Etiqueta texto="Punto de partida" data-info="evo-marca-version" /> : null;
 }
 
 function Versiones({ points, modulo }: { points: EvolutionPoint[]; modulo: FiltroModulo }) {
@@ -96,7 +97,7 @@ function Versiones({ points, modulo }: { points: EvolutionPoint[]; modulo: Filtr
       {p.snapshot ? 'Ver cambios' : 'Ver auditoría'}<ChevronRight className="size-4" /></Link>
   );
   return (
-    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-versiones">
+    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby="t-versiones" data-info="evo-versiones">
       <h3 id="t-versiones" className="text-[17px] font-semibold">Versiones</h3>
       {/* Desde md, tabla; el contenedor que se desplaza toma el foco para moverlo con teclado. */}
       <div className="hidden overflow-x-auto md:block" tabIndex={0} role="region" aria-label="Versiones">
@@ -142,9 +143,9 @@ function Versiones({ points, modulo }: { points: EvolutionPoint[]; modulo: Filtr
   );
 }
 
-function Seccion({ id, titulo, children }: { id: string; titulo: string; children: ReactNode }) {
+function Seccion({ id, titulo, children, 'data-info': info }: { id: string; titulo: string; children: ReactNode; 'data-info'?: string }) {
   return (
-    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby={id}>
+    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-labelledby={id} data-info={info}>
       <h3 id={id} className="text-[17px] font-semibold">{titulo}</h3>
       {children}
     </section>
@@ -163,18 +164,18 @@ function Contenido({ evo }: { evo: Evolution }) {
   const de = modulo === 'todo' ? '' : ` · ${nombreModulo(modulo)}`;
   return (
     <>
-      <Grupo etiqueta="Módulo" valor={modulo} opciones={MODULOS} onCambio={setModulo} />
+      <Grupo etiqueta="Módulo" data-info="evo-filtro-modulo" valor={modulo} opciones={MODULOS} onCambio={setModulo} />
       <Cifras evo={evo} modulo={modulo} />
       {cambios.length === 0 ? <p className="rounded-xl border bg-card px-4 py-3 text-[15px] text-muted-foreground">Con la próxima auditoría verás qué cambió.</p> : null}
-      {serie.length > 1 ? <Seccion id="t-puntaje" titulo={`Puntaje por auditoría${recorte}`}><GraficaPuntaje serie={serie} /></Seccion> : null}
+      {serie.length > 1 ? <Seccion id="t-puntaje" data-info="evo-grafica-puntaje" titulo={`Puntaje por auditoría${recorte}`}><GraficaPuntaje serie={serie} /></Seccion> : null}
       {cambios.length ? (
-        <Seccion id="t-cambios-evo" titulo={`Nuevos y corregidos${de}${recorte}`}>
+        <Seccion id="t-cambios-evo" data-info="evo-grafica-cambios" titulo={`Nuevos y corregidos${de}${recorte}`}>
           <GraficaCambios serie={cambios} />
           <Leyenda items={[['Nuevos (hacia arriba)', 'var(--mal)'], ['Corregidos (hacia abajo)', 'var(--bien)']]} />
         </Seccion>
       ) : null}
       {abiertos.length > 1 ? (
-        <Seccion id="t-abiertos" titulo={`Abiertos por severidad${de}${recorte}`}>
+        <Seccion id="t-abiertos" data-info="evo-grafica-abiertos" titulo={`Abiertos por severidad${de}${recorte}`}>
           <GraficaAbiertos serie={abiertos} />
           <Leyenda items={LEYENDA_PILA} />
         </Seccion>
@@ -189,7 +190,7 @@ function Incidentes({ evo }: { evo: Evolution }) {
   const total = evo.incidents.reduce((a, d) => a + totalFila(d.counts), 0);
   if (!total) return null;
   return (
-    <Seccion id="t-incidentes" titulo={`Incidentes por día · últimos ${evo.days} días`}>
+    <Seccion id="t-incidentes" data-info="evo-incidentes" titulo={`Incidentes por día · últimos ${evo.days} días`}>
       <GraficaIncidentes serie={serieIncidentes(evo.incidents, evo.days)} />
       <Leyenda items={LEYENDA_PILA} />
       <p className="text-[12.5px] text-texto-3">{total} {total === 1 ? 'incidente' : 'incidentes'} en el periodo, por el día (hora de Caracas) en que empezó cada uno.</p>
@@ -207,7 +208,7 @@ function Revisiones({ reviews }: { reviews: EvolutionReview[] }) {
   if (!reviews.length) return null;
   const filas = [...reviews].reverse();
   return (
-    <Seccion id="t-revisiones" titulo="Revisiones de código">
+    <Seccion id="t-revisiones" data-info="evo-revisiones" titulo="Revisiones de código">
       <ul aria-label="Revisiones de código">
         {filas.map((r) => {
           const n = totalFila(r.new);
@@ -256,7 +257,7 @@ function SinAuditorias() {
     <Vacio icono={TrendingUp} titulo="Aún no hay auditorías en este periodo" texto="Cada auditoría que termine queda aquí."
       accion={<div className="flex flex-col items-center gap-2">
         <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
-          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
+          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
         {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
       </div>} />
   );
@@ -270,8 +271,8 @@ export default function PaginaEvolucion() {
   const evo = q.data;
   return (
     <div className="flex flex-col gap-6">
-      <BarraModulo titulo="Evolución" descripcion={entradaNav('evolution')?.descripcion}
-        extra={pronto ? null : <Grupo etiqueta="Periodo" valor={dias} opciones={PERIODOS} onCambio={setDias} />} />
+      <BarraModulo titulo="Evolución" data-info="modulo-evolucion" descripcion={entradaNav('evolution')?.descripcion}
+        extra={pronto ? null : <Grupo etiqueta="Periodo" data-info="evo-periodo" valor={dias} opciones={PERIODOS} onCambio={setDias} />} />
       {pronto ? <Vacio icono={TrendingUp} titulo="La evolución llega pronto"
           texto="Aquí verás, auditoría tras auditoría, qué es nuevo, qué se mantiene y qué se corrigió, y cómo se mueve tu puntaje." />
         : q.isError && !evo ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />

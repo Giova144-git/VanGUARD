@@ -16,6 +16,7 @@ const CLAVES_ESPERADAS = [
   'codeReviewStateBloqueo', 'mergeGateSaved',
   'auditDelta', 'evolution', 'hallazgosCorregidos', 'deltasRevision',
   'underAttackOffer', 'underAttackOfferUnaIp', 'underAttackOfferSinPermiso', 'underAttackProposal',
+  'fixRequests',
 ];
 
 const casos: [string, z.ZodType, unknown][] = [
@@ -46,6 +47,7 @@ const casos: [string, z.ZodType, unknown][] = [
   ['perfRuns', z.array(c.PerfRunExt), fx.perfRuns],
   ['exportMd', z.string().min(1), fx.exportMd],
   ['mcpTokens', z.array(c.McpTokenPublic), fx.mcpTokens],
+  ['fixRequests', z.array(c.FixRequest), fx.fixRequests],
   ['wikiEstimate', c.WikiEstimate, fx.wikiEstimate],
   ['wikiRunRunning', c.WikiRun, fx.wikiRunRunning],
   ['wikiRunDone', c.WikiRun, fx.wikiRunDone],

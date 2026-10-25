@@ -20,11 +20,25 @@ export type DemoJoin = z.infer<typeof DemoJoin>;
 
 // ── Conexiones ────────────────────────────────────────────────────────────────
 const Token = z.string().trim().min(20).max(400);
+// Cloudflare: mode 'zone' (zona propia, zone_id + token de lectura, como siempre) o 'url' (un sitio de Pages o Workers
+// sin zona: *.pages.dev, *.workers.dev o su dominio personalizado). En 'url' el token es opcional: sin él solo se revisa
+// el sitio por HTTP; con un token de CUENTA (Account · Cloudflare Pages · Read y Account · Workers Scripts · Read),
+// también la configuración del proyecto. action_token solo en 'zone' (bloquear IP y bajo ataque necesitan una zona).
+const CloudflareSiteUrl = z.url().refine((u) => u.startsWith('https://'), 'solo https')
+  .refine((u) => { const h = new URL(u).hostname; return h.includes('.') && !/^[\d.]+$/.test(h) && !h.includes(':'); },
+    'un dominio público, no una IP');
 export const ConnectionCreate = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('supabase'), project_ref: z.string().trim().max(120), pat: Token, // ref o URL; el BACK normaliza
     publishable_key: z.string().regex(/^sb_publishable_[A-Za-z0-9_-]{10,}$/).optional() }), // P1, sondeo activo de RLS (§07.6)
-  z.object({ provider: z.literal('cloudflare'), zone_id: z.string().trim().regex(/^[a-f0-9]{32}$/), read_token: Token,
-    action_token: Token.optional() }),
+  z.object({ provider: z.literal('cloudflare'), mode: z.enum(['zone', 'url']).default('zone'),
+    zone_id: z.string().trim().regex(/^[a-f0-9]{32}$/).optional(), url: CloudflareSiteUrl.optional(),
+    read_token: Token.optional(), action_token: Token.optional() })
+    .superRefine((v, ctx) => {
+      if (v.mode === 'zone' && (!v.zone_id || !v.read_token))
+        ctx.addIssue({ code: 'custom', message: 'zone_id y read_token son obligatorios en modo zona', path: ['zone_id'] });
+      if (v.mode === 'url' && !v.url) ctx.addIssue({ code: 'custom', message: 'url es obligatoria en modo sitio', path: ['url'] });
+      if (v.mode === 'url' && v.action_token) ctx.addIssue({ code: 'custom', message: 'action_token solo en modo zona', path: ['action_token'] });
+    }),
   z.object({ provider: z.literal('github'), // regex de §06.3: sin "." ni ".." como repo (acme/.. → 422)
     repo_full_name: z.string().regex(/^[A-Za-z0-9-]{1,39}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/), pat: Token }),
   z.object({ provider: z.literal('ingest'), label: z.string().trim().min(2).max(40),

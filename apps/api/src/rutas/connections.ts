@@ -16,6 +16,7 @@ import { requireAdmin } from '../mw/admin.ts';
 import { esConexionSimulador } from '../lib/simulador.ts';
 import { esHostProduccion } from '../mw/prod-host.ts';
 import { probarCloudflareAcciones, probarCloudflareLectura } from '../scans/cloudflare.ts';
+import { clasificarSitio, probarCloudflareSitio } from '../scans/cloudflare-sitio.ts';
 import { mismoRepoGh } from '../revision/acciones-pr.ts';
 import { probarEstadosGithub, probarGithub } from '../scans/repo.ts';
 import type { Sondeo } from '../scans/sondeo.ts';
@@ -127,6 +128,8 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
     return c.json(ConnectionCreated.parse({ connection: conn, action_connection: null, checks: [], ingest_secret: secreto }), 201);
   }
 
+  if (body.provider === 'cloudflare' && body.mode === 'url') return altaSitioCloudflare(c, body);
+
   let sondeo: Sondeo;
   let token: string;
   let accion: { token: string; sondeo: Sondeo } | null = null;
@@ -143,15 +146,17 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
     sondeo = await probarSupabase(token, ref);
     if (sondeo.sobra?.length) throw errorSobra(sondeo.sobra);   // antes que cualquier otro veredicto: nada se guarda
   } else if (body.provider === 'cloudflare') {
+    // Modo zona: el contrato ya exige zone_id y read_token (superRefine).
+    const zoneId = body.zone_id ?? '';
     guardar('cloudflare', body.read_token, body.action_token);
-    token = body.read_token.trim();
+    token = (body.read_token ?? '').trim();
     if (body.action_token !== undefined && body.action_token.trim() === token) {
       throw new ApiError('key_rejected', 'Usa dos tokens distintos: uno de lectura y otro de acciones', { reason: 'same_token' });
     }
-    sondeo = await probarCloudflareLectura(token, body.zone_id);
+    sondeo = await probarCloudflareLectura(token, zoneId);
     if (sondeo.estado === 'ok' && body.action_token !== undefined) {
       const t = body.action_token.trim();
-      accion = { token: t, sondeo: await probarCloudflareAcciones(t, body.zone_id, sondeo) };
+      accion = { token: t, sondeo: await probarCloudflareAcciones(t, zoneId, sondeo) };
     }
   } else {
     guardar('github', body.pat);
@@ -223,6 +228,44 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
   return c.json(ConnectionCreated.parse({ connection: filas[0], action_connection: filas[1] ?? null,
     checks: [...sondeo.checks, ...(accion?.sondeo.checks ?? [])], ingest_secret: null }), 201);
 });
+
+// E8 en modo sitio (asignaciones/cloudflare-por-url.md §BACK 1): URL normalizada y clasificada (hosts de VanGUARD, IPs y
+// localhost → 422), token de cuenta opcional (con él se busca el proyecto; 401 → no se guarda). Sin token la conexión se
+// guarda sin secreto: solo hay revisión HTTP del sitio. Mismo sitio ya conectado → 409.
+async function altaSitioCloudflare(c: Context<AppEnv>, body: Extract<ConnectionCreate, { provider: 'cloudflare' }>) {
+  const env = c.env;
+  const admin = db(env);
+  const orgId = c.get('orgId');
+  const sitio = clasificarSitio(body.url ?? '');
+  if ('error' in sitio) throw new ApiError('invalid_body', 'Revisa los campos marcados', { field_errors: { url: [sitio.error] } });
+  const token = body.read_token?.trim() || null;
+  if (token) guardar('cloudflare', token);
+  const { data: previas, error: ep } = await admin.from('connections').select('id, meta').eq('org_id', orgId)
+    .eq('provider', 'cloudflare').eq('status', 'active').limit(50);
+  if (ep) throw new ApiError('internal', 'No pudimos comprobar tus conexiones');
+  if (((previas ?? []) as Previa[]).some((p) => p.meta?.site_url === sitio.site_url)) {
+    throw new ApiError('conflict', 'Ese sitio ya está conectado.', { reason: 'sitio_duplicado' });
+  }
+  const sondeo = await probarCloudflareSitio(token, sitio);
+  exigirSondeo(sondeo);
+  const connectionId = crypto.randomUUID();
+  const fila = { orgId, connectionId, provider: 'cloudflare' as const, kind: 'read' as const, label: sondeo.label,
+    meta: sondeo.meta, scopes: sondeo.scopes, capabilities: sondeo.capabilities, expiresAt: null, createdBy: c.get('userId') };
+  if (token) await createConnectionWithSecret(env, admin, fila, token);
+  else {
+    const { error } = await admin.from('connections').insert({ id: connectionId, org_id: orgId, provider: 'cloudflare',
+      kind: 'read', label: fila.label, meta: fila.meta, scopes: [], capabilities: fila.capabilities, created_by: fila.createdBy });
+    if (error) {
+      log('error', 'connections.sitio_error', { rid: c.get('rid'), code: error.code ?? null });
+      throw new ApiError('internal', 'No se pudo guardar la conexión.');
+    }
+  }
+  const [conn] = await leer(c, [connectionId]);
+  log('info', 'connection.creada', { rid: c.get('rid'), provider: 'cloudflare', modo: 'url', tipo: sitio.kind,
+    config_read: sondeo.meta.config_read === true });
+  return c.json(ConnectionCreated.parse({ connection: conn, action_connection: null,
+    checks: sondeo.checks, ingest_secret: null }), 201);
+}
 
 // E9 · POST /api/orgs/:org/connections/:id/test · admin · P0 — re-sondea con el token descifrado.
 connections.post('/orgs/:org/connections/:id/test', requireAdmin, async (c) => {

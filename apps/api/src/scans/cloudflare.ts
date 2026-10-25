@@ -7,6 +7,7 @@ import { db } from '../lib/db.ts';
 import { ProviderError, check, codigoHttp, pedir, sondear } from '../lib/http.ts';
 import { escribirDetalleModulo } from './cobertura.ts';
 import { conexionActiva, guardarHallazgos } from './comun.ts';
+import { pasoCloudflareSitio } from './cloudflare-sitio.ts';
 import { sondeoFallido, veredicto, type Sondeo } from './sondeo.ts';
 
 // Sondeo de los tokens de Cloudflare (§08.2–08.3): lectura obligatoria con zone_read y analytics_read; acciones opcional.
@@ -230,6 +231,8 @@ export async function zonaParaAuditar(token: string, zoneId: string): Promise<Zo
 export const pasoCloudflare: FnPaso = async (env, m) => {
   const conn = await conexionActiva(env, m, 'cloudflare');
   if (!conn) return { status: 'skipped', error_code: 'no_connection' };
+  // Modo sitio (cloudflare-por-url.md): sin zona; su revisión va aparte y el modo zona no cambia.
+  if (conn.meta.mode === 'url') return pasoCloudflareSitio(env, m, conn);
   const zoneId = String(conn.meta.zone_id ?? '');
   const ctx = { orgId: m.org_id, connectionId: conn.id, provider: 'cloudflare' as const, kind: 'read' as const };
   const z = await withSecret(env, db(env), ctx, (t) => zonaParaAuditar(t, zoneId));

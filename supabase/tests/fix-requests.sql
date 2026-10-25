@@ -19,10 +19,8 @@ create or replace function pg_temp.hallazgo(p_org uuid, p_regla text) returns uu
           encode(sha256(convert_to('fix-requests|' || p_org || '|' || p_regla, 'UTF8')), 'hex'))
   returning id
 $$;
-create or replace function pg_temp.como(p_user uuid, p_anon boolean default false) returns void language sql as $$
-  select set_config('request.jwt.claims',
-    json_build_object('sub', p_user, 'role', 'authenticated', 'is_anonymous', p_anon)::text, true);
-$$;
+-- Las claims del usuario se ponen con set_config en línea: una función pg_temp no se puede ejecutar con el rol
+-- authenticated (0008h le quita execute a public), así que «perform pg_temp.como(...)» fallaba en este proyecto.
 
 do $$
 declare
@@ -97,24 +95,25 @@ begin
   insert into public.fix_requests (org_id, finding_id) values (v_b, fb);     -- una de otra org, como postgres
   insert into public.fix_requests (org_id, finding_id) values (v_a, f4) returning id into v_id;
   set local role authenticated;
-  perform pg_temp.como(u_admin);
+  perform set_config('request.jwt.claims', json_build_object('sub', u_admin, 'role', 'authenticated', 'is_anonymous', false)::text, true);
   select count(*) into n from public.fix_requests where finding_id = f4;  s := s || ' admin_ve=' || n;
   select count(*) into n from public.fix_requests where org_id = v_b;     s := s || ' otra_org_ve=' || n;
   begin insert into public.fix_requests (org_id, finding_id, requested_by) values (v_a, f5, u_admin); s := s || ' admin_crea=ok';
   exception when insufficient_privilege then s := s || ' admin_crea=42501'; end;
   begin insert into public.fix_requests (org_id, finding_id, requested_by) values (v_b, fb, u_admin); s := s || ' crea_en_otra=ENTRO';
   exception when insufficient_privilege then s := s || ' crea_en_otra=42501'; end;
-  perform pg_temp.como(u_viewer);
+  perform set_config('request.jwt.claims', json_build_object('sub', u_viewer, 'role', 'authenticated', 'is_anonymous', false)::text, true);
   begin insert into public.fix_requests (org_id, finding_id, requested_by) values (v_a, f3, u_viewer); s := s || ' viewer_crea=ENTRO';
   exception when insufficient_privilege then s := s || ' viewer_crea=42501'; end;
   update public.fix_requests set status = 'cancelado', closed_at = now() where id = v_id;
   get diagnostics n = row_count;  s := s || ' viewer_cancela=' || n;
-  perform pg_temp.como(u_admin);
+  perform set_config('request.jwt.claims', json_build_object('sub', u_admin, 'role', 'authenticated', 'is_anonymous', false)::text, true);
   begin update public.fix_requests set status = 'arreglando', started_at = now() where id = v_id; s := s || ' admin_arreglando=ENTRO';
   exception when insufficient_privilege then s := s || ' admin_arreglando=42501'; end;
   update public.fix_requests set status = 'cancelado', closed_at = now() where id = v_id;
   get diagnostics n = row_count;  s := s || ' admin_cancela=' || n;
-  perform pg_temp.como(u_anon, true);                                         -- anónimo «admin» de una org que no es demo
+  -- anónimo «admin» de una org que no es demo
+  perform set_config('request.jwt.claims', json_build_object('sub', u_anon, 'role', 'authenticated', 'is_anonymous', true)::text, true);
   select count(*) into n from public.fix_requests where org_id = v_a;     s := s || ' anon_ve=' || n;
   reset role;
   revoke select, insert, update on public.fix_requests from authenticated;

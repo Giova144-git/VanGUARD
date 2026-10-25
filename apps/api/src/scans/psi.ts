@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { sha256hex } from '@vanguard/core/crypto';
 import type { FnPaso, MsgScan, ResultadoPaso } from '../jobs.ts';
 import { db } from '../lib/db.ts';
@@ -8,8 +9,8 @@ import { leerAcotado } from './repo.ts';
 
 // «Medir ahora» de Rendimiento (función 5, PLAN_MAESTRO §10.2–10.5): un kind 'lighthouse' de E11 lleva un único paso psi
 // (una estrategia por medición, como fija ScanCreate) que llama a PageSpeed Insights v5 y escribe UNA fila en perf_runs con
-// el formato de la siembra (demo/seed-perf.sql, §10.11). Sin Edge Function vg-psi: el parámetro `fields` de Google pide
-// solo puntajes y métricas (unos 2 KB en vez del LHR de 0,5–1,5 MB, que no cabe en los 10 ms de JSON.parse de Free).
+// el formato de la siembra (demo/seed-perf.sql, §10.11). Sin Edge Function vg-psi: el parámetro `fields` de Google deja
+// fuera capturas, pantalla completa y entidades (≈330 KB en vez del LHR de 0,5–1,5 MB; JSON.parse ≈ 1 ms en V8).
 // El Worker nunca pide la URL del cliente: solo Google la carga. La clave va solo en la query a googleapis.com y nunca en
 // logs ni errores (pedir() registra el motivo, nunca la URL).
 
@@ -19,8 +20,9 @@ const PSI = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
 const CATEGORIAS = ['PERFORMANCE', 'ACCESSIBILITY', 'BEST_PRACTICES', 'SEO'];
 // La API de PSI admite hasta 120 s por análisis (§10.1): 130 s caben en el reloj de un consumidor de cola (15 min).
 export const PLAZO_PSI = 130_000;
-// Con `fields` la respuesta ronda 2 KB; 300 KB es que Google ignoró `fields` y mandó el LHR entero: se corta sin parsear.
-export const TOPE_CUERPO_PSI = 300_000;
+// Con la máscara de abajo la respuesta ronda 330–340 KB (las ~150 auditorías del mapa audits; medido por el ORQUESTADOR
+// con example.com). 1 MB deja margen; más es que Google mandó otra cosa: se corta sin parsear.
+export const TOPE_CUERPO_PSI = 1_000_000;
 const TOPE_ERROR = 16_384;   // el cuerpo de un 4xx/5xx solo se mira para el «Lighthouse returned error: X»
 // Errores de clave de las APIs de Google (mensaje y google.rpc.ErrorInfo.reason): «API key not valid…», «API key expired…».
 const CLAVE_MALA = /API key (?:not valid|expired)|API_KEY_(?:INVALID|EXPIRED)/i;
@@ -28,12 +30,9 @@ const VERSION = /^[A-Za-z0-9_.-]{1,40}$/;   // el check de perf_runs.version_lab
 const URL_BD = /^https:\/\/[a-z0-9.-]+(\/[^?#\s]*)?$/;   // el check de perf_runs.url (0007)
 
 // Métricas de §10.3: audits.<id>.numericValue, TTFB de metrics (respaldo server-response-time) y el contexto de
-// resource-summary. categories/*/score trae performance, accessibility, best-practices y seo con sus claves del LHR.
-const AUDITS = ['largest-contentful-paint', 'total-blocking-time', 'cumulative-layout-shift', 'first-contentful-paint',
-  'speed-index', 'server-response-time', 'interactive'];
-export const CAMPOS_PSI = 'lighthouseResult(lighthouseVersion,fetchTime,finalUrl,finalDisplayedUrl,runtimeError,'
-  + `categories/*/score,audits(${AUDITS.map((a) => `${a}/numericValue`).join(',')},metrics/details/items/timeToFirstByte,`
-  + 'resource-summary/details/items(resourceType,transferSize,requestCount)))';
+// resource-summary. audits y categories son MAPAS del LHR: la máscara de `fields` de Google no deja elegir claves
+// dentro de un mapa (400 INVALID_ARGUMENT, probado por el ORQUESTADOR), así que van enteros; resumirLhr toma lo suyo.
+export const CAMPOS_PSI = 'lighthouseResult(lighthouseVersion,fetchTime,finalUrl,finalDisplayedUrl,runtimeError,categories,audits)';
 
 // ── Guarda de la URL (E11 y otra vez en el paso) ─────────────────────────────────────────────────────────────────────
 // Nunca se mide VanGUARD: su apex y subdominios, el Worker de respaldo en workers.dev y su proyecto de Supabase. En
@@ -58,8 +57,9 @@ export const hostsPropios = (env: Partial<Pick<CloudflareBindings, 'APP_ORIGIN' 
   [...new Set([...HOSTS_PROPIOS, hostDe(env.APP_ORIGIN), hostDe(env.SUPABASE_URL)].filter((h): h is string => !!h))];
 
 /** https de internet, sin IPs, credenciales ni puertos, y nunca un host propio → `https://host/ruta` (sin query ni
- *  fragmento: el check de perf_runs.url y el histórico de E24 comparan por esa forma). Lanza UrlNoMedible con el motivo. */
-export function urlMedible(raw: string, propios: readonly string[] = HOSTS_PROPIOS): string {
+ *  fragmento: el check de perf_runs.url y el histórico de E24 comparan por esa forma). Lanza UrlNoMedible con el motivo.
+ *  permitidos: hosts exactos que se saltan SOLO la regla de host propio (la víctima de la demo, ver urlMedibleOrg). */
+export function urlMedible(raw: string, propios: readonly string[] = HOSTS_PROPIOS, permitidos: readonly string[] = []): string {
   const no = (motivo: string, mensaje: string): never => { throw new UrlNoMedible(motivo, mensaje); };
   if (raw.length > 2048) no('largo', 'La URL es demasiado larga (máximo 2048 caracteres)');
   let u: URL | null = null;
@@ -74,11 +74,28 @@ export function urlMedible(raw: string, propios: readonly string[] = HOSTS_PROPI
   if (INTERNOS.some((s) => h === s || h.endsWith(`.${s}`))) no('interno', 'No medimos hosts locales ni de red interna');
   const etiquetas = h.split('.');
   if (etiquetas.length < 2 || !etiquetas.every((e) => ETIQUETA.test(e))) no('host', 'Usa un dominio público, como tusitio.com');
-  if (propios.some((p) => h === p || h.endsWith(`.${p}`))) no('propio', 'Esa URL es de VanGUARD: mide la de tu sitio');
+  if (!permitidos.includes(h) && propios.some((p) => h === p || h.endsWith(`.${p}`))) {
+    no('propio', 'Esa URL es de VanGUARD: mide la de tu sitio');
+  }
   const limpia = `https://${h}${u.pathname || '/'}`;
   if (!URL_BD.test(limpia)) no('url', 'No es una URL válida');
   if (PARECE_SECRETO.test(limpia)) no('secreto', 'La URL parece llevar un secreto: quítalo antes de medir');
   return limpia;
+}
+
+// Excepción (decisión de Giovanni, sáb 24-oct): la víctima de la demo se mide, pero SOLO desde la org de demo
+// (orgs.is_demo; prueba v2-regresion de §10.11). La org solo se lee si la URL es exactamente ese host.
+export const HOST_VICTIMA_DEMO = 'demo.officialvanguard.com';
+export async function urlMedibleOrg(admin: SupabaseClient, orgId: string, raw: string, propios: readonly string[]): Promise<string> {
+  try {
+    return urlMedible(raw, propios);
+  } catch (e) {
+    if (!(e instanceof UrlNoMedible) || e.motivo !== 'propio' || hostDe(raw)?.replace(/\.$/, '') !== HOST_VICTIMA_DEMO) throw e;
+    const { data, error } = await admin.from('orgs').select('is_demo').eq('id', orgId).maybeSingle();
+    if (error) throw new ProviderError('unavailable');
+    if ((data as { is_demo?: unknown } | null)?.is_demo !== true) throw e;
+    return urlMedible(raw, propios, [HOST_VICTIMA_DEMO]);
+  }
 }
 
 /** La petición a PSI: estrategia siempre explícita (el valor por defecto de Google es DESKTOP), las 4 categorías en el enum
@@ -185,7 +202,10 @@ async function medir(env: CloudflareBindings, m: MsgScan, traza: Traza): Promise
   if (!p) return { status: 'failed', error_code: 'sin_parametros' };
   traza.strategy = p.strategy;
   // Otra vez aquí y no solo en E11 (§10.2): lo que llega a Google es la URL del cliente ya validada, nunca una interna.
-  try { p.url = urlMedible(p.url, hostsPropios(env)); } catch { return { status: 'failed', error_code: 'url_no_medible' }; }
+  try { p.url = await urlMedibleOrg(admin, m.org_id, p.url, hostsPropios(env)); } catch (e) {
+    if (!(e instanceof UrlNoMedible)) throw e;   // falló leer la org (ProviderError): reintenta el mensaje
+    return { status: 'failed', error_code: 'url_no_medible' };
+  }
   const clave = env.PSI_API_KEY?.trim();
   if (!clave) return { status: 'failed', error_code: 'psi_sin_clave' };
 

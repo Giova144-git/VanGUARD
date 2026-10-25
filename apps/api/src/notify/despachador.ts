@@ -1,6 +1,6 @@
 import { Severity, type Module } from '@vanguard/contracts';
 import {
-  botonesAlerta, botonOfertaBajoAtaque, ESTADOS_QUE_CUENTAN, estadoTormenta, fueraDeVentanaDemo, ipCanonica,
+  botonesAlerta, botonOfertaBajoAtaque, contextoLlamada, ESTADOS_QUE_CUENTAN, estadoTormenta, fueraDeVentanaDemo, ipCanonica,
   mensajeIncidente, MIN_IPS_BAJO_ATAQUE, moduloDeRegla, ofreceBajoAtaque, ofreceBloqueo, planAvisos, simularBloqueo,
   textoOfertaBajoAtaque, textoTormenta, topesDeOrg, TORMENTA_VENTANA_MS, type ContactoAviso, type IncidenteAviso,
   type Planned, type Tormenta,
@@ -16,14 +16,18 @@ import { ventanaAbierta } from '../lib/verificacion.ts';
 import {
   cuerpoInteractivo, cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado, type MensajeKapso,
 } from './kapso.ts';
+import { llamarVoz, vozConfigurada } from './voz.ts';
 
 // Despachador de avisos externos (S12 12.4–12.6, S15 15.9 y 15.10). Lo llama la evaluación en vivo tras cada
 // vg_upsert_incident que lo requiera (nuevo, subida de severidad o reapertura). Lee el incidente (id + org), los
 // contactos, el uso de la última hora, la ventana de la demo y la tormenta; planAvisos de core decide; aquí solo se
 // escribe y se envía. Por cada WhatsApp: fila queued ANTES de enviar (el unique da 23505 si ya se avisó y entonces no
 // sale nada), una fila de approvals por botón con sha256(nonce), el interactivo por Kapso y cierre a sent | failed.
-// Lo que no sale (tope, ventana de demo, sin verificar) deja su fila con status y error y no llama a Kapso. La voz es
-// P1: sus entradas del plan se ignoran sin fila. Subpeticiones: 5–8 de lectura + ~4 por WhatsApp enviado.
+// Lo que no sale (tope, ventana de demo, sin verificar) deja su fila con status y error y no llama a Kapso. Llamada de
+// Guardia (asignaciones/llamada-ataque.md §B1): con VOZ_URL y VOZ_OPERATOR_TOKEN, la entrada voice/call_v1 del plan sale
+// DESPUÉS del WhatsApp del incidente (la voz lo menciona), con fila queued antes de llamar y un único intento (llamarUno);
+// sin esas variables se ignora sin fila, como antes. Subpeticiones: 5–8 de lectura (+2 del uso de la voz si está
+// configurada) + ~4 por WhatsApp enviado + 3 por llamada.
 // Tercer botón blk «Bloquear IP» (§12.6): solo si el incidente es CF_ con resource ip:<ip> bloqueable y la org tiene una
 // conexión Cloudflare kind:'action' activa (no se ofrece lo que no se puede hacer); su canje lo hace canjearBotonBloqueo (E31).
 // Tras el aviso del incidente, que no cambia, el 2.º mensaje de bajo ataque cuando la oferta aplica (ofrecerBajoAtaque).
@@ -31,9 +35,17 @@ import {
 type Obj = Record<string, unknown>;
 type Cliente = ReturnType<typeof db>;
 export type RespuestaAviso = { is_new: boolean; prev_severity: string | null; reopened: boolean };
+/** Lo que hizo cada canal (SimulateAttackOut de E57): queued = salió; failed = se intentó y falló al primer intento;
+ *  skipped = no aplica (sin contacto, tope, ventana de la demo, sin configurar). */
+export type CanalResumen = 'queued' | 'skipped' | 'failed';
+export type ResumenAviso = { whatsapp: CanalResumen; voice: CanalResumen };
+const SIN_AVISO: ResumenAviso = Object.freeze({ whatsapp: 'skipped', voice: 'skipped' });
+type Salida = 'enviado' | 'fallido' | 'omitido';
+const resumir = (xs: readonly Salida[]): CanalResumen =>
+  (xs.includes('enviado') ? 'queued' : xs.includes('fallido') ? 'failed' : 'skipped');
 type Incidente = {
   code: string; severity: Severity; rule_ids: string[]; resource: string; status: string; details: Obj;
-  last_event_at: string; muted_until: string | null; notified_at: string | null;
+  last_event_at: string; muted_until: string | null; notified_at: string | null; event_count: number | null;
 };
 type Contacto = ContactoAviso & { phone: string; wa_last_inbound_at: string | null };
 type Cierre = { status: 'sent'; provider_id: string; sent_at: string } | { status: 'failed'; error: string };
@@ -50,7 +62,8 @@ function leerIncidente(x: unknown): Incidente | null {
   if (!sev.success || !code || !resource || !status || !Array.isArray(o.rule_ids)) return null;
   return { code, severity: sev.data, rule_ids: o.rule_ids.filter((r): r is string => typeof r === 'string'), resource, status,
     details: obj(o.details), last_event_at: str(o.last_event_at) ?? new Date().toISOString(),
-    muted_until: str(o.muted_until), notified_at: str(o.notified_at) };
+    muted_until: str(o.muted_until), notified_at: str(o.notified_at),
+    event_count: typeof o.event_count === 'number' ? o.event_count : null };
 }
 
 function leerContactos(x: unknown): Contacto[] {
@@ -66,30 +79,32 @@ function leerContactos(x: unknown): Contacto[] {
 // Código corto para notifications.error y el log: el de Meta/nuestro de KapsoError, nunca un mensaje del proveedor.
 const codigoError = (e: unknown) => (e instanceof KapsoError ? e.detalle ?? e.code : e instanceof RangeError ? 'invalid' : 'unavailable');
 
-/** Nunca lanza: todo error va al log (corre en waitUntil detrás de la ingesta). */
+/** Nunca lanza: todo error va al log (corre en waitUntil detrás de la ingesta). Devuelve lo que hizo cada canal. */
 export async function avisarIncidente(env: CloudflareBindings, orgId: string, incidentId: string, r: RespuestaAviso,
-  rid: string): Promise<void> {
+  rid: string): Promise<ResumenAviso> {
   try {
-    await despachar(env, orgId, incidentId, r, rid);
+    return await despachar(env, orgId, incidentId, r, rid);
   } catch (e) {
     log('error', 'despacho.error', { rid, name: e instanceof Error ? e.name : typeof e });
+    return SIN_AVISO;
   }
 }
 
-async function despachar(env: CloudflareBindings, orgId: string, incidentId: string, r: RespuestaAviso, rid: string) {
+async function despachar(env: CloudflareBindings, orgId: string, incidentId: string, r: RespuestaAviso, rid: string)
+  : Promise<ResumenAviso> {
   const admin = db(env);
   const ahora = Date.now();
   const { data, error } = await admin.from('incidents')
-    .select('id, code, severity, rule_ids, resource, status, details, last_event_at, muted_until, notified_at')
+    .select('id, code, severity, rule_ids, resource, status, details, last_event_at, muted_until, notified_at, event_count')
     .eq('id', incidentId).eq('org_id', orgId).maybeSingle();
   const inc = leerIncidente(data);
   if (error || !inc) {
     log('warn', 'despacho.sin_incidente', { rid, code: error?.code ?? null });
-    return;
+    return SIN_AVISO;
   }
   if (inc.status === 'resolved') {
     log('info', 'despacho.sin_avisos', { rid, incidente: inc.code, motivo: 'resuelto' });
-    return;
+    return SIN_AVISO;
   }
   const prev = Severity.safeParse(r.prev_severity);
   // Severidad y silencio frescos de la fila; el motivo (nuevo, subida, reapertura) es el de la respuesta del upsert.
@@ -100,7 +115,7 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
   const corte = planAvisos(aviso, [], { whatsapp: 0, voice: 0 }, { whatsapp: 0, voice: 0 }, 'none', new Date(ahora));
   if (corte.motivo !== 'sin_contactos') {
     log('info', 'despacho.sin_avisos', { rid, incidente: inc.code, motivo: corte.motivo });
-    return;
+    return SIN_AVISO;
   }
 
   const desde2m = new Date(ahora - TORMENTA_VENTANA_MS).toISOString();
@@ -108,7 +123,10 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
   // privada, ni de documentación, ni de Cloudflare; own_ip no aplica al botón).
   const ipIncidente = ofreceBloqueo(inc, true) ? ipCanonica(inc.resource.slice(3)) : null;
   const ipBloqueo = ipIncidente && simularBloqueo(ipIncidente, { zona: '-', cloudflare: RANGOS_CLOUDFLARE }).ok ? ipIncidente : null;
-  const [c, o, u, t, accion] = await Promise.all([
+  // Uso de la voz en la última hora (de la org y de todas, TOPE_GLOBAL_LLAMADAS_HORA): solo si se puede llamar.
+  const conVoz = vozConfigurada(env);
+  const desde1h = new Date(ahora - 3600_000).toISOString();
+  const [c, o, u, t, accion, vo, vg] = await Promise.all([
     admin.from('contacts').select('id, phone_e164, whatsapp, voice, priority, verified_at, wa_last_inbound_at')
       .eq('org_id', orgId).order('priority').limit(10),
     admin.from('orgs').select('is_demo').eq('id', orgId).maybeSingle(),
@@ -121,12 +139,21 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     admin.from('incidents').select('rule_ids', { count: 'exact' }).eq('org_id', orgId).gte('started_at', desde2m)
       .in('severity', ['high', 'critical']).limit(50),
     ipBloqueo ? hayConexionAccion(admin, orgId, rid) : Promise.resolve(false),
+    conVoz ? admin.from('notifications').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('channel', 'voice')
+      .gte('created_at', desde1h).in('status', ESTADOS_CUENTAN) : Promise.resolve(null),
+    conVoz ? admin.from('notifications').select('id', { count: 'exact', head: true }).eq('channel', 'voice')
+      .gte('created_at', desde1h).in('status', ESTADOS_CUENTAN) : Promise.resolve(null),
   ]);
   if (c.error || o.error || u.error || t.error || !o.data) {
     // Sin el uso de la hora no se puede aplicar el tope: no se envía nada.
     log('error', 'despacho.lectura_error', { rid, incidente: inc.code,
       code: c.error?.code ?? o.error?.code ?? u.error?.code ?? t.error?.code ?? null });
-    return;
+    return SIN_AVISO;
+  }
+  // Sin el uso de la voz no se puede aplicar su tope: no hay llamada (el WhatsApp sale igual).
+  const vozLeida = conVoz && vo !== null && vg !== null && !vo.error && !vg.error;
+  if (conVoz && !vozLeida) {
+    log('warn', 'despacho.uso_voz_error', { rid, incidente: inc.code, code: vo?.error?.code ?? vg?.error?.code ?? null });
   }
   const org = { is_demo: obj(o.data).is_demo === true };
   // M10 de §02.5.1: la ventana de alertas de la org de demo; si no se puede leer, cerrada (falla hacia no avisar).
@@ -145,11 +172,12 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
   }
 
   const contactos = leerContactos(c.data);
-  const plan = planAvisos(aviso, contactos, { whatsapp: u.count ?? 0, voice: 0 }, topesDeOrg(org), storm, new Date(ahora),
-    { fueraDeVentanaDemo: fueraDeVentanaDemo(org, hasta, new Date(ahora)) });
+  const plan = planAvisos(aviso, contactos, { whatsapp: u.count ?? 0, voice: vozLeida ? vo?.count ?? 0 : 0 }, topesDeOrg(org),
+    storm, new Date(ahora), { fueraDeVentanaDemo: fueraDeVentanaDemo(org, hasta, new Date(ahora)),
+      ...(vozLeida ? { usoGlobal: { voice: vg?.count ?? 0 } } : {}) });
   if (plan.motivo) {
     log('info', 'despacho.sin_avisos', { rid, incidente: inc.code, motivo: plan.motivo });
-    return;
+    return SIN_AVISO;
   }
 
   const porId = new Map(contactos.map((x) => [x.id, x]));
@@ -164,12 +192,21 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
   const salieron = await Promise.all(plan.envios.filter((p) => p.channel === 'whatsapp' && !p.p1).map(async (p) => {
     const contacto = porId.get(p.contact_id);
     if (!contacto) return null;
-    const salio = await enviarUno(ctx, p, contacto);
-    return salio && p.template !== 'storm_v1' ? contacto : null;
+    const salida = await enviarUno(ctx, p, contacto);
+    return { salida, contacto: salida === 'enviado' && p.template !== 'storm_v1' ? contacto : null };
   }));
   // 2.º mensaje, DESPUÉS del aviso del incidente y solo a quien le salió.
-  const conAviso = salieron.filter((x): x is Contacto => x !== null).sort((a, b) => a.priority - b.priority);
+  const conAviso = salieron.flatMap((x) => (x?.contacto ? [x.contacto] : [])).sort((a, b) => a.priority - b.priority);
   if (conAviso.length) await ofrecerBajoAtaque(ctx, conAviso);
+  // La llamada, al final: Guardia menciona el WhatsApp. Sin la voz configurada o sin su uso leído, nada (ni fila).
+  const llamadas: Salida[] = [];
+  if (vozLeida) {
+    for (const p of plan.envios.filter((x) => x.channel === 'voice')) {
+      const contacto = porId.get(p.contact_id);
+      if (contacto) llamadas.push(await llamarUno(ctx, p, contacto));
+    }
+  }
+  return { whatsapp: resumir(salieron.flatMap((x) => (x ? [x.salida] : []))), voice: resumir(llamadas) };
 }
 
 type Despacho = {
@@ -186,8 +223,9 @@ async function hayConexionAccion(admin: Cliente, orgId: string, rid: string): Pr
   return !error && Array.isArray(data) && data.length > 0;
 }
 
-// true si el aviso salió (Kapso lo aceptó): el 2.º mensaje solo va detrás de un aviso enviado.
-async function enviarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<boolean> {
+// 'enviado' si el aviso salió (Kapso lo aceptó): el 2.º mensaje solo va detrás de un aviso enviado. 'fallido' si se
+// intentó y falló; 'omitido' si no se intentó (tope, ventana, sin verificar, dry_run, ya avisado).
+async function enviarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<Salida> {
   const { admin, orgId, rid } = d;
   const recipient_masked = enmascararTelefono(contacto.phone);
   const base = { org_id: orgId, incident_id: d.incidentId, channel: 'whatsapp', template: p.template, recipient_masked };
@@ -203,20 +241,20 @@ async function enviarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<b
       const { error } = await admin.from('notifications').insert({ ...base, ...fila });
       if (error && error.code !== '23505') log('warn', 'despacho.sin_fila', { ...registro, code: error.code ?? null, status: fila.status });
       else log('info', 'despacho.omitido', { ...registro, status: fila.status, error: fila.error, repetido: error?.code === '23505' });
-      return false;
+      return fila.error === 'sin_config' ? 'fallido' : 'omitido';
     }
 
     // §12.6: la fila queued va ANTES del envío. 23505 = ya avisado a este contacto con esta plantilla: no se repite.
     const { data, error } = await admin.from('notifications').insert({ ...base, status: 'queued' }).select('id').single();
     if (error?.code === '23505') {
       log('info', 'despacho.ya_avisado', registro);
-      return false;
+      return 'omitido';
     }
     const id = str(obj(data).id);
     if (error || !id) {
       // Sin fila no se envía: un WhatsApp real sin registro escaparía al tope por hora.
       log('warn', 'despacho.sin_fila', { ...registro, code: error?.code ?? null, status: 'queued' });
-      return false;
+      return 'fallido';
     }
 
     let cierre: Cierre;
@@ -232,20 +270,71 @@ async function enviarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<b
     if (ec) log('warn', 'despacho.sin_cierre', { ...registro, code: ec.code ?? null, status: cierre.status });
     if (cierre.status === 'failed') {
       log('warn', 'despacho.envio_error', { ...registro, code: cierre.error });
-      return false;
+      return 'fallido';
     }
     log('info', 'despacho.enviado', registro);
-    // incidents.notified_at = primer envío externo sent (cronómetro de §12.10). Una vez por incidente y llamada.
-    if (!d.notificado) {
-      d.notificado = true;
-      const { error: en } = await admin.from('incidents').update({ notified_at: cierre.sent_at })
-        .eq('id', d.incidentId).eq('org_id', orgId);
-      if (en) log('warn', 'despacho.sin_notified_at', { rid, incidente: d.inc.code, code: en.code ?? null });
-    }
-    return true;
+    await marcarNotificado(d, cierre.sent_at);
+    return 'enviado';
   } catch (e) {
     log('error', 'despacho.envio_excepcion', { ...registro, name: e instanceof Error ? e.name : typeof e });
-    return false;
+    return 'fallido';
+  }
+}
+
+// incidents.notified_at = primer envío externo sent (cronómetro de §12.10). Una vez por incidente y llamada.
+async function marcarNotificado(d: Despacho, sentAt: string) {
+  if (d.notificado) return;
+  d.notificado = true;
+  const { error } = await d.admin.from('incidents').update({ notified_at: sentAt }).eq('id', d.incidentId).eq('org_id', d.orgId);
+  if (error) log('warn', 'despacho.sin_notified_at', { rid: d.rid, incidente: d.inc.code, code: error.code ?? null });
+}
+
+// ── Llamada de Guardia (asignaciones/llamada-ataque.md §B1) ─────────────────────────────────────────────────────────
+// Como enviarUno: lo que el plan no deja salir (tope, tope global, ventana de la demo, sin verificar) o fuera de
+// producción deja su fila y no llama; si sale, fila queued ANTES de llamar (23505 = ya se llamó a ese contacto por este
+// incidente) y UN intento: 200 → sent con provider_id = ref; 409 → failed sin_permiso | ocupado; lo demás o el plazo →
+// failed 'desconocido', sin reintento (el teléfono pudo sonar). Contexto: contextoLlamada (5 claves, por textoSeguro).
+// Logs voz.llamada_ok | voz.llamada_fallida | voz.llamada_desconocida con el ref y el teléfono enmascarado.
+async function llamarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<Salida> {
+  const recipient_masked = enmascararTelefono(contacto.phone);
+  const base = { org_id: d.orgId, incident_id: d.incidentId, channel: 'voice', template: p.template, recipient_masked };
+  const registro = { rid: d.rid, incidente: d.inc.code, recipient_masked };
+  try {
+    const fila = p.status !== 'queued' ? { status: p.status, error: p.error ?? 'cap' }
+      : d.env.VG_ENV !== 'production' ? { status: 'failed', error: 'dry_run' } : null;
+    if (fila) {
+      const { error } = await d.admin.from('notifications').insert({ ...base, ...fila });
+      if (error && error.code !== '23505') log('warn', 'despacho.sin_fila', { ...registro, canal: 'voice', code: error.code ?? null });
+      else log('info', 'voz.omitida', { ...registro, status: fila.status, error: fila.error });
+      return 'omitido';
+    }
+    const { data, error } = await d.admin.from('notifications').insert({ ...base, status: 'queued' }).select('id').single();
+    if (error?.code === '23505') {
+      log('info', 'voz.ya_llamado', registro);
+      return 'omitido';
+    }
+    const id = str(obj(data).id);
+    if (error || !id) {
+      // Sin fila no se llama: una llamada sin registro escaparía al tope por hora.
+      log('warn', 'despacho.sin_fila', { ...registro, canal: 'voice', code: error?.code ?? null });
+      return 'fallido';
+    }
+    const r = await llamarVoz(d.env, contacto.phone.slice(1), contextoLlamada(d.inc));
+    const cierre: Cierre = r.tipo === 'ok' ? { status: 'sent', provider_id: r.ref, sent_at: new Date().toISOString() }
+      : { status: 'failed', error: r.tipo === 'fallida' ? r.error : 'desconocido' };
+    const { error: ec } = await d.admin.from('notifications').update(cierre).eq('id', id).eq('org_id', d.orgId).eq('status', 'queued');
+    if (ec) log('warn', 'despacho.sin_cierre', { ...registro, canal: 'voice', code: ec.code ?? null, status: cierre.status });
+    if (cierre.status === 'sent') {
+      log('info', 'voz.llamada_ok', { ...registro, ref: cierre.provider_id, state: r.tipo === 'ok' ? r.state : null });
+      await marcarNotificado(d, cierre.sent_at);
+      return 'enviado';
+    }
+    if (r.tipo === 'fallida') log('warn', 'voz.llamada_fallida', { ...registro, error: r.error });
+    else log('warn', 'voz.llamada_desconocida', registro);
+    return 'fallido';
+  } catch (e) {
+    log('error', 'voz.llamada_excepcion', { ...registro, name: e instanceof Error ? e.name : typeof e });
+    return 'fallido';
   }
 }
 

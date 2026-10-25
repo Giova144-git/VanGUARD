@@ -34,6 +34,7 @@ export * from './templates/summary.ts';
 export * from './templates/fix-prompt.ts';
 export * from './templates/whatsapp.ts';
 export * from './templates/revision.ts';
+export * from './templates/voz.ts';
 
 // Motor en vivo (S15 15.9, S12 12.2–12.6): reglas del borde, decisión del incidente y plan de avisos; sin red ni base.
 export * from './engine/edge.ts';

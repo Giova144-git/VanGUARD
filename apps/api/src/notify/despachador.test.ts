@@ -298,7 +298,7 @@ describe('despachador · cuándo no avisa', () => {
 
   it('nunca lanza: una excepción de la base solo deja un log', async () => {
     estado.client = { from: () => { throw new Error('boom'); } };
-    await expect(avisar()).resolves.toBeUndefined();
+    await expect(avisar()).resolves.toEqual({ whatsapp: 'skipped', voice: 'skipped' });
     expect(lineas()).toContain('"despacho.error"');
   });
 });
@@ -462,5 +462,94 @@ describe('despachador · 2.º mensaje «Modo bajo ataque»', () => {
     expect(enviados().map((m) => m.type)).toEqual(['text', 'text']);
     expect(deOferta()).toEqual([]);
     expect(de('notifications', 'update').map((u) => u.payload)).toContainEqual({ status: 'failed', error: 'sin_botones' });
+  });
+});
+
+// Llamada de Guardia (asignaciones/llamada-ataque.md §B1): la entrada voice/call_v1 del plan, después del WhatsApp.
+describe('despachador · llamada de Guardia', () => {
+  const VOZ = 'https://vanguard-voz.up.railway.app';
+  const TOKEN_VOZ = ['token', 'voz', 'prueba'].join('-');
+  const CON_VOZ = { VOZ_URL: VOZ, VOZ_OPERATOR_TOKEN: TOKEN_VOZ };
+  let voz: () => Response;
+  const aVoz = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith(VOZ));
+
+  beforeEach(() => {
+    incidente = { ...incidente, severity: 'critical', rule_ids: ['CF_PATH_SCAN'], event_count: 87 };
+    voz = () => new Response(JSON.stringify({ ref: 'call-abc123', state: 'ringing' }));
+    let n = 0;
+    fetchMock.mockImplementation(async (url: unknown) => (String(url).startsWith(VOZ) ? voz()
+      : new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: `wamid.HBgM${++n}` }] }))));
+  });
+
+  it('sin VOZ_URL ni token: ninguna llamada ni fila de voz, y la voz sale skipped', async () => {
+    const r = await avisar();
+    expect(aVoz()).toHaveLength(0);
+    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([]);
+    expect(r).toEqual({ whatsapp: 'queued', voice: 'skipped' });
+  });
+
+  it('critical nuevo: fila voice queued, UNA llamada después de los WhatsApp con Bearer y las 5 claves, cierre sent con el ref', async () => {
+    const r = await avisar(NUEVO, CON_VOZ);
+    expect(r).toEqual({ whatsapp: 'queued', voice: 'queued' });
+    const llamadas = aVoz();
+    expect(llamadas).toHaveLength(1);
+    // La voz va al final: todas las peticiones a Kapso salen antes.
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe(`${VOZ}/operator/api/outbound/call`);
+    const init = llamadas[0]![1] as RequestInit;
+    expect(new Headers(init.headers).get('authorization')).toBe(`Bearer ${TOKEN_VOZ}`);
+    expect(JSON.parse(String(init.body))).toEqual({ recipient: TEL_A.slice(1), context: { tipo: 'un escaneo de rutas',
+      host: 'demo.officialvanguard.com', ip: '186.92.x.x', eventos: '87', severidad: 'crítica' } });
+    expect(String(init.body)).not.toContain(IP);
+    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([{ org_id: ORG, incident_id: INC, channel: 'voice',
+      template: 'call_v1', recipient_masked: `+58•••${TEL_A.slice(-4)}`, status: 'queued' }]);
+    const cierres = de('notifications', 'update').map((o) => o.payload as Fila);
+    expect(cierres).toContainEqual(expect.objectContaining({ status: 'sent', provider_id: 'call-abc123' }));
+    expect(lineas()).toContain('"voz.llamada_ok"');
+    expect(lineas()).not.toContain(TEL_A);
+  });
+
+  it('409 ocupado → failed ocupado; 409 sin permiso → failed sin_permiso', async () => {
+    voz = () => new Response(JSON.stringify({ detail: 'Ocupado: ya hay una llamada en curso' }), { status: 409 });
+    expect(await avisar(NUEVO, CON_VOZ)).toEqual({ whatsapp: 'queued', voice: 'failed' });
+    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'ocupado' });
+    doble.ops.length = 0;
+    voz = () => new Response(JSON.stringify({ detail: 'call permission not granted' }), { status: 409 });
+    await avisar(NUEVO, CON_VOZ);
+    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'sin_permiso' });
+  });
+
+  it('502 o red → failed desconocido y NUNCA un reintento (el teléfono pudo sonar)', async () => {
+    voz = () => new Response('{}', { status: 502 });
+    await avisar(NUEVO, CON_VOZ);
+    expect(aVoz()).toHaveLength(1);
+    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'desconocido' });
+    expect(lineas()).toContain('"voz.llamada_desconocida"');
+    fetchMock.mockClear();
+    voz = () => { throw new TypeError('red'); };
+    await avisar(NUEVO, CON_VOZ);
+    expect(aVoz()).toHaveLength(1);
+  });
+
+  it('high no llama; fuera de producción deja failed dry_run sin llamar; tope de voz lleno → skipped_cap sin llamar', async () => {
+    incidente = { ...incidente, severity: 'high' };
+    await avisar(NUEVO, CON_VOZ);
+    expect(aVoz()).toHaveLength(0);
+    incidente = { ...incidente, severity: 'critical' };
+    doble.ops.length = 0;
+    expect(await avisar(NUEVO, { ...CON_VOZ, VG_ENV: 'local' })).toEqual({ whatsapp: 'skipped', voice: 'skipped' });
+    expect(aVoz()).toHaveLength(0);
+    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([expect.objectContaining({ status: 'failed', error: 'dry_run' })]);
+    doble.ops.length = 0;
+    usadas = 2;   // TOPES_AVISOS.normal.voice = 2 (el doble da el mismo uso a los dos canales)
+    await avisar(NUEVO, CON_VOZ);
+    expect(aVoz()).toHaveLength(0);
+    expect(filasNotif().filter((f) => f.channel === 'voice')).toEqual([expect.objectContaining({ status: 'skipped_cap', error: 'cap' })]);
+  });
+
+  it('una VOZ_URL fuera de *.up.railway.app no sale (egress) y no cuenta como llamada', async () => {
+    const r = await avisar(NUEVO, { ...CON_VOZ, VOZ_URL: 'https://evil.example' });
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).startsWith('https://evil.example'))).toHaveLength(0);
+    expect(r.voice).toBe('failed');
+    expect(de('notifications', 'update').map((o) => o.payload as Fila)).toContainEqual({ status: 'failed', error: 'sin_config' });
   });
 });

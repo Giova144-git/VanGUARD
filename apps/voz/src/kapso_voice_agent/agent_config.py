@@ -96,7 +96,7 @@ REQUIRED = {
 # greetings and the prompt's instructions; `voice-agent check` enforces it.
 FILLER_PHRASES = ("one second", "one moment", "hold on", "bear with me", "just a sec")
 GROK_DEFAULTS = {"model": "grok-voice-3.0", "voice": "eve"}
-GEMINI_DEFAULTS = {"model": "gemini-2.5-flash-native-audio-preview-09-2025", "voice": "Kore"}
+GEMINI_DEFAULTS = {"model": "gemini-2.5-flash-native-audio-latest", "voice": "Kore"}
 # VanGUARD: the incident fields an outbound call may carry (outbound.CallContext), and what the
 # greeting and prompt say when a call has none.
 CALL_CONTEXT_DEFAULTS = {"tipo": "actividad sospechosa", "host": "tu sitio", "ip": "una IP desconocida",
@@ -129,7 +129,7 @@ def load_spec(path):
     if unknown:
         raise ValueError("agent.toml [gemini] has unknown keys: " + ", ".join(sorted(unknown)))
     if not GEMINI_MODEL.match(str(spec.gemini["model"])):
-        raise ValueError("agent.toml gemini.model must be a Gemini Live model such as gemini-2.5-flash-native-audio-preview-09-2025")
+        raise ValueError("agent.toml gemini.model must be a Gemini Live model such as gemini-2.5-flash-native-audio-latest")
     if not VOICE_ID.match(str(spec.gemini["voice"])):
         raise ValueError("agent.toml gemini.voice must be a prebuilt voice name such as Kore")
     unknown = set(raw.get("outbound", {})) - set(OUTBOUND_DEFAULTS)

@@ -45,14 +45,14 @@ retention_days = 1
 [gemini]
 # Modelo de audio nativo de la Live API (plan gratis de Google AI Studio). Comprobar el nombre con
 # GET https://generativelanguage.googleapis.com/v1beta/models (los que tienen bidiGenerateContent).
-model = "gemini-2.5-flash-native-audio-preview-09-2025"
+model = "gemini-2.5-flash-native-audio-latest"
 # Voz prediseñada de Gemini (Kore, Aoede, Puck, Charon...).
 voice = "Kore"
 
 [greetings]
 # {tipo}, {host}, {ip}, {eventos} y {severidad} llegan con la llamada (outbound.CallContext).
 inbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Te llamé hace un momento por {tipo} contra {host}. ¿Qué quieres saber?"
-outbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Te llamo porque detectamos {tipo} contra {host}, desde {ip}. Te mandé por WhatsApp el botón para bloquearla. ¿Te explico qué está pasando?"
+outbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Detectamos {tipo} contra {host}. Te mandé por WhatsApp el botón para bloquear la IP. ¿Te explico qué pasa?"
 recording_notice = "Esta llamada se graba."
 
 [outbound]

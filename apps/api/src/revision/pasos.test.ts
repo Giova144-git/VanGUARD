@@ -56,6 +56,8 @@ let rpcAlerta: string;
 let rpcError: (n: number) => Resp['error'];
 let secretoError: Resp['error'];
 let rpcs: Record<string, unknown>[];
+let fotos: { args: Record<string, unknown>; encolados: number }[];
+let foto: () => Resp;
 let gh: () => Response;
 let fetchMock: ReturnType<typeof vi.fn>;
 let doble: ReturnType<typeof dbDoble>;
@@ -74,6 +76,9 @@ beforeEach(() => {
   rpcAlerta = 'pending';
   rpcError = () => null;
   rpcs = [];
+  fotos = [];
+  foto = () => ({ data: { applied: true, moved: 0, gone: 0, first: false, previous_review_id: null, previous_at: null,
+    open: 8, kept: 7, fixed: 0, fixed_checked: 0, ignored: 0 } });
   estado.sinSecreto = false;
   estado.secretoReal = false;
   secretoError = null;
@@ -95,7 +100,12 @@ beforeEach(() => {
       return undefined;
     },
     // vg_review_findings (0013): CAS sobre la running de esa org; deja done y el alert_state que diga la prueba.
+    // vg_review_snapshot (0015): anota sus argumentos y cuántos mensajes había encolados en ese momento.
     rpc: (name, a) => {
+      if (name === 'vg_review_snapshot') {
+        fotos.push({ args: a, encolados: entorno.enviados.length });
+        return foto();
+      }
       if (name !== 'vg_review_findings') return undefined;
       rpcs.push(a);
       const e = rpcError(rpcs.length);
@@ -469,6 +479,99 @@ describe('paso diff · pull_request (B7)', () => {
     Object.assign(fila, { status: 'running', event: 'pull_request', pr_number: 31, alert_reason: 'fork' });
     expect(await correr(2)).toBe('ack');
     expect(rpcs[0]).toMatchObject({ p_write: false, p_meta: { sin_aviso: 'fork' } });
+  });
+});
+
+// Evolución entre revisiones (asignaciones/evolucion-entre-revisiones.md §2.2 y pruebas B3 de §9.2).
+describe('paso diff · foto de Codebase del push (evolución, 0015)', () => {
+  const fotosPedidas = () => doble.rpcs.filter((r) => r.name === 'vg_review_snapshot');
+
+  it('push que cierra → vg_review_snapshot con {p_org, p_review} DESPUÉS de vg_review_findings y ANTES de encolar el aviso',
+    async () => {
+      expect(await correr()).toBe('ack');
+      expect(fotos).toEqual([{ args: { p_org: ORG, p_review: REV }, encolados: 0 }]);
+      expect(doble.rpcs.map((r) => r.name)).toEqual(['vg_review_findings', 'vg_review_snapshot']);
+      expect(entorno.enviados).toEqual([avisoEncolado()]);
+      const log = lineas().split('\n').find((l) => l.includes('"event":"evolucion.foto_push"'))!;
+      expect(JSON.parse(log)).toMatchObject({ review: REV, applied: true, first: false, repetida: false, abiertos: 8,
+        siguen: 7, corregidos: 0 });
+    });
+
+  it('push limpio (sin aviso) también deja foto: exactamente una subpetición más que el mismo cambio en un PR', async () => {
+    rpcAlerta = 'none';
+    gh = () => new Response(diff(...nuevo('src/a.ts', ['export const a = 1;'])));
+    const subpeticiones = () => doble.ops.length + doble.rpcs.length + fetchMock.mock.calls.length + entorno.enviados.length;
+    Object.assign(fila, { event: 'pull_request', pr_number: 12, alert_reason: null });
+    expect(await correr()).toBe('ack');
+    const pr = subpeticiones();
+    expect(fotosPedidas()).toEqual([]);
+    Object.assign(fila, { status: 'queued', event: 'push', pr_number: null });
+    expect(await correr()).toBe('ack');
+    expect(fotosPedidas()).toHaveLength(1);
+    expect(subpeticiones() - pr).toBe(pr + 1);
+    expect(entorno.enviados).toEqual([]);
+  });
+
+  it('PR (también de un fork) → no la pide; CAS perdido (applied:false) → no la pide', async () => {
+    Object.assign(fila, { event: 'pull_request', pr_number: 12, alert_reason: null });
+    expect(await correr()).toBe('ack');
+    Object.assign(fila, { status: 'queued', alert_reason: 'fork' });
+    expect(await correr()).toBe('ack');
+    expect(rpcs).toHaveLength(2);
+    expect(fotosPedidas()).toEqual([]);
+
+    Object.assign(fila, { status: 'queued', event: 'push', pr_number: null, alert_reason: null, alert_state: 'none' });
+    const rpcReal = doble.client.rpc;
+    doble.client.rpc = async (name: string, a: Record<string, unknown>) => {
+      if (name === 'vg_review_findings') fila.status = 'done';   // otra entrega cerró entre el claim y el cierre
+      return rpcReal(name, a);
+    };
+    expect(await correr()).toBe('ack');
+    expect(fotosPedidas()).toEqual([]);
+    expect(lineas()).toContain('"event":"revision.cas_perdido"');
+  });
+
+  it('la RPC da error o lanza → el paso sigue igual (ack y aviso encolado) y registra evolucion.foto_push_error', async () => {
+    foto = () => ({ error: { code: '57014', message: 'detalle interno de la base' } });
+    expect(await correr()).toBe('ack');
+    expect(fila).toMatchObject({ status: 'done', alert_state: 'pending' });
+    expect(entorno.enviados).toEqual([avisoEncolado()]);
+    expect(lineas()).toContain('"event":"evolucion.foto_push_error"');
+    expect(lineas()).toContain('"code":"57014"');
+    expect(lineas()).not.toContain('detalle interno');
+
+    Object.assign(fila, { status: 'queued', alert_state: 'none' });
+    foto = () => { throw new Error('red caída'); };
+    expect(await correr()).toBe('ack');
+    expect(entorno.enviados).toEqual([avisoEncolado(), avisoEncolado()]);
+    expect(lineas()).toContain('"code":"red"');
+    expect(lineas()).toContain('"event":"revision.fin"');
+  });
+
+  it('reentrega de un push ya done (yaReclamada) → la vuelve a pedir (repetida); con el aviso pendiente, también lo reencola',
+    async () => {
+      foto = () => ({ data: { applied: true, repeated: true, first: true, open: 3, kept: 2, fixed: 0 } });
+      Object.assign(fila, { status: 'done', alert_state: 'sent' });
+      expect(await correr(2)).toBe('ack');
+      expect(fotos).toEqual([{ args: { p_org: ORG, p_review: REV }, encolados: 0 }]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(entorno.enviados).toEqual([]);
+      expect(lineas()).toContain('"repetida":true');
+      expect(de('code_reviews', 'select')[0]!.columns).toMatch(/\bevent\b/);
+
+      fila.alert_state = 'pending';
+      expect(await correr(3)).toBe('ack');
+      expect(fotos).toHaveLength(2);
+      expect(fotos[1]!.encolados).toBe(0);   // la foto, antes que el aviso
+      expect(entorno.enviados).toEqual([avisoEncolado()]);
+    });
+
+  it('reentrega de un PR done, o de un push que otra entrega aún tiene running → no la pide', async () => {
+    Object.assign(fila, { status: 'done', alert_state: 'sent', event: 'pull_request', pr_number: 12 });
+    expect(await correr(2)).toBe('ack');
+    Object.assign(fila, { status: 'running', event: 'push', pr_number: null });
+    expect(await correr(1)).toBe('ack');
+    expect(fotosPedidas()).toEqual([]);
   });
 });
 

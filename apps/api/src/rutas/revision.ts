@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
-import { AlertPrefs, AlertPrefsIn, CodeReview, CodeReviewConfig, CodeReviewPut, CodeReviewSaved, CodeReviewState,
-  type NotificationStatus } from '@vanguard/contracts';
+import { AlertPrefs, AlertPrefsIn, CodeReview, CodeReviewConfig, CodeReviewDelta, CodeReviewPut, CodeReviewSaved,
+  CodeReviewState, type NotificationStatus } from '@vanguard/contracts';
 import { newWebhookSecret } from '@vanguard/core/crypto';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
@@ -18,9 +18,11 @@ export const revision = new Hono<AppEnv>();
 
 const COLUMNAS_CONFIG = 'id, connection_id, enabled, branch, secret_last4, hook_events, last_ping_at, last_event_at, '
   + 'last_error, last_error_at';
+// delta = foto de Codebase de cada push (0015, evolucion-entre-revisiones.md §2.2): sin 0015 aplicada, PostgREST rechaza
+// la consulta entera, así que la migración va ANTES que este Worker.
 const COLUMNAS_REVISION = 'id, event, branch, pr_number, base_sha, head_sha, status, error_code, partial, files_changed, '
   + 'lines_added, counts, max_severity, new_findings, alert_state, alert_reason, voice_pending, notified_at, created_at, '
-  + 'finished_at';
+  + 'finished_at, delta';
 const RAMA = /^[A-Za-z0-9._/-]{1,100}$/;
 const INTERRUMPIDA_MS = 15 * 60_000;          // sin vigilante en P0: E45 la enseña como failed sin escribir
 // El mejor estado de los WhatsApp de una revisión (§4.1, alert.delivery).
@@ -93,7 +95,9 @@ function aRevision(f: Fila, avisos: Fila[], ahora: number): CodeReview | null {
       delivery_error: typeof errorFila === 'string' && ERROR_ENTREGA.test(errorFila) ? errorFila : null,
       voice_pending: f.voice_pending === true, notified_at: isoN(f.notified_at),
       seconds: Number.isNaN(notificada) || Number.isNaN(creada) ? null : Math.max(0, (notificada - creada) / 1000) },
-    created_at: iso(String(f.created_at)), finished_at: isoN(f.finished_at) });
+    created_at: iso(String(f.created_at)), finished_at: isoN(f.finished_at),
+    // Un delta raro no tumba la fila: sale null (como un push de antes de 0015 o un PR).
+    delta: CodeReviewDelta.safeParse(f.delta).success ? f.delta : null });
   return r.success ? r.data : null;
 }
 

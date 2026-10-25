@@ -148,6 +148,33 @@ describe('E45 · GET code-review', () => {
     const sel = doble.ops.find((o) => o.table === 'notifications')!;
     expect(eqDe(sel, 'org_id')).toBe(ORG);
   });
+
+  // Evolución (0015, evolucion-entre-revisiones.md §4.1 B4): la foto de Codebase de cada push viaja en la misma consulta.
+  it('delta: uno válido sale tal cual; null, malformado o fuera de rango → delta null sin perder la fila', async () => {
+    config = filaConfig();
+    const base = { event: 'push', branch: 'main', pr_number: null, base_sha: SHA, head_sha: 'b'.repeat(40), status: 'done',
+      error_code: null, partial: false, files_changed: 1, lines_added: 3, counts: { critical: 1 }, max_severity: 'critical',
+      new_findings: [], alert_state: 'sent', alert_reason: null, voice_pending: false, notified_at: null,
+      created_at: '2026-10-24T19:20:11+00:00', finished_at: '2026-10-24T19:20:14+00:00' };
+    const delta = { first: false, previous_review_id: 'c4000000-0000-4000-8000-000000000012',
+      previous_at: '2026-10-24T18:31:42.300Z', open: 8, kept: 7, fixed: 2, fixed_checked: 1, ignored: 0 };
+    const id = (n: number) => `c4000000-0000-4000-8000-00000000003${n}`;
+    revisiones = [
+      { ...base, id: REV, delta: { ...delta, moved: 1 } },    // una clave de más (la RPC la devuelve, no la guarda) se quita
+      { ...base, id: id(1), delta: null },                    // push de antes de 0015 o foto fallida
+      { ...base, id: id(2), delta: { first: false } },        // malformado
+      { ...base, id: id(3), delta: { ...delta, open: -1 } },
+      { ...base, id: id(4), delta: 'texto' },
+      { ...base, id: id(5), event: 'pull_request', pr_number: 7, delta: null },
+    ];
+    const s = CodeReviewState.safeParse(await (await pedir('code-review')).json());
+    expect(s.success).toBe(true);
+    expect(s.data!.recent.map((r) => r.id)).toEqual([REV, id(1), id(2), id(3), id(4), id(5)]);
+    expect(s.data!.recent.map((r) => r.delta)).toEqual([delta, null, null, null, null, null]);
+    const sel = doble.ops.find((o) => o.table === 'code_reviews')!;
+    expect(sel.columns!.split(',').map((c) => c.trim())).toContain('delta');
+    expect(eqDe(sel, 'org_id')).toBe(ORG);
+  });
 });
 
 describe('E46 · PUT code-review', () => {

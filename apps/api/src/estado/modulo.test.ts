@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { EstadoModulo, type Module } from '@vanguard/contracts';
 import type { AppEnv } from '../env.ts';
-import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
+import { cumpleFiltros, dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
@@ -311,6 +311,36 @@ describe('#13 · E6 con la conexión del proveedor revocada o en error', () => {
     expect((await pedir('cloudflare')).ok).toBe(true);
     fijar({ ...base, conns: [] });
     expect(await pedir('supabase')).toMatchObject({ ok: false, error: 'sin_conexion' });
+  });
+});
+
+// ── «Medir ahora» no es una auditoría: ni la hora ni el último paso del proveedor salen de una medición ──────────────
+describe('E6 de un proveedor salta las mediciones de Rendimiento (kind lighthouse)', () => {
+  const fila = (kind: string, created_at: string, steps: { name: string; status: string }[]) =>
+    ({ org_id: ORG, kind, created_at, finished_at: created_at, steps, coverage: null });
+  // scan_runs en memoria con los filtros de la consulta y su limit(20), más nuevas primero.
+  const conScans = (scans: ReturnType<typeof fila>[]) => {
+    fijar({ conns: [conexion('supabase')] });
+    tablas.scan_runs = (op) => ({ data: scans.filter((s) => cumpleFiltros(s, op))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 20) });
+  };
+
+  it('hora = fin de la última auditoría, no de una medición más nueva', async () => {
+    const auditoria = hace(5 * H);
+    conScans([fila('lighthouse', hace(H), [{ name: 'psi', status: 'done' }]),
+      fila('full_audit', auditoria, [{ name: 'supabase', status: 'done' }])]);
+    const e = await pedir('supabase');
+    expect(e.hora).toBe(auditoria);
+    const op = doble.ops.find((o) => o.table === 'scan_runs')!;
+    expect(op.filters).toContainEqual(['kind', 'neq', 'lighthouse']);
+  });
+
+  it('20 mediciones (el cupo de la demo) no sacan de la ventana a la auditoría: los checks siguen comprobados', async () => {
+    const psi = [{ name: 'psi', status: 'done' }];
+    const mediciones = Array.from({ length: 20 }, (_, i) => fila('lighthouse', hace(H - i * 1000), psi));
+    conScans([...mediciones, fila('full_audit', hace(5 * H), [{ name: 'supabase', status: 'done' }])]);
+    const e = await pedir('supabase');
+    expect(check(e, 'SB_RLS_DISABLED')).toMatchObject({ n: 0, comprobado: true });
   });
 });
 

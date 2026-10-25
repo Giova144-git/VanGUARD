@@ -1,6 +1,6 @@
 // Doble mínimo del cliente de supabase-js para probar rutas sin red: registra cada consulta y responde con el
 // manejador que da la prueba. Solo cubre los métodos que usa apps/api.
-export type Filtro = [columna: string, op: 'eq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'is', valor: unknown];
+export type Filtro = [columna: string, op: 'eq' | 'neq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'is', valor: unknown];
 export type Op = {
   table: string;
   action: 'select' | 'insert' | 'upsert' | 'update' | 'delete';
@@ -36,6 +36,7 @@ export function dbDoble(h: Manejadores = {}) {
       update(payload: unknown) { op.action = 'update'; op.payload = payload; return b; },
       delete() { op.action = 'delete'; return b; },
       eq(col: string, v: unknown) { op.filters.push([col, 'eq', v]); return b; },
+      neq(col: string, v: unknown) { op.filters.push([col, 'neq', v]); return b; },
       in(col: string, v: unknown) { op.filters.push([col, 'in', v]); return b; },
       gt(col: string, v: unknown) { op.filters.push([col, 'gt', v]); return b; },
       gte(col: string, v: unknown) { op.filters.push([col, 'gte', v]); return b; },
@@ -74,3 +75,24 @@ export function dbDoble(h: Manejadores = {}) {
 
 // Filtro por columna: valor del primer .eq(col, …) de la consulta, o undefined.
 export const eqDe = (op: Op, col: string) => op.filters.find(([c, o]) => c === col && o === 'eq')?.[2];
+
+// ¿La fila en memoria pasa TODOS los filtros de la consulta? Como Postgres: neq e in nunca casan con NULL, `is` compara
+// con null, y gt/gte/lt/lte comparan números como números y fechas ISO por instante (el resto, como texto).
+const ISO = /^\d{4}-\d\d-\d\dT/;
+const comparar = (a: unknown, b: unknown) => {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  if (typeof a === 'string' && typeof b === 'string' && ISO.test(a) && ISO.test(b)) return Date.parse(a) - Date.parse(b);
+  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+};
+export function cumpleFiltros(f: Record<string, unknown>, op: Op): boolean {
+  return op.filters.every(([c, o, v]) => {
+    const x = f[c];
+    if (o === 'is') return v === null ? x == null : x === v;
+    if (x == null) return false;
+    if (o === 'eq') return x === v;
+    if (o === 'neq') return x !== v;
+    if (o === 'in') return (v as unknown[]).includes(x);
+    const d = comparar(x, v);
+    return o === 'gt' ? d > 0 : o === 'gte' ? d >= 0 : o === 'lt' ? d < 0 : d <= 0;
+  });
+}

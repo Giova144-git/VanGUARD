@@ -18,6 +18,7 @@ export const scans = new Hono<AppEnv>();
 
 const COLUMNAS = 'id, kind, status, progress, step, steps, score, coverage, summary, error, created_at, started_at, finished_at';
 const EN_CURSO_MS = 15 * 60_000;
+const PERF_EN_CURSO = 'Ya hay una medición de rendimiento en curso: espera a que termine';
 // Un zip espera su resultado (E23) 15 min desde created_at: lo mismo que tarda el vigilante (0011, 900 s sin avance
 // desde coalesce(started_at, created_at)) en cerrarlo. E23 fija started_at y así el vigilante vuelve a contar desde ahí.
 const ESPERA_ZIP_MS = 15 * 60_000;
@@ -76,7 +77,8 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
     }
   }
 
-  // 409 si ya hay una del mismo kind en curso creada hace < 15 min (en zip se libera la que espera resultado).
+  // 409 si ya hay una del mismo kind en curso creada hace < 15 min (en zip se libera la que espera resultado). La lectura no
+  // tiene candado: en lighthouse lo hace atómico el índice único parcial de 0019 (23505 en el insert, más abajo).
   const { data: enCurso } = await admin.from('scan_runs').select('id, step, requested_by').eq('org_id', orgId).eq('kind', body.kind)
     .in('status', ['queued', 'running']).gt('created_at', new Date(Date.now() - EN_CURSO_MS).toISOString()).limit(1).maybeSingle();
   if (enCurso) {
@@ -84,8 +86,8 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
       await admin.from('scan_runs').update({ status: 'failed', error: 'ZIP_RESULT_MISSING', finished_at: new Date().toISOString() })
         .eq('id', enCurso.id).eq('org_id', orgId);
     } else {
-      throw new ApiError('conflict', body.kind === 'lighthouse' ? 'Ya hay una medición de rendimiento en curso: espera a que termine'
-        : 'Ya hay una auditoría de este tipo en curso', { scan_run_id: enCurso.id });
+      const texto = body.kind === 'lighthouse' ? PERF_EN_CURSO : 'Ya hay una auditoría de este tipo en curso';
+      throw new ApiError('conflict', texto, { scan_run_id: enCurso.id });
     }
   }
 
@@ -131,6 +133,9 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
     log('warn', 'TRIPWIRE', { rid: c.get('rid'), donde: 'scan_params' });
     throw new ApiError('invalid_body', 'La petición trae algo que parece un secreto sin enmascarar', { reason: 'looks_like_secret' });
   }
+  // scan_runs_lighthouse_en_curso (0019): otra petición simultánea ya insertó su medición y la lectura de arriba no la vio.
+  // Con una sola en curso por org, una ráfaga tampoco rebasa el cupo diario (la siguiente cuenta la anterior).
+  if (error?.code === '23505' && body.kind === 'lighthouse') throw new ApiError('conflict', PERF_EN_CURSO);
   if (error || !fila) {
     log('error', 'scans.crear_error', { rid: c.get('rid'), code: error?.code ?? null });
     throw new ApiError('internal', 'No pudimos crear la auditoría');

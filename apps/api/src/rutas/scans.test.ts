@@ -51,7 +51,11 @@ beforeEach(() => {
       const casan = filas.filter((x) => cumple(x, op));
       if (op.action === 'select') return { data: op.single ? (casan[0] ?? null) : casan, count: casan.length };
       if (op.action === 'insert') {
-        const nueva = { id: crypto.randomUUID(), created_at: new Date().toISOString(), step: null, started_at: null, ...(op.payload as Fila) };
+        // scan_runs_lighthouse_en_curso (supabase/migrations/0019_medir_ahora.sql): una sola medición en curso por org.
+        const p = op.payload as Fila;
+        if (p.kind === 'lighthouse' && filas.some((x) => x.org_id === p.org_id && x.kind === 'lighthouse'
+          && (x.status === 'queued' || x.status === 'running'))) return { error: { code: '23505' } };
+        const nueva = { id: crypto.randomUUID(), created_at: new Date().toISOString(), step: null, started_at: null, ...p };
         filas.push(nueva);
         return { data: { id: nueva.id } };
       }
@@ -225,6 +229,18 @@ describe('E11 · POST /api/orgs/:org/scans con kind lighthouse («Medir ahora»,
     const e = await error(enCurso);
     expect(e.details).toEqual({ scan_run_id: SCAN });
     expect(e.message).toMatch(/medición de rendimiento en curso/);
+  });
+
+  it('ráfaga de 5 a la vez con 9 hechas hoy: gana una (índice de 0019: 23505 → 409) y el cupo no se rebasa', async () => {
+    filas = hechasHoy(9);
+    const d = envDoble(PROD);
+    const rs = await Promise.all(Array.from({ length: 5 }, () => medir({ url: 'https://tienda.example.com/' }, 'ana', d)));
+    expect(rs.map((r) => r.status).sort()).toEqual([202, 409, 409, 409, 409]);
+    for (const r of rs.filter((x) => x.status === 409)) {
+      expect((await error(r)).message).toMatch(/medición de rendimiento en curso/);
+    }
+    expect(filas.filter((f) => f.kind === 'lighthouse')).toHaveLength(10);
+    expect(d.enviados).toHaveLength(1);
   });
 });
 

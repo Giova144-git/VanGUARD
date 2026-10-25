@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScanStep } from '@vanguard/contracts';
-import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
+import { cumpleFiltros, dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 
 // Cobertura de §15.9 y el detalle por módulo de coverage (formato compartido de miradas). Sin red: doble de la base.
 const estado = vi.hoisted(() => ({ client: null as unknown }));
@@ -55,6 +55,46 @@ describe('calcularCobertura', () => {
     expect(await calcularCobertura(env, ORG)).toEqual({ seen: 2, total: 4, missing: ['codebase', 'performance'] });
     scans = [{ steps: [paso('supabase', 'failed')] }, { steps: null }];
     expect(await calcularCobertura(env, ORG)).toEqual({ seen: 1, total: 4, missing: ['supabase', 'codebase', 'performance'] });
+  });
+});
+
+// Con las filas en memoria y los filtros de cada consulta aplicados (limit 20 en scan_runs, como la consulta real).
+describe('calcularCobertura con «Medir ahora» (perf_runs con runtime_error y scan_runs kind lighthouse)', () => {
+  const AHORA = new Date('2026-10-24T16:00:00Z');
+  const hace = (min: number) => new Date(AHORA.getTime() - min * 60_000).toISOString();
+  let perf: Record<string, unknown>[];
+  let scans: Record<string, unknown>[];
+  beforeEach(() => {
+    perf = [];
+    scans = [];
+    estado.client = dbDoble({
+      tabla: (op: Op): Resp | undefined => {
+        if (op.table === 'perf_runs') return { count: perf.filter((f) => cumpleFiltros(f, op)).length };
+        if (op.table === 'scan_runs') {
+          const casan = scans.filter((f) => cumpleFiltros(f, op));
+          return { data: casan.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 20) };
+        }
+        return { count: 0 };
+      },
+    }).client;
+  });
+  const medicion = (min: number, runtime_error: string | null) => ({ org_id: ORG, created_at: hace(min), runtime_error });
+  const scan = (kind: string, min: number, steps: ScanStep[]) => ({ org_id: ORG, kind, created_at: hace(min), steps });
+
+  it('una medición fallida (runtime_error) no cuenta Rendimiento como visto; una correcta de la semana, sí', async () => {
+    perf = [medicion(5, 'PSI_400'), medicion(60, 'NO_FCP')];
+    expect(await calcularCobertura(env, ORG, AHORA)).toEqual({ seen: 0, total: 4,
+      missing: ['supabase', 'cloudflare', 'codebase', 'performance'] });
+    perf.push(medicion(3 * 24 * 60, null));
+    expect((await calcularCobertura(env, ORG, AHORA)).missing).not.toContain('performance');
+    perf = [medicion(8 * 24 * 60, null)];   // de hace 8 días: ya no
+    expect((await calcularCobertura(env, ORG, AHORA)).missing).toContain('performance');
+  });
+
+  it('20 mediciones de la semana no sacan de la ventana de 20 a la auditoría que miró Supabase', async () => {
+    scans = [...Array.from({ length: 20 }, (_, i) => scan('lighthouse', 10 + i, [paso('psi', 'done')])),
+      scan('full_audit', 24 * 60, [paso('supabase', 'done'), paso('repo', 'done')])];
+    expect(await calcularCobertura(env, ORG, AHORA)).toEqual({ seen: 2, total: 4, missing: ['cloudflare', 'performance'] });
   });
 });
 

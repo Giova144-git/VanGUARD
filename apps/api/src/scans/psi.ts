@@ -22,6 +22,8 @@ export const PLAZO_PSI = 130_000;
 // Con `fields` la respuesta ronda 2 KB; 300 KB es que Google ignoró `fields` y mandó el LHR entero: se corta sin parsear.
 export const TOPE_CUERPO_PSI = 300_000;
 const TOPE_ERROR = 16_384;   // el cuerpo de un 4xx/5xx solo se mira para el «Lighthouse returned error: X»
+// Errores de clave de las APIs de Google (mensaje y google.rpc.ErrorInfo.reason): «API key not valid…», «API key expired…».
+const CLAVE_MALA = /API key (?:not valid|expired)|API_KEY_(?:INVALID|EXPIRED)/i;
 const VERSION = /^[A-Za-z0-9_.-]{1,40}$/;   // el check de perf_runs.version_label
 const URL_BD = /^https:\/\/[a-z0-9.-]+(\/[^?#\s]*)?$/;   // el check de perf_runs.url (0007)
 
@@ -198,8 +200,11 @@ async function medir(env: CloudflareBindings, m: MsgScan, traza: Traza): Promise
     if (r.status === 429) throw new ProviderError('rate_limited', 429);
     if (r.status >= 500) throw new ProviderError('unavailable', r.status);
     // Clave inválida, API sin activar o sin cuota (401/403) y un `fields` que Google no acepta son nuestros: no son de la
-    // página del cliente ni se arreglan reintentando.
-    if (r.status === 401 || r.status === 403) return { status: 'failed', error_code: 'psi_clave' };
+    // página del cliente ni se arreglan reintentando. La clave mala o caducada llega como 400 INVALID_ARGUMENT (API_KEY_*),
+    // no como 401: sin esto se vería «tu página falla», con fila y cupo gastados.
+    if (r.status === 401 || r.status === 403 || (r.status === 400 && CLAVE_MALA.test(cuerpo))) {
+      return { status: 'failed', error_code: 'psi_clave' };
+    }
     if (r.status === 400 && /field selection/i.test(cuerpo)) return { status: 'failed', error_code: 'psi_fields' };
     await escribir(env, m, p, null, `PSI_${r.status}`);   // 400: Google no acepta la URL
     return RUNTIME();

@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { ApiError as ApiErrorBody, VanguardExport } from '@vanguard/contracts';
 import { LIMITES_EXPORT } from '@vanguard/core';
 import type { AppEnv } from '../env.ts';
-import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
+import { cumpleFiltros, dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 import { envDoble } from '../test/dobles.ts';
 
 const estado = vi.hoisted(() => ({ client: null as unknown }));
@@ -103,6 +103,7 @@ const SUMMARY = { resumen: `Riesgo alto. Escriben a ${CORREO} desde ${IP_LIBRE} 
 let filas: Fila[];
 let totalHallazgos: number | null;
 let incidentes: Fila[];
+let scans: Fila[] | null;   // scan_runs en memoria con sus filtros aplicados; null = la auditoría fija de SUMMARY
 let doble: ReturnType<typeof dbDoble>;
 
 function tabla(op: Op): Resp | undefined {
@@ -118,6 +119,10 @@ function tabla(op: Op): Resp | undefined {
     case 'incidents': return { data: incidentes, count: incidentes.length };
     case 'scan_runs':
       if (op.columns === 'steps') return { data: [{ steps: [{ name: 'supabase', status: 'done' }, { name: 'cloudflare', status: 'done' }] }] };
+      if (scans) {
+        const casan = scans.filter((s) => cumpleFiltros(s, op));
+        return { data: casan.sort((a, b) => String(b.finished_at).localeCompare(String(a.finished_at)))[0] ?? null };
+      }
       return { data: { finished_at: '2026-10-24T19:00:00.5+00:00', summary: SUMMARY } };
     case 'connections': return { data: [
       { provider: 'supabase', kind: 'read', label: 'vanguard-demo', status: 'active', scopes: ['database_read'],
@@ -138,6 +143,7 @@ beforeEach(() => {
   n = 0;
   filas = conPeligros();
   totalHallazgos = null;
+  scans = null;
   incidentes = [incidente(), incidente({ code: 'B2C4D6', title: `Inundación desde ${IPV6}`, resource: `ip:${IPV6}`, status: 'mitigated',
     started_at: '2026-10-24T17:00:00+00:00' })];
   doble = dbDoble({ tabla, claims: (t) => TOKENS[t] ?? null });
@@ -348,5 +354,22 @@ describe('E25 · acceso, límites y anti-IDOR', () => {
     expect(lista.filters).toContainEqual(['module', 'eq', 'codebase']);
     expect(lista.filters.some(([c]) => c === 'status')).toBe(false);   // status=all
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('E25 · la última auditoría no es una medición de Rendimiento', () => {
+  it('una medición (kind lighthouse, sin resumen) más nueva no borra ai_summary ni cambia last_scan_at', async () => {
+    scans = [
+      { org_id: ORG, kind: 'lighthouse', status: 'succeeded', finished_at: '2026-10-24T12:00:50+00:00', summary: null },
+      { org_id: ORG, kind: 'full_audit', status: 'succeeded', finished_at: '2026-10-24T10:05:00+00:00', summary: SUMMARY },
+    ];
+    const r = await pedir('format=json');
+    expect(r.status).toBe(200);
+    const x = VanguardExport.parse(JSON.parse(await r.text()));
+    expect(x.overview.last_scan_at).toBe('2026-10-24T10:05:00.000Z');
+    expect(x.ai_summary).toMatchObject({ model: 'claude-sonnet-4-6', top: [] });
+    const op = doble.ops.find((o) => o.table === 'scan_runs' && o.columns === 'finished_at, summary')!;
+    expect(op.filters).toEqual(expect.arrayContaining([['org_id', 'eq', ORG], ['status', 'eq', 'succeeded'],
+      ['kind', 'neq', 'lighthouse']]));
   });
 });

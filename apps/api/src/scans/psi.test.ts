@@ -328,6 +328,26 @@ describe('pasoPsi', () => {
     expect(perf).toEqual([]);
   });
 
+  it('clave mala o caducada: Google da 400 INVALID_ARGUMENT, no 401 → failed psi_clave, sin fila de la página', async () => {
+    const info = (reason: string) => ({ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason });
+    const claveMala = (message: string, reason: string) => () =>
+      Response.json({ error: { code: 400, message, status: 'INVALID_ARGUMENT', details: [info(reason)] } }, { status: 400 });
+    for (const [message, reason] of [['API key not valid. Please pass a valid API key.', 'API_KEY_INVALID'],
+      ['API key expired. Please renew the API key.', 'API_KEY_EXPIRED']]) {
+      responder = claveMala(message!, reason!);
+      const m = await correr();
+      expect(m.retry, reason).not.toHaveBeenCalled();
+      expect(steps, reason).toEqual([{ name: 'psi', status: 'failed', error_code: 'psi_clave' }]);
+      expect(estadoScan, reason).toBe('failed');
+      expect(perf, reason).toEqual([]);
+      steps = [{ name: 'psi', status: 'pending' }];
+      estadoScan = 'queued';
+    }
+    // Solo el motivo: la clave no sale en psi.fin.
+    expect(fin().map((l) => l.codigo)).toEqual(['psi_clave', 'psi_clave']);
+    expect(salida.join('\n')).not.toContain(CLAVE);
+  });
+
   it('cuerpo gigante (Google ignoró fields) → se corta a 300 KB sin JSON.parse de 1 MB y el paso falla sin reintento', async () => {
     const parse = vi.spyOn(JSON, 'parse');
     const trozo = new TextEncoder().encode('x'.repeat(64 * 1024));

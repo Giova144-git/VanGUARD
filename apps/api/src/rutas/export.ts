@@ -84,8 +84,9 @@ exportRuta.get('/orgs/:org/export', async (c) => {
     admin.from('incidents').select(COLUMNAS_INCIDENTE, { count: 'exact' }).eq('org_id', orgId)
       .gte('last_event_at', new Date(ahora.getTime() - 7 * DIA_MS).toISOString())
       .order('started_at', { ascending: false }).order('id').limit(LIMITES_EXPORT.incidentes),
+    // ai_summary y last_scan_at de la última auditoría correcta; las mediciones de Rendimiento (kind lighthouse) no cuentan.
     admin.from('scan_runs').select('finished_at, summary').eq('org_id', orgId).eq('status', 'succeeded')
-      .order('finished_at', { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
+      .neq('kind', 'lighthouse').order('finished_at', { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
     admin.from('connections').select('provider, kind, label, status, scopes, meta').eq('org_id', orgId)
       .in('status', ['active', 'error', 'expired']).order('provider').order('kind').order('label').limit(LIMITES_EXPORT.conexiones),
     admin.from('perf_runs').select('url, strategy, scores, metrics, created_at').eq('org_id', orgId)

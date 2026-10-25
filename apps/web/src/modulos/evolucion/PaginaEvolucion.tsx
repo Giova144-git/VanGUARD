@@ -2,7 +2,7 @@
 // con foto trae nuevos, corregidos y abiertos; las de antes del historial, solo el puntaje. Las cifras del periodo salen de
 // `totals` (lib/evolucion.ts). Si E52 da 404 (aún sin desplegar): «La evolución llega pronto».
 import { useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 import { ChevronRight, ShieldCheck, TrendingUp } from 'lucide-react';
 import type { Evolution, EvolutionPoint, EvolutionReview, PorSeveridad } from '@vanguard/contracts';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
@@ -11,18 +11,19 @@ import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { ErrorBloque, Vacio } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { AvisoSinFuentes, useAuditarTodo } from '@/modulos/auditoria/useAuditarTodo';
 import { sinBidi } from '@/lib/bidi';
-import { useConexiones, useEvolucion } from '@/lib/consultas';
-import { esApiError, mensajeDe } from '@/lib/errores';
+import { SIN_COLA, useConexiones, useEvolucion, useVistaPrevia } from '@/lib/consultas';
+import { esApiError } from '@/lib/errores';
 import {
   MODULOS_FOTO, NOTA_FOTO_PUSH, SEVERIDADES, cifras, etiquetaVersion, horas, lineaFoto, nombreModulo, porSeveridad, serieAbiertos,
   serieCambios, serieIncidentes, seriePuntaje, signo, tipoAuditoria, totalFila, totalMatriz, type FiltroModulo,
 } from '@/lib/evolucion';
 import { cuando, miles } from '@/lib/formato';
-import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { severidad } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
+import { FallasDelPeriodo } from './FallasDelPeriodo';
 import { GraficaAbiertos, GraficaCambios, GraficaIncidentes, GraficaPuntaje, LEYENDA_PILA, Leyenda } from './Graficas';
 
 type Dias = 7 | 30 | 90;
@@ -166,6 +167,8 @@ function Contenido({ evo }: { evo: Evolution }) {
     <>
       <Grupo etiqueta="Módulo" data-info="evo-filtro-modulo" valor={modulo} opciones={MODULOS} onCambio={setModulo} />
       <Cifras evo={evo} modulo={modulo} />
+      {/* «¿Cuáles?»: nuevas y corregidas del periodo, falla a falla (historial de fallas, E13h). */}
+      <FallasDelPeriodo dias={evo.days} modulo={modulo} />
       {cambios.length === 0 ? <p className="rounded-xl border bg-card px-4 py-3 text-[15px] text-muted-foreground">Con la próxima auditoría verás qué cambió.</p> : null}
       {serie.length > 1 ? <Seccion id="t-puntaje" data-info="evo-grafica-puntaje" titulo={`Puntaje por auditoría${recorte}`}><GraficaPuntaje serie={serie} /></Seccion> : null}
       {cambios.length ? (
@@ -240,24 +243,14 @@ function Revisiones({ reviews }: { reviews: EvolutionReview[] }) {
 // 0 versiones en el periodo: «Auditar todo» (apagado para el viewer y el anónimo de la demo).
 function SinAuditorias() {
   const org = useOrg();
-  const navegar = useNavigate();
-  const lanzar = useLanzarScan(org.id);
-  const [error, setError] = useState<string | null>(null);
-  const auditar = () => {
-    setError(null);
-    lanzar.mutate({ kind: 'full_audit' }, {
-      onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),
-      onError: (e) => {
-        const enCurso = esApiError(e) && e.code === 'conflict' && typeof e.details?.scan_run_id === 'string' ? e.details.scan_run_id : null;
-        if (enCurso) navegar(`/o/${org.id}/audit/${encodeURIComponent(enCurso)}`); else setError(mensajeDe(e));
-      },
-    });
-  };
+  const { auditar, ocupado, error, sinFuentes } = useAuditarTodo();
+  const previa = useVistaPrevia(org.id);
   return (
     <Vacio icono={TrendingUp} titulo="Aún no hay auditorías en este periodo" texto="Cada auditoría que termine queda aquí."
       accion={<div className="flex flex-col items-center gap-2">
-        <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
-          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
+        <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={ocupado}
+          disabled={!org.puedeEscribir || previa} ayuda={!org.puedeEscribir ? SOLO_LECTURA : SIN_COLA} data-info="auditar-todo">Auditar todo</BotonAccion>
+        {sinFuentes && org.puedeEscribir && !previa ? <AvisoSinFuentes className="max-w-xs text-center text-sm text-muted-foreground" /> : null}
         {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
       </div>} />
   );

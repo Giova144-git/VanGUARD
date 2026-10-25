@@ -64,7 +64,11 @@ type PropsEscena = { org: string; soloLectura: boolean; pedido: Pedido | null; a
 // Sin el chunk (despliegue nuevo a medias), no aparece: nada más se rompe.
 const Escena = lazy<ComponentType<PropsEscena>>(() => import('./Escena').catch(() => ({ default: () => null })));
 
-export function GuiaProvider({ org, soloLectura = false, children }: { org: string; soloLectura?: boolean; children: ReactNode }) {
+/** Un aviso que, si llega, va antes que la bienvenida (que queda para otra visita): p. ej. la sandbox de la demo. Debe
+ *  ser estable (useState) y `alMostrar` recuerda que ya se dijo. */
+export type AvisoGuia = { dicho: Dicho; alMostrar: () => void };
+
+export function GuiaProvider({ org, soloLectura = false, aviso = null, children }: { org: string; soloLectura?: boolean; aviso?: AvisoGuia | null; children: ReactNode }) {
   const [visible, setVisible] = useState(leer);
   const [pedido, setPedido] = useState<Pedido | null>(null);
   const invocar = useCallback((p: Pedido = { tipo: 'saludo' }) => { setVisible(true); guardar(true); setPedido(p); }, []);
@@ -73,10 +77,14 @@ export function GuiaProvider({ org, soloLectura = false, children }: { org: stri
   const atendido = useCallback(() => setPedido(null), []);
   // Primera visita: se recuerda al aparecer (no al terminar), así una recarga a media presentación no la repite.
   useEffect(() => {
+    if (aviso) {
+      const t = window.setTimeout(() => { aviso.alMostrar(); invocar({ tipo: 'decir', dicho: aviso.dicho }); }, ESPERA_BIENVENIDA_MS);
+      return () => clearTimeout(t);
+    }
     if (!toca()) return;
     const t = window.setTimeout(() => { recordar(); invocar({ tipo: 'bienvenida' }); }, ESPERA_BIENVENIDA_MS);
     return () => clearTimeout(t);
-  }, [invocar]);
+  }, [invocar, aviso]);
   const api = useMemo<ApiGuia>(() => ({
     visible, invocar, despedir,
     alternar: () => (visible ? despedir() : invocar()),

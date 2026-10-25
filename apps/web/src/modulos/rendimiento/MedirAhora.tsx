@@ -86,7 +86,7 @@ export function MedirAhora() {
           <label htmlFor="medir-url" className="text-sm font-medium">URL (https)</label>
           {/* Texto libre: las URLs ya medidas son solo sugerencias (medibles: sin controles bidi; es lo que se manda en el POST). */}
           <Input id="medir-url" type="url" inputMode="url" dir="ltr" autoComplete="off" spellCheck={false}
-            list={urls.length ? SUGERENCIAS : undefined} placeholder={ejemploUrl(org.is_demo)} value={actual}
+            list={urls.length ? SUGERENCIAS : undefined} placeholder={ejemploUrl(org.is_demo || org.sandbox === true)} value={actual}
             onChange={(e) => cambiarUrl(e.target.value)} className="font-mono text-[14px]"
             aria-invalid={errores.url ? true : undefined} aria-describedby={ayudaUrl} />
           {urls.length ? <datalist id={SUGERENCIAS}>{urls.map((u) => <option key={u} value={sinBidi(u)} />)}</datalist> : null}

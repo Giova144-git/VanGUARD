@@ -144,6 +144,10 @@ bloqueo.put('/orgs/:org/code-review/gate', requireAdmin, async (c) => {
 
   // 3) Guardas, sin llamar todavía a GitHub.
   const pat = b.statuses_pat?.trim();
+  // Sandbox de «Ver demo» (0026): ningún token de acciones (tampoco el de estados de GitHub).
+  if (pat && c.get('sandbox')) {
+    throw new ApiError('forbidden', 'En la demo no se conecta el token de estados de GitHub', { reason: 'sandbox_sin_acciones' });
+  }
   if ((pat || b.enabled) && esRepoDelProducto(repo)) {
     throw conflicto('No actives el bloqueo en el repo desde el que se despliega VanGUARD: si VanGUARD falla, no podrías '
       + 'fusionar su propio arreglo', 'repo_del_producto');

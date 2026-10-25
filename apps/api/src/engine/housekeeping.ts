@@ -1,5 +1,6 @@
 import { ORDEN_REGLAS_EDGE, RESOLVER_SIN_EVENTOS_MS } from '@vanguard/core';
 import { deshacerBloqueos, PERMANENTES } from '../actions/block-ip.ts';
+import { deshacerEnSeco, esSimulada } from '../actions/sandbox.ts';
 import { deshacerBajoAtaque, MAX_BARRIDO, retirarHuerfanaBajoAtaque } from '../actions/under-attack.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
@@ -200,7 +201,15 @@ async function caducar(env: CloudflareBindings, now: Date, r: ResultadoHousekeep
       filas.push(f);
     }
     if (!filas.length) return;
-    const bloqueos = filas.filter((f) => !modo(f)), enModo = filas.filter(modo);
+    // Acciones en seco de una sandbox de «Ver demo» (0026, previous.simulado): undone sin llamar a Cloudflare.
+    const simuladas = filas.filter((f) => esSimulada(f.previous));
+    const enSeco = simuladas.length
+      ? await deshacerEnSeco(env, simuladas.map((f) => ({ id: String(f.id), org_id: String(f.org_id) })), 'cron') : new Set<string>();
+    r.subpeticiones += simuladas.length;
+    const reales = filas.filter((f) => !esSimulada(f.previous));
+    r.deshechos = enSeco.size;
+    if (!reales.length) return;
+    const bloqueos = reales.filter((f) => !modo(f)), enModo = reales.filter(modo);
     // Cada función suma lo suyo nada más volver, y su tope si lanza (falla su escritura a undone): lo ya gastado en
     // Cloudflare no vuelve en su resultado y la huérfana no debe correr sobre un presupuesto falso.
     const contando = async <T extends { subpeticiones: number }>(xs: Fila[], fn: () => Promise<T>): Promise<T> => {
@@ -217,9 +226,9 @@ async function caducar(env: CloudflareBindings, now: Date, r: ResultadoHousekeep
     const a = bloqueos.length ? await contando(bloqueos, () => deshacerBloqueos(env, bloqueos, opc)) : null;
     const b = enModo.length ? await contando(enModo, () => deshacerBajoAtaque(env, enModo, opc)) : null;
     const resultados = new Map([...(a?.resultados ?? []), ...(b?.resultados ?? [])]);
-    r.deshechos = filas.filter((f) => resultados.get(f.id) === 'deshecho').length;
+    r.deshechos += reales.filter((f) => resultados.get(f.id) === 'deshecho').length;
     // Una escritura por fila no retirada (≤ 5): cada una guarda su previous con el intento o el motivo.
-    const pendientes = filas.filter((f) => resultados.get(f.id) !== 'deshecho');
+    const pendientes = reales.filter((f) => resultados.get(f.id) !== 'deshecho');
     const escritas = await Promise.all(pendientes.map(async (f) => {
       const motivo = resultados.get(f.id) ?? 'caido';
       const prev = obj(f.previous);

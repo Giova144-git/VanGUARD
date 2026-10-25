@@ -3,6 +3,10 @@ import type { Me } from '@vanguard/contracts';
 
 export const ULTIMA_ORG = 'vg-ultima-org';           // comodidad por navegador, no es un dato sensible
 
+// La demo compartida y la sandbox (la copia temporal que se borra al cerrar) no son «tu org»: ULTIMA_ORG no las guarda
+// (guardas.tsx) y al entrar se prefiere una propia. Si no, la cuenta volvería a la demo cada vez.
+export const esOrgDeDemo = (o: { is_demo: boolean; sandbox?: boolean }) => o.is_demo || o.sandbox === true;
+
 // Lo que supabase-js deja en la URL si falla un canje PKCE: el ?code= no puede acabar copiado en next ni en el historial.
 const PARAMS_AUTH = ['code', 'error', 'error_code', 'error_description', 'flow_id'];
 
@@ -36,8 +40,10 @@ export function destinoTrasEntrar(me: Me, next: string | null): string {
   if (interna) return interna;
   let ultima: string | null = null;
   try { ultima = localStorage.getItem(ULTIMA_ORG); } catch { /* sin almacenamiento */ }
-  if (ultima && me.orgs.some((o) => o.id === ultima)) return `/o/${ultima}`;
-  const propia = me.orgs.find((o) => !o.is_demo)
-    ?? me.orgs.find((o) => o.role !== 'viewer');                              // dueño o admin de la org de demo (equipo)
+  const recordada = ultima ? me.orgs.find((o) => o.id === ultima) : undefined;   // de una versión vieja podría ser la demo
+  if (recordada && !esOrgDeDemo(recordada)) return `/o/${recordada.id}`;
+  const propia = me.orgs.find((o) => !esOrgDeDemo(o))
+    ?? me.orgs.find((o) => o.role !== 'viewer' && o.sandbox !== true);       // dueño o admin de la org de demo (equipo)
+  // Solo con su sandbox, /start: crear la suya. A la copia se vuelve con «Ver demo» (join devuelve la misma).
   return propia ? `/o/${propia.id}` : '/start';
 }

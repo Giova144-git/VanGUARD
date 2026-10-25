@@ -28,7 +28,8 @@ export const IncidentStatus = z.enum(['open', 'ack', 'mitigated', 'resolved']);
 export type IncidentStatus = z.infer<typeof IncidentStatus>;
 export const Channel = z.enum(['in_app', 'whatsapp', 'voice']);
 export type Channel = z.infer<typeof Channel>;
-export const NotificationStatus = z.enum(['queued', 'sent', 'delivered', 'read', 'failed', 'skipped_cap']);
+// skipped: no salió porque la org es una sandbox de «Ver demo» (0026); la fila lleva en preview el texto que habría llegado.
+export const NotificationStatus = z.enum(['queued', 'sent', 'delivered', 'read', 'failed', 'skipped_cap', 'skipped']);
 export type NotificationStatus = z.infer<typeof NotificationStatus>;
 // Igual al check de §05; P0 solo implementa block_ip/unblock_ip (los demás → 422).
 export const ActionKind = z.enum(['block_ip', 'unblock_ip', 'under_attack_on', 'under_attack_off', 'rate_limit']);

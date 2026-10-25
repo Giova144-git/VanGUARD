@@ -9,7 +9,7 @@ import { ApiError, fail } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
-import { requireColaPropia } from '../mw/prod-host.ts';
+import { colaPropia, esVistaPrevia, requireColaPropia } from '../mw/prod-host.ts';
 import { hostsPropios, UrlNoMedible, urlMedibleOrg } from '../scans/psi.ts';
 import { sanearNombreZip } from '../scans/zip-paso.ts';
 
@@ -87,7 +87,14 @@ async function topeCostoso(c: Context<AppEnv>) {
   return fail(c, 'rate_limited', 'Demasiadas auditorías seguidas. Espera un minuto.');
 }
 
-scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
+// Sandbox de «Ver demo» (0026): sus conexiones copiadas de la demo (meta.demostracion) no se auditan (no tienen secreto).
+// Si no hay ninguna otra, full_audit hace un «replay» (vg_sandbox_replay: una auditoría ya cerrada con los hallazgos
+// copiados y su foto de Evolución) sin encolar nada; si el usuario conectó sus servicios, se audita de verdad.
+scans.post('/orgs/:org/scans', requireAdmin, async (c) => {
+  // La vista previa no tiene cola (ver requireColaPropia): 503 antes de tocar la base, también en una sandbox.
+  if (esVistaPrevia(c.env)) throw new ApiError('preview_unsupported', 'Las auditorías no corren en la vista previa');
+  const sandbox = c.get('sandbox');
+  if (!sandbox && !colaPropia(c)) throw new ApiError('forbidden', 'Solo disponible en officialvanguard.com');
   const tope = await topeCostoso(c);
   if (tope) return tope;
   const body = await cuerpo(c, ScanCreate);
@@ -120,15 +127,17 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
     }
   }
 
+  let replay = false;
   // Algo que auditar: full_audit necesita al menos una conexión de lectura activa; un kind de una fuente, la suya. zip y
   // lighthouse no usan conexión (el ZIP llega del navegador y PSI mide una URL pública).
   if (body.kind !== 'zip' && body.kind !== 'lighthouse') {
     const provs = body.kind === 'full_audit' ? ['supabase', 'cloudflare', 'github'] : [PROVEEDOR[body.kind] ?? ''];
     let q = admin.from('connections').select('id', { count: 'exact', head: true }).eq('org_id', orgId)
-      .eq('kind', 'read').eq('status', 'active').in('provider', provs);
+      .eq('kind', 'read').eq('status', 'active').in('provider', provs).is('meta->>demostracion', null);
     if ('connection_id' in body && body.connection_id) q = q.eq('id', body.connection_id);
     const { count } = await q;
-    if (!count) throw new ApiError('conflict', 'No hay ninguna conexión que auditar. Conecta un servicio primero.');
+    if (!count && sandbox && body.kind === 'full_audit') replay = true;
+    else if (!count) throw new ApiError('conflict', 'No hay ninguna conexión que auditar. Conecta un servicio primero.');
   }
 
   // Tope diario de full_audit y de mediciones de Rendimiento (TOPE_DIA), contando los scan_runs de ese kind de hoy.
@@ -140,9 +149,22 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
       admin.from('scan_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('kind', body.kind)
         .gte('created_at', inicioDiaCaracas()),
     ]);
-    const tope = org?.is_demo ? 20 : Number((cfg?.value as Record<string, unknown> | undefined)?.[cupo.clave] ?? cupo.defecto);
+    const tope = org?.is_demo || replay ? 20 : Number((cfg?.value as Record<string, unknown> | undefined)?.[cupo.clave] ?? cupo.defecto);
     if ((hoy ?? 0) >= tope) throw new ApiError('budget_exceeded', cupo.texto(tope));
   }
+
+  if (replay) {
+    const { data: rep, error: er } = await admin.rpc('vg_sandbox_replay', { p_org: orgId, p_user: c.get('userId') });
+    if (er) {
+      log('error', 'scans.replay_error', { rid: c.get('rid'), code: er.code ?? null });
+      throw new ApiError('internal', 'No pudimos crear la auditoría');
+    }
+    if (typeof rep !== 'string') throw new ApiError('conflict', 'No hay ninguna conexión que auditar. Conecta un servicio primero.');
+    log('info', 'scan.replay', { rid: c.get('rid') });
+    return c.json(ScanAccepted.parse({ scan_run_id: rep }), 202);
+  }
+  // Una auditoría de verdad encola en vg-jobs: también desde una sandbox, solo desde el host real (o local).
+  if (sandbox && !colaPropia(c)) throw new ApiError('forbidden', 'Solo disponible en officialvanguard.com');
 
   const kind = body.kind as ScanKind;
   const steps = pasosDe(kind).map((name) => ({ name, status: 'pending' }));

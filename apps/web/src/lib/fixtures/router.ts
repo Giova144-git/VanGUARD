@@ -4,6 +4,7 @@ import {
   fixtures as fx, AlertPrefsIn, CodeReviewPut, CodeReviewQuery, GATE_CONTEXT, MAX_REPOS_GITHUB, McpTokenCreate, MergeGateAction, MergeGatePut, type McpTokenCreated, type McpTokenPublic, RepoFullName, ScanCreate, WikiRepoRef, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
   type AuditDelta, type CodeReview, type CodeReviewConfig, type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type DeltaLista, type EstadoModulo, type Evolution, type PerfRunExt,
   type MergeGateConfig, type MergeGateSaved, type Overview, type RespuestaEscritura,
+  eventosDeFalla, ultimoCambio, type FindingHistoryItem, type FindingTimeline, type FotosFalla,
   type Finding, type FixRequest, type Incident, type IncidentDetail, type MatrizHallazgos, type Me, type Module, type Org, type PermCheck, type ScanKind,
   type ScanRun, type TimelineItem, type WikiRun, type ZipFinding, type SimulateAttackKind, type SimulateAttackOut,
   type UnderAttackActivo, type UnderAttackMotivo, type UnderAttackOffer, type UnderAttackProposal,
@@ -31,7 +32,44 @@ function escenario(): 'lleno' | 'vacio' {
 
 // Estado en memoria de la pestaña: organizaciones creadas con /start.
 const orgsNuevas: Org[] = [];
-const esDemo = (org: string) => org === ORG_DEMO;
+
+// Sandbox de la demo (E4): POST /api/demo/join da a cada sesión SU copia de la demo, de la que es dueña (el invitado
+// también). Su id vive en sessionStorage, como la sesión falsa: sobrevive a recargar y muere al cerrar la pestaña.
+// Tiene los datos de la demo (esDemo) y la purga por latido no se imita: «Salir de la demo» la borra.
+const CLAVE_SANDBOX = 'vg-fx-sandbox';
+// Cierre en dos pasos (E4d): «cerrando» la marca y a los 20 s sin latido se borra; un latido antes la desmarca.
+const CLAVE_CERRANDO = 'vg-fx-sandbox-cerrando';
+export const CIERRE_FX_MS = 20_000;
+const sandboxFx = (): string | null => {
+  try {
+    const desde = Number(sessionStorage.getItem(CLAVE_CERRANDO)) || 0;
+    if (desde && Date.now() - desde >= CIERRE_FX_MS) { sessionStorage.removeItem(CLAVE_SANDBOX); sessionStorage.removeItem(CLAVE_CERRANDO); }
+    return sessionStorage.getItem(CLAVE_SANDBOX);
+  } catch { return null; }
+};
+function marcarCierreFx(body: unknown, cerrando: boolean) {
+  sandboxDe(body);
+  try { if (cerrando) sessionStorage.setItem(CLAVE_CERRANDO, String(Date.now())); else sessionStorage.removeItem(CLAVE_CERRANDO); } catch { /* sin almacenamiento */ }
+  return undefined;
+}
+function unirseFx() {
+  let id = sandboxFx();
+  if (!id) { id = crypto.randomUUID(); try { sessionStorage.setItem(CLAVE_SANDBOX, id); sessionStorage.removeItem(CLAVE_CERRANDO); } catch { /* sin almacenamiento */ } }
+  return { org_id: id, sandbox: true };
+}
+function sandboxDe(body: unknown): string {
+  const org = (body as { org_id?: unknown } | null)?.org_id;
+  if (typeof org !== 'string' || org !== sandboxFx()) falla(404, 'not_found', 'Esa copia de la demo ya no existe');
+  return org as string;
+}
+function salirFx(body: unknown) {
+  sandboxDe(body);
+  try { sessionStorage.removeItem(CLAVE_SANDBOX); } catch { /* sin almacenamiento */ }
+  return undefined;
+}
+// El invitado con copia solo es miembro de ella, y ahí es dueño: escribe. Sin copia es el viewer de la demo compartida.
+const soloLectura = () => tipoSesionFalsa() === 'anonima' && !sandboxFx();
+const esDemo = (org: string) => org === ORG_DEMO || org === sandboxFx();
 const vacia = (org: string) => escenario() === 'vacio' || !esDemo(org);
 
 function me(): Me {
@@ -39,7 +77,11 @@ function me(): Me {
   const base = anonima ? fx.meViewer : fx.me;
   // Las orgs de /start son de la sesión con correo que las creó: el anónimo de «Ver demo» no es miembro de ellas.
   const propias = anonima ? [] : orgsNuevas.map((o) => ({ id: o.id, name: o.name, role: 'owner' as const, is_demo: false }));
-  return { ...base, orgs: [...base.orgs, ...propias] };
+  const id = sandboxFx();
+  const copia = id ? [{ id, name: `${fx.me.orgs[0]!.name} (tu copia)`, role: 'owner' as const, is_demo: false, sandbox: true }] : [];
+  // Con su copia, el invitado ya no es viewer de la demo compartida: solo ve la copia. Sin ella (un BACK sin sandbox,
+  // o las pruebas de siempre) sigue siendo el viewer de fx.meViewer.
+  return { ...base, orgs: [...(anonima && id ? [] : base.orgs), ...propias, ...copia] };
 }
 
 function crearOrg(body: unknown): Org {
@@ -245,8 +287,10 @@ function quitarFalso(org: string, id: string) {
 
 // Hallazgos por org, con estado (PATCH) y has_fix_prompt (fix-prompt). Antes de leerlos entran los de los ZIP terminados.
 const hallazgos = new Map<string, Finding[]>();
+// La demo lleva las fechas del historial (fx.fechasFallas): en hallazgos.ts todos son del sábado (dato de prueba).
+const conFechas = (f: Finding): Finding => ({ ...f, first_seen_at: fx.fechasFallas[f.id]?.first_seen_at ?? f.first_seen_at });
 const delOrg = (org: string) => {
-  if (!hallazgos.has(org)) hallazgos.set(org, vacia(org) ? [] : structuredClone(fx.findings as unknown as Finding[]));
+  if (!hallazgos.has(org)) hallazgos.set(org, vacia(org) ? [] : structuredClone(fx.findings as unknown as Finding[]).map(conFechas));
   return hallazgos.get(org)!;
 };
 const hallazgosDe = (org: string) => {
@@ -256,6 +300,7 @@ const hallazgosDe = (org: string) => {
 const hallazgo = (org: string, id: string) => {
   if (id === fx.hallazgoRevision.id) sembrarHallazgoRevision(org);   // ?finding= del WhatsApp puede llegar antes que E45
   if (fx.hallazgosCorregidos.some((f) => f.id === id)) conCorregidos(org);   // ídem con «Ver» de los cambios y E51
+  if (fx.hallazgosHistoricos.some((f) => f.id === id)) conHistoricos(org);   // ídem con el historial de fallas (E13h)
   return hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
 };
 
@@ -274,6 +319,7 @@ function patchHallazgo(org: string, id: string, body: unknown) {
   const antes = f.status;
   f.status = b.status as Finding['status'];
   f.status_reason = b.status === 'ignored' ? b.reason!.trim() : null;
+  if (antes !== f.status) cambioDeEstado(org, f.id, antes, f.status, false);
   if (antes === 'open' && f.status !== 'open') cerrarEnvio(org, id, f.status === 'ignored' ? 'cancelado' : 'corregido');
   return structuredClone(f);
 }
@@ -302,7 +348,7 @@ function listarEnvios(org: string): FixRequest[] {
   return structuredClone(orden.filter((x) => !vistas.has(x.finding_id) && !!vistas.add(x.finding_id)));
 }
 function enviarAIA(org: string, id: string, body: unknown) {
-  if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura');
+  if (soloLectura()) falla(403, 'forbidden', 'Modo demo: solo lectura');
   const f = hallazgo(org, id);
   if (f.status !== 'open') falla(409, 'conflict', 'Este hallazgo ya no está abierto: no hay nada que mandar a tu IA', { reason: 'no_abierto' });
   const client = (body as { client?: unknown } | undefined)?.client;
@@ -315,7 +361,7 @@ function enviarAIA(org: string, id: string, body: unknown) {
   return structuredClone(nueva);
 }
 function cancelarEnvio(org: string, id: string) {
-  if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura');
+  if (soloLectura()) falla(403, 'forbidden', 'Modo demo: solo lectura');
   hallazgo(org, id);
   cerrarEnvio(org, id, 'cancelado');
   return undefined;
@@ -324,7 +370,7 @@ function cancelarEnvio(org: string, id: string) {
 async function promptFalso(org: string, id: string) {
   const f = hallazgo(org, id);
   const cached = f.has_fix_prompt;
-  if (!cached && tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura');
+  if (!cached && soloLectura()) falla(403, 'forbidden', 'Modo demo: solo lectura');
   if (!cached) await espera(1500);                                  // simula la llamada a Claude (~10 s en la real)
   f.has_fix_prompt = true;
   return { ...fx.fixPrompt, cached };
@@ -486,12 +532,73 @@ function volcarZip(id: string, c: CorridaZip) {
     const resource = prefijo + f.resource.slice(-(300 - prefijo.length));       // Finding.resource ≤ 300, sin perder el prefijo
     const datos = { scan_run_id: id, severity: f.severity, title: f.title, evidence: { ...f.evidence, fuente: 'zip' }, last_seen_at: en };
     const previo = lista.find((x) => x.module === 'codebase' && x.rule_id === f.rule_id && x.resource === resource);
+    if (previo && (previo.status === 'fixed' || previo.status === 'verified')) cambioDeEstado(c.org, previo.id, previo.status, 'open', true);
     if (previo) Object.assign(previo, datos, previo.status === 'fixed' || previo.status === 'verified'
       ? { status: 'open', status_reason: 'reapareció', verified_at: null } : {});
     else lista.push({ ...datos, id: crypto.randomUUID(), module: 'codebase', rule_id: f.rule_id, resource, confirmed: false,   // id nuevo: no pisa los de fx
       origin: 'rule', has_fix_prompt: false, fix_model: null, status: 'open', status_reason: null, suspected_injection: false,
       connection_id: null, first_seen_at: en, verified_at: null });
   }
+}
+
+// ── Historial de fallas (E13h/E13t, 0025_historial_hallazgos.sql) ───────────────────────────────────────────────
+// Fechas de cada cambio por org, como las columnas de 0025: la demo arranca con fx.fechasFallas; un PATCH o un ZIP que
+// reabre las mueven como el trigger vg_findings_historial. La línea de tiempo sale de eventosDeFalla (el mismo que el
+// Worker) con la cola de la IA de la pestaña y las fotos de fx.fotosFallas.
+type FechasFalla = { fixed_at?: string | null; ignored_at?: string | null; reopened_at?: string | null; reopen_count?: number; first_seen_at?: string };
+const historias = new Map<string, Map<string, FechasFalla>>();
+const historiaDe = (org: string) => {
+  if (!historias.has(org)) historias.set(org, new Map(vacia(org) ? [] : Object.entries(structuredClone(fx.fechasFallas))));
+  return historias.get(org)!;
+};
+function cambioDeEstado(org: string, id: string, antes: Finding['status'], ahora: Finding['status'], reaparece: boolean) {
+  const h = historiaDe(org);
+  const x = { ...h.get(id) };
+  const ya = new Date().toISOString();
+  if (ahora === 'fixed') x.fixed_at = ya;
+  else if (ahora === 'ignored') x.ignored_at = ya;
+  else if (ahora === 'open' && reaparece) { x.reopened_at = ya; x.reopen_count = (x.reopen_count ?? 0) + 1; }
+  else if (ahora === 'open') { if (antes === 'fixed') x.fixed_at = null; if (antes === 'ignored') x.ignored_at = null; }
+  h.set(id, x);
+}
+// Los dos que el viernes verificó una auditoría (fx.hallazgosHistoricos) entran en la lista con el historial.
+function conHistoricos(org: string) {
+  if (vacia(org)) return;
+  conCorregidos(org);
+  const lista = delOrg(org);
+  for (const f of fx.hallazgosHistoricos) if (!lista.some((x) => x.id === f.id)) lista.push(structuredClone(f as Finding));
+}
+function aHistorialFx(org: string, f: Finding): FindingHistoryItem {
+  const x = historiaDe(org).get(f.id) ?? {};
+  const base = { id: f.id, module: f.module, rule_id: f.rule_id, severity: f.severity, title: f.title, resource: f.resource,
+    status: f.status, status_reason: f.status_reason, connection_id: f.connection_id, first_seen_at: f.first_seen_at,
+    last_seen_at: f.last_seen_at, fixed_at: x.fixed_at ?? null, verified_at: f.verified_at, ignored_at: x.ignored_at ?? null,
+    reopened_at: x.reopened_at ?? null, reopen_count: x.reopen_count ?? 0 };
+  return { ...base, changed_at: ultimoCambio(base) };
+}
+const HIST_ESTADOS = ['open', 'fixed', 'verified', 'ignored'];
+function listarHistorial(org: string, q: URLSearchParams): FindingHistoryItem[] {
+  conHistoricos(org);
+  const filtro = (k: string, ok: readonly string[]) => {
+    const v = q.get(k);
+    if (v && !ok.includes(v)) falla(422, 'invalid_body', 'Filtro no válido', { field_errors: { [k]: ['Valor no válido'] } });
+    return v || null;
+  };
+  const [status, module, severity] = [filtro('status', HIST_ESTADOS), filtro('module', MODULOS_FX), filtro('severity', SEVERIDADES)];
+  const dias = Number(q.get('days') ?? 0);
+  const desde = Number.isInteger(dias) && dias > 0 ? Date.now() - dias * 86_400_000 : -Infinity;
+  const asc = q.get('order') === 'asc';
+  const limite = Math.min(Math.max(Number(q.get('limit')) || 200, 1), 500);
+  return hallazgosDe(org).map((f) => aHistorialFx(org, f))
+    .filter((f) => (!status || f.status === status) && (!module || f.module === module) && (!severity || f.severity === severity)
+      && Date.parse(f.changed_at) >= desde)
+    .sort((a, b) => (asc ? 1 : -1) * (Date.parse(a.changed_at) - Date.parse(b.changed_at)) || a.id.localeCompare(b.id))
+    .slice(0, limite);
+}
+function lineaTiempo(org: string, id: string): FindingTimeline {
+  const item = aHistorialFx(org, hallazgo(org, id));
+  const fotos: FotosFalla = deMapa<string, FotosFalla>(fx.fotosFallas, id, { nuevo: [], corregido: [] });
+  return { item, events: eventosDeFalla(item, colaDe(org), vacia(org) ? undefined : fotos) };
 }
 
 // ── «Medir ahora» (E11 con kind 'lighthouse', F-17) ──────────────────────────────────────────────────────────
@@ -813,7 +920,7 @@ export function simularAtaque(org: string, kind: SimulateAttackKind = 'ip_flood'
 }
 // E57: solo en la org de demo y con permiso de escritura; una simulación cada 2 min por org.
 function simularFalso(org: string, body: unknown): SimulateAttackOut {
-  if (!esDemo(org) || tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Solo los administradores de la org de demo pueden simular un ataque');
+  if (!esDemo(org) || soloLectura()) falla(403, 'forbidden', 'Solo los administradores de la org de demo pueden simular un ataque');
   const reciente = incidentesDe(org).some((i) => simulados.has(i.id) && Date.now() - simulados.get(i.id)!.inicio < 120_000);
   if (reciente) falla(429, 'rate_limited', 'Espera 2 minutos entre simulaciones');
   const kind = SIMULADO_KIND.safeParse((body as { kind?: unknown } | null)?.kind ?? 'ip_flood');
@@ -882,7 +989,7 @@ function revocarTokenMcp(org: string, id: string) {
   t!.revoked_at = new Date().toISOString();
   return undefined;
 }
-function exigirAdmin() { if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura'); }
+function exigirAdmin() { if (soloLectura()) falla(403, 'forbidden', 'Modo demo: solo lectura'); }
 
 // Revisión de código (E45/E46, asignaciones/revision-codigo.md §4.1 y §6.3). La org de demo arranca con el fixture
 // (webhook conectado y el push con la clave de Stripe); una org sin GitHub, con available:false. Tras activar, la 3.ª
@@ -1329,7 +1436,10 @@ const ORG = '\\/api\\/orgs\\/([^/]+)';
 const r = (s: string) => new RegExp(`^${s}$`);
 const rutas: [string, RegExp, H][] = [
   ['GET',  r('\\/api\\/me'),                      () => me()],
-  ['POST', r('\\/api\\/demo\\/join'),             () => ({ org_id: ORG_DEMO })],
+  ['POST', r('\\/api\\/demo\\/join'),             () => unirseFx()],
+  ['POST', r('\\/api\\/demo\\/latido'),           (_m, b) => marcarCierreFx(b, false)],
+  ['POST', r('\\/api\\/demo\\/cerrando'),         (_m, b) => marcarCierreFx(b, true)],
+  ['POST', r('\\/api\\/demo\\/salir'),            (_m, b) => salirFx(b)],
   ['POST', r('\\/api\\/orgs'),                    (_m, b) => crearOrg(b)],
   ['GET',  r(`${ORG}\\/overview`),                (m) => overviewDe(m[1]!)],
   ['GET',  r(`${ORG}\\/modules\\/(\\w+)\\/state`), (m) => estadoModulo(m[1]!, m[2]!)],
@@ -1339,6 +1449,8 @@ const rutas: [string, RegExp, H][] = [
   ['DELETE', r(`${ORG}\\/connections\\/([^/]+)`), (m) => quitarFalso(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/scans`),                   (m, b) => iniciarScan(m[1]!, b)],
   ['POST', r(`${ORG}\\/scans\\/([^/]+)\\/zip-result`), (m, b) => recibirZip(m[1]!, m[2]!, b)],
+  ['GET',  r(`${ORG}\\/findings\\/history`),       (m, _b, q) => listarHistorial(m[1]!, q)],   // antes que findings/:id
+  ['GET',  r(`${ORG}\\/findings\\/([^/]+)\\/timeline`), (m) => lineaTiempo(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/findings`),                (m, _b, q) => listarHallazgos(m[1]!, q)],
   ['GET',  r(`${ORG}\\/findings\\/([^/]+)`),      (m) => structuredClone(hallazgo(m[1]!, m[2]!))],
   ['PATCH', r(`${ORG}\\/findings\\/([^/]+)`),     (m, b) => patchHallazgo(m[1]!, m[2]!, b)],

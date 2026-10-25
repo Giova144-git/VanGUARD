@@ -8,6 +8,7 @@ export type Ctx = {
   isAnon: boolean;
   orgId: string;
   role: Role;
+  sandbox: boolean;       // la org es la sandbox de «Ver demo» de alguien (orgs.sandbox_of); lo pone orgMember desde la base
   mcp: McpCtx;            // solo en /mcp (mw/mcp-auth.ts): el tenant sale del token, nunca de un argumento
 };
 

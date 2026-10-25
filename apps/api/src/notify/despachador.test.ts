@@ -587,3 +587,19 @@ describe('despachador · botón «Llamar a Guardia»', () => {
     expect(cierres()).toContainEqual({ status: 'failed', error: 'voz_no_disponible' });
   });
 });
+
+describe('despachador · sandbox de «Ver demo» (0026)', () => {
+  it('nunca llama a Kapso: cada aviso queda skipped/sandbox con el texto que habría llegado, sin botones', async () => {
+    org = { is_demo: false, sandbox_of: '00000000-0000-4000-a000-00000000de00' };
+    contactos = [{ id: 'c1', phone_e164: TEL_A, whatsapp: true, voice: true, priority: 1, verified_at: null }];   // sin verificar
+    const r = await avisar();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(r.whatsapp).toBe('skipped');
+    const filas = filasNotif();
+    expect(filas).toHaveLength(1);
+    expect(filas[0]).toMatchObject({ status: 'skipped', error: 'sandbox', template: 'incident_v1', recipient_masked: `+58•••${TEL_A.slice(-4)}` });
+    const m = mensajeIncidente(incidente as never, 'incident_v1');
+    expect(filas[0]!.preview).toBe(`${m.header}\n\n${m.body}\n\n${m.footer}`);
+    expect(de('approvals', 'insert')).toHaveLength(0);
+  });
+});

@@ -38,7 +38,7 @@ export function SimularAtaque({ org }: { org: OrgActual }) {
   const ausente = useRutaAusente(org.id, 'E57');
   const sim = useSimularAtaque(org.id);
   const [kind, setKind] = useState<SimulateAttackKind>('ip_flood');
-  if (!org.puedeEscribir || !org.is_demo || ausente) return null;
+  if (!org.puedeEscribir || !(org.is_demo || org.sandbox) || ausente) return null;   // también en la copia de la demo
   const simular = () => sim.mutate({ kind }, {
     onSuccess: (r) => navegar(`/o/${org.id}/incidents/${encodeURIComponent(r.incident_id)}`,
       { state: { simulacion: { id: r.incident_id, canales: textoCanales(r) } } satisfies EstadoSimulacion }),

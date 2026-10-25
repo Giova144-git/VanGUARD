@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Me } from '@vanguard/contracts';
-import { destinoTrasEntrar, nextDe } from './aterrizaje';
+import { destinoTrasEntrar, esOrgDeDemo, nextDe } from './aterrizaje';
 
 const org = (id: string, is_demo: boolean, role: 'owner' | 'admin' | 'viewer' = 'owner') => ({ id, name: id, role, is_demo });
 const me = (orgs: Me['orgs']): Me => ({ user: { id: 'u', email: 'a@b.c', is_anonymous: false }, orgs });
@@ -45,6 +45,24 @@ describe('destinoTrasEntrar', () => {
     expect(destinoTrasEntrar(me([org('a', false), org('b', false)]), null)).toBe('/o/b');
     guardado['vg-ultima-org'] = 'zz';
     expect(destinoTrasEntrar(me([org('a', false)]), null)).toBe('/o/a');
+  });
+  it('ignora una última org que sea la demo o una sandbox, o que ya no exista, y prefiere la propia', () => {
+    const copia = { ...org('sb', false), sandbox: true };
+    guardado['vg-ultima-org'] = 'sb';
+    expect(destinoTrasEntrar(me([copia, org('mia', false)]), null)).toBe('/o/mia');
+    guardado['vg-ultima-org'] = 'demo';
+    expect(destinoTrasEntrar(me([org('demo', true, 'viewer'), org('mia', false)]), null)).toBe('/o/mia');
+    guardado['vg-ultima-org'] = 'borrada';
+    expect(destinoTrasEntrar(me([copia, org('mia', false)]), null)).toBe('/o/mia');
+    // Solo con su copia temporal (que es «owner»): a /start, no a la sandbox.
+    expect(destinoTrasEntrar(me([copia]), null)).toBe('/start');
+    // El equipo, dueño de la demo compartida, sigue entrando a ella.
+    expect(destinoTrasEntrar(me([copia, org('demo', true, 'owner')]), null)).toBe('/o/demo');
+  });
+  it('esOrgDeDemo: la demo compartida y la sandbox', () => {
+    expect(esOrgDeDemo({ is_demo: true })).toBe(true);
+    expect(esOrgDeDemo({ is_demo: false, sandbox: true })).toBe(true);
+    expect(esOrgDeDemo({ is_demo: false })).toBe(false);
   });
   it('prefiere una org propia a la de demo y manda a /start si solo es viewer de la demo', () => {
     expect(destinoTrasEntrar(me([org('demo', true, 'viewer'), org('mia', false)]), null)).toBe('/o/mia');

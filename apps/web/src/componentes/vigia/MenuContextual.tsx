@@ -3,15 +3,18 @@
 // seleccionado, el clic derecho sigue siendo el del navegador. Con teclado lo abren Shift+F10 y la tecla Menú sobre el
 // elemento enfocado. ACCIONES es la lista de opciones: «Info», sobre un enlace abrirlo en otra pestaña (el menú del
 // navegador, que lo ofrecía, ya no sale ahí) y, sobre un problema (data-hallazgo="<uuid>", que manda sobre los data-info
-// de dentro de su fila), «Enviar a mi IA» y «Cancelar envío». La «Info» de un problema explica ESE problema
-// (info-hallazgos.ts) con los datos que ya enseña la fila, sacados de la caché de TanStack Query o de lo que la fila anotó.
+// de dentro de su fila), «Enviar a mi IA», «Cancelar envío» y «Ver historial». La «Info» de un problema explica ESE
+// problema (info-hallazgos.ts) con los datos que ya enseña la fila, sacados de la caché de TanStack Query o de lo que la
+// fila anotó, y sus fechas: si ninguna lista las trae, el menú pide su línea de tiempo (E13t) al abrirse.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type KeyboardEvent as EventoTeclado, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { ExternalLink, Info, X } from 'lucide-react';
-import type { AhoraItem, Finding, FixRequest } from '@vanguard/contracts';
+import { useNavigate } from 'react-router';
+import { ExternalLink, History, Info, X } from 'lucide-react';
+import type { AhoraItem, Finding, FindingHistoryItem, FindingTimeline, FixRequest } from '@vanguard/contracts';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { envioAbierto, useEnviarAMiIA } from '@/modulos/hallazgos/EnviarAMiIA';
+import { useLineaTiempoFalla } from '@/lib/consultas';
 import { esId } from '@/lib/ids';
 import { useGuia, type ApiGuia } from './contexto';
 import { IconoArreglando } from './IconoArreglando';
@@ -35,7 +38,9 @@ export type IAContexto = {
   cancelar: (findingId: string) => void;
 };
 /** Lo que una acción recibe: a quién se refiere, el problema (si lo es), la guía para hablar y la IA. */
-export type Contexto = { elemento: HTMLElement; id: IdInfo | null; hallazgo?: DatosHallazgo | null; guia: Pick<ApiGuia, 'decir'>; ia?: IAContexto };
+export type Contexto = { elemento: HTMLElement; id: IdInfo | null; hallazgo?: DatosHallazgo | null; guia: Pick<ApiGuia, 'decir'>; ia?: IAContexto;
+  /** Abre la línea de tiempo del problema en el historial de fallas (solo en el menú de un problema). */
+  verHistorial?: (findingId: string) => void };
 export type Accion = {
   id: string;
   texto: string | ((c: Contexto) => string);
@@ -69,6 +74,9 @@ export const ACCIONES: readonly Accion[] = [
   { id: 'cancelar-ia', texto: 'Cancelar envío', icono: X,
     disponible: (c) => abiertoDe(c) && !c.ia?.bloqueo,
     hacer: (c) => { if (c.hallazgo && c.ia) c.ia.cancelar(c.hallazgo.id); } },
+  { id: 'ver-historial', texto: 'Ver historial', icono: History,
+    disponible: (c) => !!c.hallazgo && !!c.verHistorial,
+    hacer: (c) => { if (c.hallazgo) c.verHistorial?.(c.hallazgo.id); } },
   { id: 'pestana', texto: 'Abrir en una pestaña nueva', icono: ExternalLink,
     disponible: ({ elemento }) => !!enlaceDe(elemento),
     hacer: ({ elemento }) => { const a = enlaceDe(elemento); if (a) window.open(a.href, '_blank', 'noopener,noreferrer'); } },
@@ -78,15 +86,32 @@ export const ACCIONES: readonly Accion[] = [
  *  que anotó la fila (la bandeja de un módulo trae el rol, no la gravedad). Lo de la caché manda. */
 export function datosHallazgo(qc: Pick<QueryClient, 'getQueryData' | 'getQueriesData'> | null, org: string, id: string): DatosHallazgo {
   const anotado = hallazgoVisto(id);
-  let f: (Finding | AhoraItem) & { status?: string } | undefined = qc?.getQueryData<Finding>(['org', org, 'finding', id]);
+  const historia = historiaEnCache(qc, org, id);
+  let f: (Finding | AhoraItem | FindingHistoryItem) & { status?: string } | undefined = qc?.getQueryData<Finding>(['org', org, 'finding', id]);
   if (!f && qc) for (const [, lista] of qc.getQueriesData<Finding[]>({ queryKey: ['org', org, 'findings'] })) {
     f = Array.isArray(lista) ? lista.find((x) => x?.id === id) : undefined;
     if (f) break;
   }
-  f ??= qc?.getQueryData<{ ahora?: AhoraItem[] }>(['org', org, 'overview'])?.ahora?.find((x) => x.kind === 'finding' && x.id === id);
+  f ??= historia ?? qc?.getQueryData<{ ahora?: AhoraItem[] }>(['org', org, 'overview'])?.ahora?.find((x) => x.kind === 'finding' && x.id === id);
   if (!f) return anotado ?? { id };
+  // Las fechas: las del historial (traen todas) y, si no, las de la fila o lo anotado. El estado de la caché manda.
+  const fecha = (k: 'first_seen_at' | 'fixed_at' | 'verified_at' | 'ignored_at' | 'reopened_at') =>
+    historia?.[k] ?? (f as Partial<Record<typeof k, string | null>>)[k] ?? anotado?.[k] ?? null;
   return { ...anotado, id, module: f.module, rule_id: f.rule_id, severity: f.severity, resource: f.resource,
-    connection_id: f.connection_id ?? anotado?.connection_id ?? null, status: f.status ?? anotado?.status ?? null };
+    connection_id: f.connection_id ?? anotado?.connection_id ?? null, status: f.status ?? anotado?.status ?? null,
+    first_seen_at: fecha('first_seen_at'), fixed_at: fecha('fixed_at'), verified_at: fecha('verified_at'),
+    ignored_at: fecha('ignored_at'), reopened_at: fecha('reopened_at') };
+}
+
+/** La fila del historial (E13t de esa falla o cualquier lista de E13h en caché), o undefined. */
+function historiaEnCache(qc: Pick<QueryClient, 'getQueryData' | 'getQueriesData'> | null, org: string, id: string): FindingHistoryItem | undefined {
+  const t = qc?.getQueryData<FindingTimeline>(['org', org, 'history', 'falla', id])?.item;
+  if (t?.id === id) return t;
+  if (qc) for (const [, lista] of qc.getQueriesData<FindingHistoryItem[]>({ queryKey: ['org', org, 'history', 'lista'] })) {
+    const x = Array.isArray(lista) ? lista.find((y) => y?.id === id) : undefined;
+    if (x) return x;
+  }
+  return undefined;
 }
 
 const EDITABLE = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]';
@@ -209,9 +234,14 @@ type PropsMenu = { abierto: Abierto; menu: RefObject<HTMLDivElement | null>; cer
 function MenuHallazgo({ abierto, hallazgo, guia, ...p }: PropsMenu & { hallazgo: string; guia: Pick<ApiGuia, 'decir'> }) {
   const org = useOrg();
   const qc = useQueryClient();
+  const navegar = useNavigate();
   const ia = useEnviarAMiIA(org.id);
+  // Sin fechas en ninguna lista (Cambios, la bandeja de un módulo, «Ahora»): se piden mientras el menú está abierto.
+  const sinFechas = !historiaEnCache(qc, org.id, hallazgo);
+  useLineaTiempoFalla(org.id, hallazgo, sinFechas);            // al llegar, el render vuelve a leer la caché
   const ctx: Contexto = { elemento: abierto.elemento, id: null, hallazgo: datosHallazgo(qc, org.id, hallazgo), guia,
-    ia: { bloqueo: org.puedeEscribir ? null : SOLO_LECTURA, envioDe: ia.envioDe, repoDe: ia.repoDe, enviarYAbrir: ia.enviarYAbrir, cancelar: ia.cancelar } };
+    ia: { bloqueo: org.puedeEscribir ? null : SOLO_LECTURA, envioDe: ia.envioDe, repoDe: ia.repoDe, enviarYAbrir: ia.enviarYAbrir, cancelar: ia.cancelar },
+    verHistorial: (id) => navegar(`/o/${org.id}/evolution/history?falla=${encodeURIComponent(id)}`) };
   return <Menu abierto={abierto} ctx={ctx} {...p} />;
 }
 

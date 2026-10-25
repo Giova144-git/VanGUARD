@@ -46,6 +46,17 @@ export function cuando(t?: string | Date | number | null, ahora = new Date()) {
   const [y, m, dd] = dia.split('-');
   return `${dd}-${MESES[Number(m) - 1] ?? m}${y === ymd.format(ahora).slice(0, 4) ? '' : `-${y}`} ${hora}`;
 }
+// Para frases (Vigía, la línea de tiempo de una falla), con el mismo formato que cuando(): «hoy a las 14:04» ·
+// «ayer a las 23:32» · «el 24-oct a las 14:04». null si no es una fecha: solo salen dígitos de Intl, nunca el texto que
+// mandó el servidor.
+export function elDia(t?: string | Date | number | null, ahora = new Date()): string | null {
+  const d = fecha(t);
+  if (!d) return null;
+  const c = cuando(d, ahora), i = c.lastIndexOf(' ');
+  const dia = c.slice(0, i), hora = c.slice(i + 1);
+  return dia === 'hoy' || dia === 'ayer' ? `${dia} a las ${hora}` : `el ${dia} a las ${hora}`;
+}
+
 const larga = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 /** Para el tooltip de una hora: «domingo, 25 de octubre de 2026, 04:46 · hora de Caracas (UTC−4)». */
 export const horaCompleta = (t?: string | Date | number | null) => { const d = fecha(t); return d ? `${larga.format(d)} · hora de Caracas (UTC−4)` : undefined; };

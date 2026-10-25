@@ -7,7 +7,7 @@ import { ApiError, fail } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
 import { ventanaAbierta } from '../lib/verificacion.ts';
 import { requireAdmin } from '../mw/admin.ts';
-import { requireProdHost } from '../mw/prod-host.ts';
+import { requireProdHostOSandbox } from '../mw/prod-host.ts';
 import { enmascararTelefono, enviarTexto, KapsoError, kapsoConfigurado } from '../notify/kapso.ts';
 
 // E27 · POST /api/orgs/:org/notifications/test · admin · solo officialvanguard.com · P0 (S15 15.4). WhatsApp al
@@ -28,7 +28,7 @@ export const textoPrueba = (org: string) =>
 // 409 window_closed (B5): el contacto abre la ventana de 24 h escribiendo él primero.
 export const MENSAJE_VENTANA = 'Escribe cualquier mensaje a VanGUARD desde ese teléfono y vuelve a probar';
 
-type Fila = { recipient_masked: string; status: 'queued' | 'failed' | 'skipped_cap'; error?: string };
+type Fila = { recipient_masked: string; status: 'queued' | 'failed' | 'skipped_cap' | 'skipped'; error?: string; preview?: string };
 type Cierre = { status: 'sent'; provider_id: string; sent_at: string } | { status: 'failed'; error: string };
 
 // Fila sin incidente: incident_id nulo solo vale con la plantilla de prueba (0008g). Devuelve su id, o null si no se
@@ -52,7 +52,7 @@ async function cerrar(c: Context<AppEnv>, id: string, cambio: Cierre) {
   if (error) log('warn', 'notificacion.prueba_sin_cierre', { rid: c.get('rid'), code: error.code, status: cambio.status });
 }
 
-notifications.post('/orgs/:org/notifications/test', requireAdmin, requireProdHost, async (c) => {
+notifications.post('/orgs/:org/notifications/test', requireAdmin, requireProdHostOSandbox, async (c) => {
   const { channel } = await cuerpo(c, NotificationTest);
   if (channel === 'voice') throw new ApiError('conflict', 'La llamada de prueba todavía no está activa', { reason: 'voice_disabled' });
 
@@ -77,6 +77,16 @@ notifications.post('/orgs/:org/notifications/test', requireAdmin, requireProdHos
   if (!contacto) throw new ApiError('conflict', 'No hay ningún contacto con WhatsApp activo', { reason: 'no_contact' });
   const telefono = String(contacto.phone_e164);
   const recipient_masked = enmascararTelefono(telefono);
+
+  // Sandbox de «Ver demo» (0026): nada sale por Kapso, tampoco la prueba. Queda la fila skipped con el texto que habría
+  // llegado (no cuenta para los topes) y la respuesta es ok sin provider_id. Sin exigir verificación: no se envía nada.
+  if (c.get('sandbox')) {
+    const { data: org } = await admin.from('orgs').select('name').eq('id', orgId).maybeSingle();
+    await registrar(c, { recipient_masked, status: 'skipped', error: 'sandbox',
+      preview: textoPrueba(String(org?.name ?? 'tu organizacion')) });
+    log('info', 'notificacion.prueba_sandbox', { rid, recipient_masked });
+    return c.json(NotificationTestResult.parse({ ok: true, provider_id: null }));
+  }
 
   if (!contacto.verified_at) {
     await registrar(c, { recipient_masked, status: 'failed', error: 'unverified' });

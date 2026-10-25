@@ -46,7 +46,7 @@ describe('orgMember', () => {
 
   it('deja pasar lo que no va bajo /api/orgs/<org> y las orgs propias', async () => {
     expect(await pedir('/api/me')).toMatchObject({ orgs: expect.arrayContaining([expect.objectContaining({ id: nueva, role: 'owner' })]) });
-    expect(await pedir('/api/demo/join', 'POST', {})).toEqual({ org_id: DEMO });
+    expect(await pedir('/api/demo/join', 'POST', {})).toEqual({ org_id: expect.any(String), sandbox: true });   // su copia (E4), no la demo compartida
     expect(await pedir(`/api/orgs/${DEMO}/overview`)).toEqual(fx.overview);
     expect(await pedir(`/api/orgs/${nueva}/overview`)).toEqual(fx.overviewVacio);
   });

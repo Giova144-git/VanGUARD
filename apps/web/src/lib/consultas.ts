@@ -2,9 +2,9 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AiUsage, AlertPrefs, FIX_REQUEST_ABIERTA, FixRequest, AuditDelta, type CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  AiUsage, AlertPrefs, FIX_REQUEST_ABIERTA, FixRequest, FindingHistoryItem, FindingTimeline, AuditDelta, type CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   UnderAttackOffer,
-  type Module, type Severity,
+  type FindingStatus, type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -53,7 +53,7 @@ export function useConexiones(org: string) {
 }
 
 export type FiltroHallazgos = { module?: Module; severity?: Severity; status?: 'open' | 'fixed' | 'verified' | 'ignored'; limit?: number };
-const consulta = (f: FiltroHallazgos) => {
+const consulta = (f: FiltroHallazgos | FiltroHistorial) => {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(f)) if (v != null) q.set(k, String(v));
   const s = q.toString();
@@ -159,6 +159,23 @@ export function useEnvioIA(org: string, findingId: string | null | undefined): F
   const q = useColaIA(org);
   return (findingId && q.data?.find((x) => x.finding_id === findingId)) || null;
 }
+
+// Historial de fallas (E13h) y línea de tiempo de una (E13t), 0025_historial_hallazgos.sql. Clave propia ('history', no
+// 'findings'): sus filas no traen evidencia y useHallazgo no debe tomarlas por un Finding. Realtime (findings y
+// fix_requests) las invalida; sin canal, 60 s. Un 404 (BACK aún sin desplegar) no se sondea.
+export type FiltroHistorial = { status?: FindingStatus; module?: Module; severity?: Severity; days?: number; order?: 'asc' | 'desc'; limit?: number };
+export function useHistorialFallas(org: string, f: FiltroHistorial = {}, habilitado = true) {
+  const vivo = useVivo();
+  return useQuery({
+    ...base, queryKey: ['org', org, 'history', 'lista', f], enabled: habilitado,
+    queryFn: () => api(`/api/orgs/${org}/findings/history${consulta(f)}`, { esquema: z.array(FindingHistoryItem) }),
+    refetchInterval: (q) => (es404(q) ? false : intervalo(vivo, 60_000, 120_000)),
+  });
+}
+export const useLineaTiempoFalla = (org: string, id: string | null | undefined, habilitado = true) => useQuery({
+  queryKey: ['org', org, 'history', 'falla', id], enabled: habilitado && esId(id), staleTime: 30_000, refetchIntervalInBackground: false,
+  queryFn: () => api(`/api/orgs/${org}/findings/${id}/timeline`, { esquema: FindingTimeline }),
+});
 
 // Tokens MCP (E29b): solo admin; para el viewer no se llama. Nunca traen el token, solo sus 4 últimos caracteres.
 export const useTokensMcp = (org: string, habilitado: boolean) => useQuery({

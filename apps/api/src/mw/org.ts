@@ -12,7 +12,7 @@ export const orgMember: MiddlewareHandler<AppEnv> = async (c, next) => {
   // En minúsculas: orgId entra en el AAD y en la huella; con mayúsculas se salta la dedupe y el secreto no se abre.
   const org = (c.req.param('org') ?? '').toLowerCase();
   if (!UUID.test(org)) throw new ApiError('not_found', 'Organización no encontrada');
-  const { data, error } = await db(c.env).from('org_members').select('role')
+  const { data, error } = await db(c.env).from('org_members').select('role, orgs(sandbox_of)')
     .eq('org_id', org).eq('user_id', c.get('userId')).maybeSingle();
   if (error) {
     log('error', 'org.miembro_error', { rid: c.get('rid'), code: error.code });
@@ -22,5 +22,9 @@ export const orgMember: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!role.success) throw new ApiError('not_found', 'Organización no encontrada');
   c.set('orgId', org);
   c.set('role', role.data);
+  // Sandbox de «Ver demo» (0026): lo decide la fila de la org, nunca el cliente. Cambia anon.ts y admin.ts, ejecuta las
+  // acciones de Cloudflare en seco y no deja salir WhatsApp (S15 15.3).
+  const o = (data as { orgs?: { sandbox_of?: unknown } | null } | null)?.orgs;
+  c.set('sandbox', typeof o?.sandbox_of === 'string' && o.sandbox_of !== '');
   await next();
 };

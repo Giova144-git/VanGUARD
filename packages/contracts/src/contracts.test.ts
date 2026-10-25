@@ -17,6 +17,7 @@ const CLAVES_ESPERADAS = [
   'auditDelta', 'evolution', 'hallazgosCorregidos', 'deltasRevision',
   'underAttackOffer', 'underAttackOfferUnaIp', 'underAttackOfferSinPermiso', 'underAttackProposal',
   'fixRequests',
+  'historialFallas', 'lineaTiempoFalla', 'hallazgosHistoricos', 'fechasFallas', 'fotosFallas',
 ];
 
 const casos: [string, z.ZodType, unknown][] = [
@@ -48,6 +49,9 @@ const casos: [string, z.ZodType, unknown][] = [
   ['exportMd', z.string().min(1), fx.exportMd],
   ['mcpTokens', z.array(c.McpTokenPublic), fx.mcpTokens],
   ['fixRequests', z.array(c.FixRequest), fx.fixRequests],
+  ['historialFallas', z.array(c.FindingHistoryItem), fx.historialFallas],
+  ['lineaTiempoFalla', c.FindingTimeline, fx.lineaTiempoFalla],
+  ['hallazgosHistoricos', z.array(c.Finding), fx.hallazgosHistoricos],
   ['wikiEstimate', c.WikiEstimate, fx.wikiEstimate],
   ['wikiRunRunning', c.WikiRun, fx.wikiRunRunning],
   ['wikiRunDone', c.WikiRun, fx.wikiRunDone],

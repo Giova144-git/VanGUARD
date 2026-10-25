@@ -118,6 +118,9 @@ export const SCAN_EV_VIE = '5a1c0000-0000-4000-8000-000000000004';
 export const CR_REV_JUEVES = 'c4000000-0000-4000-8000-000000000021';
 export const F_SB_INDICE = 'f0000000-0000-4000-8000-00000000000f';
 export const F_CB_GENERICO = 'f0000000-0000-4000-8000-000000000010';
+// Historial de fallas (0025): dos que una auditoría verificó el viernes y que ya no salen en `findings`.
+export const F_HIST_POLITICA = 'f0000000-0000-4000-8000-000000000011';
+export const F_HIST_DEP = 'f0000000-0000-4000-8000-000000000012';
 // Hora de cada versión = la de su foto (paso puntaje). En el fixture coincide con el cierre de la auditoría; en
 // producción va unos segundos antes (resumen_ia). La del martes, sin foto, es su cierre.
 export const T_EV_MAR = '2026-10-20T18:02:30.000Z';

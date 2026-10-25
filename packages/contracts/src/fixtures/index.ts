@@ -8,6 +8,7 @@ import { conexionGithub2, connections, permChecks } from './conexiones.ts';
 import { auditDelta, deltasRevision, evolution, hallazgosCorregidos } from './evolucion.ts';
 import { exportMd, mcpTokens } from './exportar.ts';
 import { findings, fixPrompt } from './hallazgos.ts';
+import { fechasFallas, fotosFallas, hallazgosHistoricos, historialFallas, lineaTiempoFalla } from './historial.ts';
 import { actionProposal, incidentDetail, incidents, traffic } from './incidentes.ts';
 import { moduleState } from './modulos.ts';
 import { perfRuns } from './rendimiento.ts';
@@ -28,4 +29,5 @@ export const fixtures = {
   auditDelta, evolution, hallazgosCorregidos, deltasRevision,
   underAttackOffer, underAttackOfferUnaIp, underAttackOfferSinPermiso, underAttackProposal,
   fixRequests,
+  historialFallas, lineaTiempoFalla, hallazgosHistoricos, fechasFallas, fotosFallas,
 };

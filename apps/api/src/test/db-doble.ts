@@ -1,6 +1,6 @@
 // Doble mínimo del cliente de supabase-js para probar rutas sin red: registra cada consulta y responde con el
 // manejador que da la prueba. Solo cubre los métodos que usa apps/api.
-export type Filtro = [columna: string, op: 'eq' | 'neq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'is', valor: unknown];
+export type Filtro = [columna: string, op: 'eq' | 'neq' | 'in' | 'gt' | 'gte' | 'lt' | 'lte' | 'is' | 'cs', valor: unknown];
 export type Op = {
   table: string;
   action: 'select' | 'insert' | 'upsert' | 'update' | 'delete';
@@ -44,6 +44,7 @@ export function dbDoble(h: Manejadores = {}) {
       lt(col: string, v: unknown) { op.filters.push([col, 'lt', v]); return b; },
       lte(col: string, v: unknown) { op.filters.push([col, 'lte', v]); return b; },
       is(col: string, v: unknown) { op.filters.push([col, 'is', v]); return b; },
+      contains(col: string, v: unknown) { op.filters.push([col, 'cs', v]); return b; },
       order(col: string, o?: { ascending?: boolean }) { (op.orden ??= []).push([col, o?.ascending !== false]); return b; },
       limit() { return b; },
       maybeSingle() { op.single = 'maybe'; return b; },
@@ -93,6 +94,7 @@ export function cumpleFiltros(f: Record<string, unknown>, op: Op): boolean {
     if (o === 'eq') return x === v;
     if (o === 'neq') return x !== v;
     if (o === 'in') return (v as unknown[]).includes(x);
+    if (o === 'cs') return Array.isArray(x) && (v as unknown[]).every((y) => x.includes(y));
     const d = comparar(x, v);
     return o === 'gt' ? d > 0 : o === 'gte' ? d >= 0 : o === 'lt' ? d < 0 : d <= 0;
   });

@@ -13,10 +13,20 @@ export type OrgCreate = z.infer<typeof OrgCreate>;
 export const Org = z.object({ id: Id, name: z.string(), slug: z.string(), is_demo: z.boolean(), created_at: Ts });
 export type Org = z.infer<typeof Org>;
 export const Me = z.object({ user: z.object({ id: Id, email: z.string().nullable(), is_anonymous: z.boolean() }),
-  orgs: z.array(z.object({ id: Id, name: z.string(), role: Role, is_demo: z.boolean() })) });
+  // sandbox: la copia temporal de la demo de ESTE usuario (E4); se borra si deja de latir ~10 min. Opcional: un BACK viejo no la manda.
+  orgs: z.array(z.object({ id: Id, name: z.string(), role: Role, is_demo: z.boolean(), sandbox: z.boolean().optional() })) });
 export type Me = z.infer<typeof Me>;
-export const DemoJoin = z.object({ org_id: Id });
+export const DemoJoin = z.object({ org_id: Id, sandbox: z.boolean().optional() });
 export type DemoJoin = z.infer<typeof DemoJoin>;
+// POST /api/demo/latido, /api/demo/cerrando y /api/demo/salir (204): la sandbox de la que se habla (0026).
+// latido: la mantiene viva (sin latido 10 min, la purga la borra) y anula un cierre pendiente. cerrando: pagehide con
+// fetch keepalive; no borra, la marca para borrarse en 20 s si no llega otro latido. salir: la borra ya. 404 si no es suya
+// (salir: siempre 204, idempotente).
+export const DemoSandbox = z.object({ org_id: Id });
+export type DemoSandbox = z.infer<typeof DemoSandbox>;
+// E4d POST /api/demo/cerrando: mismo cuerpo que latido y salir.
+export const DemoCerrando = DemoSandbox;
+export type DemoCerrando = DemoSandbox;
 
 // ── Conexiones ────────────────────────────────────────────────────────────────
 const Token = z.string().trim().min(20).max(400);
@@ -139,6 +149,30 @@ export const FixRequest = z.object({ id: Id, finding_id: Id, status: FixRequestS
   created_at: Ts, started_at: Ts.nullable(), closed_at: Ts.nullable() });
 export type FixRequest = z.infer<typeof FixRequest>;
 
+// ── Historial de fallas (E13h GET …/findings/history, E13t GET …/findings/:id/timeline; 0025_historial_hallazgos.sql) ──
+// Todas las fallas de la org, abiertas o no, con las fechas de cada cambio de estado. fixed_at = cuándo se marcó
+// corregida (a mano, E14); verified_at = cuándo una auditoría comprobó que ya no está; ignored_at = cuándo se ignoró;
+// reopened_at y reopen_count = la última vez que reapareció tras corregirse y cuántas veces; changed_at = el último
+// cambio de estado (el orden de la lista). Las filas de antes de 0025 traen lo que se pudo sacar de las fotos de
+// audit_snapshots (y null si no se sabe). Sin evidencia ni prompt: eso lo da E13b.
+export const FindingHistoryItem = z.object({ id: Id, module: Module, rule_id: RuleId, severity: Severity,
+  title: z.string().max(200), resource: z.string().max(300), status: FindingStatus, status_reason: z.string().max(300).nullable(),
+  connection_id: Id.nullable(), first_seen_at: Ts, last_seen_at: Ts, fixed_at: Ts.nullable(), verified_at: Ts.nullable(),
+  ignored_at: Ts.nullable(), reopened_at: Ts.nullable(), reopen_count: z.number().int().min(0), changed_at: Ts });
+export type FindingHistoryItem = z.infer<typeof FindingHistoryItem>;
+// Hitos de la línea de tiempo de una falla. detectado = first_seen_at · enviado_ia / arreglando / envio_cancelado = su
+// cola fix_requests · corregido = fixed_at · verificado = verified_at · salio = una auditoría ya no la vio en un ciclo
+// anterior (foto de audit_snapshots, cuando no queda otra fecha de ese ciclo) · ignorado = ignored_at · reaparecido =
+// volvió tras corregirse · visto = last_seen_at. client solo en enviado_ia.
+export const FindingEventKind = z.enum(['detectado', 'enviado_ia', 'arreglando', 'envio_cancelado', 'corregido', 'verificado',
+  'salio', 'ignorado', 'reaparecido', 'visto']);
+export type FindingEventKind = z.infer<typeof FindingEventKind>;
+export const FindingEvent = z.object({ kind: FindingEventKind, at: Ts, client: FixRequestClient.nullable() });
+export type FindingEvent = z.infer<typeof FindingEvent>;
+// E13t: la falla y sus hitos de la más vieja a la más nueva.
+export const FindingTimeline = z.object({ item: FindingHistoryItem, events: z.array(FindingEvent).max(80) });
+export type FindingTimeline = z.infer<typeof FindingTimeline>;
+
 // ── Incidentes, avisos y acciones ─────────────────────────────────────────────
 export const Incident = z.object({ id: Id, code: z.string().regex(/^[A-Z0-9]{6}$/), module: Module, rule_ids: z.array(RuleId).min(1),
   severity: Severity, title: z.string().max(200), resource: z.string().max(200), status: IncidentStatus, event_count: z.number().int(),
@@ -148,7 +182,9 @@ export const Incident = z.object({ id: Id, code: z.string().regex(/^[A-Z0-9]{6}$
 export type Incident = z.infer<typeof Incident>;
 export const NotificationPublic = z.object({ id: Id, channel: Channel, recipient_masked: z.string(), template: z.string(),
   status: NotificationStatus, error: z.string().nullable(), created_at: Ts, sent_at: Ts.nullable(), delivered_at: Ts.nullable(),
-  read_at: Ts.nullable() });
+  read_at: Ts.nullable(),
+  // Sandbox de «Ver demo» (0026): el texto que habría llegado por WhatsApp (status skipped). Opcional: un BACK viejo no lo manda.
+  preview: z.string().max(2000).nullable().optional() });
 export type NotificationPublic = z.infer<typeof NotificationPublic>;
 export const ActionPublic = z.object({ id: Id, kind: ActionKind, target: z.string(), status: ActionStatus, created_at: Ts,
   undone_at: Ts.nullable(), expires_at: Ts.nullable(),

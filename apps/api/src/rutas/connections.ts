@@ -117,6 +117,12 @@ connections.post('/orgs/:org/connections', requireAdmin, async (c) => {
   const admin = db(env);
   const orgId = c.get('orgId');
   const createdBy = c.get('userId');
+  // Sandbox de «Ver demo» (0026): sus conexiones son del usuario y se borran con ella, pero nunca un token de acciones
+  // (las acciones de la sandbox van en seco; el trigger vg_sandbox_sin_acciones también lo impide en la base).
+  if (c.get('sandbox') && body.provider === 'cloudflare' && body.action_token !== undefined) {
+    throw new ApiError('forbidden', 'En la demo no se conecta el token de acciones: bloquear y el modo bajo ataque se simulan',
+      { reason: 'sandbox_sin_acciones' });
+  }
 
   if (body.provider === 'ingest') {
     const secreto = newIngestSecret();

@@ -10,7 +10,8 @@ import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
-import { requireProdHost } from '../mw/prod-host.ts';
+import { requireProdHostOSandbox } from '../mw/prod-host.ts';
+import { ofertaBajoAtaqueSandbox, proponerBajoAtaqueSandbox } from '../actions/sandbox.ts';
 import { limitar, MENSAJE_ENTREGA } from './actions.ts';
 
 // E55 · GET incidents/:id/under-attack (oferta; miembro, también viewer y anónimo de demo; solo lee la base) y E56 ·
@@ -38,6 +39,8 @@ async function leerIncidente(c: Context<AppEnv>): Promise<IncidenteBloqueo> {
 // E55: 4 subpeticiones (incidente; luego conexiones, acciones del host y conteo de CF_IP_FLOOD en paralelo), 0 a Cloudflare.
 bajoAtaque.get('/orgs/:org/incidents/:id/under-attack', async (c) => {
   const incidente = await leerIncidente(c);
+  // Sandbox de «Ver demo» (0026): sin conexión de acciones; la oferta y la propuesta van en seco (actions/sandbox.ts).
+  if (c.get('sandbox')) return c.json(await ofertaBajoAtaqueSandbox(c.env, { orgId: c.get('orgId'), incidente, rid: c.get('rid') }));
   return c.json(await leerOfertaBajoAtaque(c.env, { orgId: c.get('orgId'), incidente, rid: c.get('rid') }));
 });
 
@@ -66,12 +69,21 @@ const MENSAJE_RECHAZO: Record<MotivoPropuestaBajoAtaque, [ApiError['code'], (r: 
 
 // E56: ≈ 14–15 subpeticiones (incidente 1 + 5 en paralelo + sobre 2 + GET del entrypoint 1 + dry_run 1 + claves 2 +
 // aprobación 1 + Kapso 1; +1 si el dry_run se colara y hubiera que borrar la regla).
-bajoAtaque.post('/orgs/:org/incidents/:id/under-attack/propose', requireAdmin, requireProdHost, async (c) => {
+bajoAtaque.post('/orgs/:org/incidents/:id/under-attack/propose', requireAdmin, requireProdHostOSandbox, async (c) => {
   const limitado = await limitar(c, `u:${c.get('userId')}`);
   if (limitado) return limitado;
   const body = await cuerpo(c, UnderAttackPropose);
   const incidente = await leerIncidente(c);
   const rid = c.get('rid');
+  if (c.get('sandbox')) {
+    const s = await proponerBajoAtaqueSandbox(c.env, { orgId: c.get('orgId'), incidente, scope: body.scope,
+      requestedBy: c.get('userId'), rid });
+    if (s.ok) return c.json(s.respuesta);
+    const host = typeof incidente.details.host === 'string' ? incidente.details.host : null;
+    const [code, texto] = MENSAJE_RECHAZO[s.motivo];
+    throw new ApiError(code, texto({ motivo: s.motivo, host, zona: host }), { reason: s.motivo,
+      ...(s.action_id ? { action_id: s.action_id } : {}) });
+  }
   const r = await proponerBajoAtaque(c.env, { orgId: c.get('orgId'), incidente, scope: body.scope, connectionId: body.connection_id,
     requestedBy: c.get('userId'), rid });
   if (!r.ok) {

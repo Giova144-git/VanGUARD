@@ -92,6 +92,15 @@ describe('PaginaEvolucion', () => {
     expect(html).toContain('<bdi dir="ltr">a41c9d2</bdi>');
   });
 
+  it('abiertos por severidad (versiones con foto) y el filtro por módulo sin Rendimiento', () => {
+    const html = pintar(EVO);
+    expect(html).toMatch(/role="img" aria-label="Abiertos por severidad: mié\.? 21 · 14:03 1 crítica, 3 alta, 3 media, 4 baja e info; /);
+    const grupo = html.match(/<div[^>]*role="group" aria-label="Módulo">([\s\S]*?)<\/div>/)?.[1] ?? '';
+    expect(texto(grupo)).toBe('TodoSupabaseCloudflareCodebase');
+    expect(grupo).toContain('aria-pressed="true"');
+    expect(texto(html)).not.toContain('de toda la organización');   // con «Todo» no hace falta decirlo
+  });
+
   it('con la gráfica recortada el título dice «últimas N auditorías»', () => {
     expect(texto(pintar({ ...EVO, points: EVO.points.slice(-3), truncated: true }))).toContain('Puntaje por auditoría · últimas 3 auditorías');
   });

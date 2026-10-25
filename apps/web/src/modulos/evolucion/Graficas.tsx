@@ -2,7 +2,7 @@
 // sin animación, sin la capa de accesibilidad de Recharts y un contenedor role="img" cuyo aria-label resume los datos.
 // Ejes y avisos solo con fechas y números: nunca títulos ni recursos de hallazgos.
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { PuntoPuntaje, serieCambios } from '@/lib/evolucion';
+import type { PuntoPuntaje, serieAbiertos, serieCambios } from '@/lib/evolucion';
 
 export const EJE = { fill: 'var(--texto-3)', fontSize: 12 };
 export const AVISO = { background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--foreground)' };
@@ -63,4 +63,34 @@ export function GraficaCambios({ serie }: { serie: ReturnType<typeof serieCambio
       </ResponsiveContainer>
     </div>
   );
+}
+
+// Severidades apiladas (abiertos al cerrar cada versión y, P1, incidentes por día). Baja e info van juntas.
+export const PILA: [key: 'critical' | 'high' | 'medium' | 'low', nombre: string, color: string][] = [
+  ['critical', 'Crítica', 'var(--mal)'], ['high', 'Alta', 'var(--aviso)'], ['medium', 'Media', 'var(--info)'], ['low', 'Baja e info', 'var(--chart-1)'],
+];
+export const LEYENDA_PILA = PILA.map(([, n, c]): [string, string] => [n, c]);
+// `k` es la clave del eje (id de la versión o día) y `x` su texto.
+type FilaPila = { k: string; x: string; critical: number; high: number; medium: number; low: number };
+const resumenPila = (p: FilaPila) => PILA.map(([k, n]) => `${p[k]} ${n.toLowerCase()}`).join(', ');
+
+function Pila({ datos, titulo }: { datos: FilaPila[]; titulo: string }) {
+  const fecha = porId(datos.map((p) => ({ id: p.k, x: p.x })));
+  return (
+    <div className="h-56 w-full" role="img" aria-label={`${titulo}: ${datos.map((p) => `${p.x} ${resumenPila(p)}`).join('; ')}`}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={datos} margin={{ top: 8, right: 12, bottom: 0, left: -16 }} accessibilityLayer={false}>
+          <CartesianGrid stroke="var(--border)" vertical={false} />
+          <XAxis dataKey="k" tickFormatter={fecha} tick={EJE} tickLine={false} axisLine={false} minTickGap={24} />
+          <YAxis allowDecimals={false} tick={EJE} tickLine={false} axisLine={false} width={44} />
+          <Tooltip contentStyle={AVISO} cursor={{ fill: 'var(--muted)' }} labelFormatter={fecha} />
+          {PILA.map(([k, n, c]) => <Bar key={k} dataKey={k} name={n} stackId="s" fill={c} fillOpacity={0.75} isAnimationActive={false} />)}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+export function GraficaAbiertos({ serie }: { serie: ReturnType<typeof serieAbiertos> }) {
+  return <Pila datos={serie.map((p) => ({ ...p, k: p.id }))} titulo="Abiertos por severidad" />;
 }

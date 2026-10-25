@@ -15,15 +15,15 @@ import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useEvolucion } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import {
-  NOTA_FOTO_PUSH, SEVERIDADES, cifras, etiquetaVersion, horas, lineaFoto, porSeveridad, serieCambios, seriePuntaje, signo, tipoAuditoria,
-  totalFila, totalMatriz,
+  MODULOS_FOTO, NOTA_FOTO_PUSH, SEVERIDADES, cifras, etiquetaVersion, horas, lineaFoto, nombreModulo, porSeveridad, serieAbiertos,
+  serieCambios, seriePuntaje, signo, tipoAuditoria, totalFila, totalMatriz, type FiltroModulo,
 } from '@/lib/evolucion';
 import { cuando, miles } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { severidad } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
-import { GraficaCambios, GraficaPuntaje, Leyenda } from './Graficas';
+import { GraficaAbiertos, GraficaCambios, GraficaPuntaje, LEYENDA_PILA, Leyenda } from './Graficas';
 
 type Dias = 7 | 30 | 90;
 const PERIODOS: [Dias, string][] = [[7, '7 días'], [30, '30 días'], [90, '90 días']];
@@ -31,7 +31,7 @@ const PERIODOS: [Dias, string][] = [[7, '7 días'], [30, '30 días'], [90, '90 d
 // El grupo de botones de Rendimiento (PaginaRendimiento), con valores numéricos.
 function Grupo<T extends string | number>({ valor, opciones, onCambio, etiqueta }: { valor: T; opciones: [T, string][]; onCambio: (v: T) => void; etiqueta: string }) {
   return (
-    <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label={etiqueta}>
+    <div className="inline-flex w-fit max-w-full flex-wrap rounded-lg bg-muted p-1" role="group" aria-label={etiqueta}>
       {opciones.map(([v, t]) => (
         <button key={String(v)} type="button" aria-pressed={valor === v} onClick={() => onCambio(v)}
           className={cn('h-11 rounded-md px-3 text-sm font-medium', valor === v ? 'bg-card text-foreground' : 'text-muted-foreground')}>{t}</button>
@@ -51,39 +51,44 @@ function Dato({ etiqueta, valor, sub }: { etiqueta: string; valor: string; sub?:
   );
 }
 
-function Cifras({ evo }: { evo: Evolution }) {
-  const c = cifras(evo);
+// Con un módulo elegido, puntaje y tiempo siguen siendo de toda la organización y lo dicen.
+const GLOBAL = ' · de toda la organización';
+function Cifras({ evo, modulo }: { evo: Evolution; modulo: FiltroModulo }) {
+  const c = cifras(evo, modulo);
   const num = (n: number | null) => (n == null ? '—' : miles(n));
+  const global = modulo === 'todo' ? '' : GLOBAL;
   return (
     <div className="grid grid-cols-[repeat(auto-fit,minmax(11rem,1fr))] gap-3">
-      <Dato etiqueta="Puntaje en la última auditoría" valor={num(c.puntaje)} sub={c.cambio == null ? undefined : `${signo(c.cambio)} desde la primera del periodo`} />
+      <Dato etiqueta="Puntaje en la última auditoría" valor={num(c.puntaje)}
+        sub={c.cambio == null ? (global ? global.slice(3) : undefined) : `${signo(c.cambio)} desde la primera del periodo${global}`} />
       <Dato etiqueta="Abiertos al cerrarla" valor={num(c.abiertos)} sub={c.criticos == null ? undefined : `${c.criticos} ${c.criticos === 1 ? 'crítico' : 'críticos'}`} />
       <Dato etiqueta={`Nuevos en ${evo.days} días`} valor={num(c.nuevos)} />
       <Dato etiqueta={`Corregidos en ${evo.days} días`} valor={num(c.corregidos)} sub={c.comprobados == null ? undefined : `${c.comprobados} ${c.comprobados === 1 ? 'comprobado' : 'comprobados'}`} />
       <Dato etiqueta="Tiempo hasta comprobar la corrección" valor={horas(c.mttr.media)}
-        sub={c.mttr.n ? `mediana ${horas(c.mttr.mediana)} · ${c.mttr.n} ${c.mttr.n === 1 ? 'hallazgo' : 'hallazgos'}` : 'Aún ninguno comprobado'} />
+        sub={`${c.mttr.n ? `mediana ${horas(c.mttr.mediana)} · ${c.mttr.n} ${c.mttr.n === 1 ? 'hallazgo' : 'hallazgos'}` : 'Aún ninguno comprobado'}${global}`} />
     </div>
   );
 }
 
 // C · A · M · B (baja e info juntas) de los abiertos al cerrar cada versión.
-function Abiertos({ p }: { p: EvolutionPoint }) {
+function Abiertos({ p, modulo }: { p: EvolutionPoint; modulo: FiltroModulo }) {
   if (!p.snapshot || !p.open) return <span className="text-texto-3">—</span>;
-  const s = porSeveridad(p.open);
+  const s = porSeveridad(p.open, modulo);
   return (
     <span className="tabular-nums">
-      <span className="font-medium">{totalMatriz(p.open)}</span>
+      <span className="font-medium">{totalMatriz(p.open, modulo)}</span>
       <span className="text-[12.5px] text-texto-3" title="Críticos · altos · medios · bajos"> · C {s.critical} · A {s.high} · M {s.medium} · B {s.low + s.info}</span>
     </span>
   );
 }
-const cambio = (p: EvolutionPoint, k: 'new' | 'fixed') => (p.snapshot && !p.first && p[k] ? miles(totalMatriz(p[k])) : '—');
+const cambio = (p: EvolutionPoint, k: 'new' | 'fixed', modulo: FiltroModulo) =>
+  (p.snapshot && !p.first && p[k] ? miles(totalMatriz(p[k], modulo)) : '—');
 function Marca({ p }: { p: EvolutionPoint }) {
   if (!p.snapshot) return <Etiqueta texto="Anterior al historial" />;
   return p.first ? <Etiqueta texto="Punto de partida" /> : null;
 }
 
-function Versiones({ points }: { points: EvolutionPoint[] }) {
+function Versiones({ points, modulo }: { points: EvolutionPoint[]; modulo: FiltroModulo }) {
   const org = useOrg();
   const filas = [...points].reverse();                         // la más reciente arriba
   const enlace = (p: EvolutionPoint) => (
@@ -106,9 +111,9 @@ function Versiones({ points }: { points: EvolutionPoint[] }) {
                 <td className="py-2 pr-3"><span className="flex flex-wrap items-center gap-2">{etiquetaVersion(p.at)}
                   <span className="text-[12.5px] text-texto-3">· {tipoAuditoria(p.kind)}</span><Marca p={p} /></span></td>
                 <td className="pr-3">{p.score ?? '—'}</td>
-                <td className="pr-3"><Abiertos p={p} /></td>
-                <td className="pr-3">{cambio(p, 'new')}</td>
-                <td className="pr-3">{cambio(p, 'fixed')}</td>
+                <td className="pr-3"><Abiertos p={p} modulo={modulo} /></td>
+                <td className="pr-3">{cambio(p, 'new', modulo)}</td>
+                <td className="pr-3">{cambio(p, 'fixed', modulo)}</td>
                 <td className="text-right">{enlace(p)}</td>
               </tr>
             ))}
@@ -125,9 +130,9 @@ function Versiones({ points }: { points: EvolutionPoint[] }) {
             </div>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[15px] tabular-nums">
               <div className="flex items-baseline justify-between gap-2"><dt className="text-[12.5px] text-texto-3">Puntaje</dt><dd>{p.score ?? '—'}</dd></div>
-              <div className="flex items-baseline justify-between gap-2"><dt className="text-[12.5px] text-texto-3">Nuevos</dt><dd>{cambio(p, 'new')}</dd></div>
-              <div className="flex items-baseline justify-between gap-2"><dt className="text-[12.5px] text-texto-3">Corregidos</dt><dd>{cambio(p, 'fixed')}</dd></div>
-              <div className="col-span-2 flex items-baseline justify-between gap-2"><dt className="text-[12.5px] text-texto-3">Abiertos</dt><dd><Abiertos p={p} /></dd></div>
+              <div className="flex items-baseline justify-between gap-2"><dt className="text-[12.5px] text-texto-3">Nuevos</dt><dd>{cambio(p, 'new', modulo)}</dd></div>
+              <div className="flex items-baseline justify-between gap-2"><dt className="text-[12.5px] text-texto-3">Corregidos</dt><dd>{cambio(p, 'fixed', modulo)}</dd></div>
+              <div className="col-span-2 flex items-baseline justify-between gap-2"><dt className="text-[12.5px] text-texto-3">Abiertos</dt><dd><Abiertos p={p} modulo={modulo} /></dd></div>
             </dl>
             {enlace(p)}
           </li>
@@ -146,22 +151,35 @@ function Seccion({ id, titulo, children }: { id: string; titulo: string; childre
   );
 }
 
+// Filtro por módulo (P1): Rendimiento no entra, ningún paso de auditoría escribe sus hallazgos.
+const MODULOS: [FiltroModulo, string][] = [['todo', 'Todo'], ...MODULOS_FOTO.map((m): [FiltroModulo, string] => [m, nombreModulo(m)])];
+
 function Contenido({ evo }: { evo: Evolution }) {
+  const [modulo, setModulo] = useState<FiltroModulo>('todo');
   const serie = seriePuntaje(evo.points);
-  const cambios = serieCambios(evo.points);
+  const cambios = serieCambios(evo.points, modulo);
+  const abiertos = serieAbiertos(evo.points, modulo);
   const recorte = evo.truncated ? ` · últimas ${evo.points.length} auditorías` : '';
+  const de = modulo === 'todo' ? '' : ` · ${nombreModulo(modulo)}`;
   return (
     <>
-      <Cifras evo={evo} />
+      <Grupo etiqueta="Módulo" valor={modulo} opciones={MODULOS} onCambio={setModulo} />
+      <Cifras evo={evo} modulo={modulo} />
       {cambios.length === 0 ? <p className="rounded-xl border bg-card px-4 py-3 text-[15px] text-muted-foreground">Con la próxima auditoría verás qué cambió.</p> : null}
       {serie.length > 1 ? <Seccion id="t-puntaje" titulo={`Puntaje por auditoría${recorte}`}><GraficaPuntaje serie={serie} /></Seccion> : null}
       {cambios.length ? (
-        <Seccion id="t-cambios-evo" titulo={`Nuevos y corregidos${recorte}`}>
+        <Seccion id="t-cambios-evo" titulo={`Nuevos y corregidos${de}${recorte}`}>
           <GraficaCambios serie={cambios} />
           <Leyenda items={[['Nuevos (hacia arriba)', 'var(--mal)'], ['Corregidos (hacia abajo)', 'var(--bien)']]} />
         </Seccion>
       ) : null}
-      <Versiones points={evo.points} />
+      {abiertos.length > 1 ? (
+        <Seccion id="t-abiertos" titulo={`Abiertos por severidad${de}${recorte}`}>
+          <GraficaAbiertos serie={abiertos} />
+          <Leyenda items={LEYENDA_PILA} />
+        </Seccion>
+      ) : null}
+      <Versiones points={evo.points} modulo={modulo} />
     </>
   );
 }

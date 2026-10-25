@@ -61,6 +61,15 @@ describe('PaginaAuditoria · una línea por repo', () => {
     expect(auditoria(ScanRun.parse(fx.scanDone))).not.toContain('Repos revisados');
   });
 
+  it('entradas fuera de contrato (api() en producción las deja pasar) se descartan sin tumbar la auditoría', () => {
+    const malas = [null, { connection_id: DOS.repos![0]!.connection_id, status: 'done' }, { ...DOS.repos![1]!, repo_full_name: 7 }] as unknown as ScanRun['repos'];
+    expect(() => auditoria({ ...DOS, repos: [...DOS.repos!, ...malas!] })).not.toThrow();
+    const html = auditoria({ ...DOS, repos: [...DOS.repos!, ...malas!] });
+    expect(html.match(/<li class="flex flex-wrap items-baseline/g)).toHaveLength(2);
+    // Con una sola entrada válida no hay lista (hacen falta 2 repos).
+    expect(auditoria({ ...DOS, repos: [DOS.repos![0]!, ...malas!] })).not.toContain('Repos revisados');
+  });
+
   it('un repo con el token revocado lo dice; el nombre sale con sus controles bidi a la vista', () => {
     const repos = [DOS.repos![0]!, { ...DOS.repos![1]!, repo_full_name: `equipo/${RLO}landing`, status: 'failed' as const, error_code: 'unauthorized', findings: undefined }];
     const html = auditoria({ ...DOS, repos, steps: DOS.steps.map((s) => (s.name === 'repo' ? { ...s, error_code: 'parcial' } : s)) });

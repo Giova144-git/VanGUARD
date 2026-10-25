@@ -26,7 +26,7 @@ import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { esId } from '@/lib/ids';
 import { cuando, hace, miles, usd } from '@/lib/formato';
 import { Markdown } from '@/lib/markdown';
-import { comoMarkdown, consultaHistorial, topeUsd, wikiAnterior } from './texto';
+import { comoMarkdown, consultaHistorial, mismoRepo, topeUsd, wikiAnterior } from './texto';
 import { useEstancada } from './estancada';
 import { useEstimarWiki, useGenerarWiki } from '@/lib/mutaciones';
 import { extraerRepo, extraerRepoYRama } from '@/lib/pre-guardas';
@@ -212,7 +212,7 @@ function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string
 function EstadoWikiRepo({ q, repo }: { q: ReturnType<typeof useWikiRuns>; repo: string }) {
   if (q.isError) return <span className="text-sm text-muted-foreground">No pudimos leer sus wikis</span>;
   if (!q.data) return <span className="text-texto-3">—</span>;
-  const runs = q.data.filter((r) => r.repo_full_name.toLowerCase() === repo.toLowerCase());
+  const runs = q.data.filter((r) => mismoRepo(r.repo_full_name, repo));
   if (runs.some((r) => r.status === 'queued' || r.status === 'running')) return <Etiqueta texto="Generando…" rol="info" />;
   const lista = wikiAnterior(runs, { repo_full_name: repo });
   if (!lista) return <Etiqueta texto="Sin wiki" />;
@@ -387,13 +387,13 @@ export default function PaginaWiki() {
             {conexionElegida && !activaElegida ? (
               // Con la conexión caída se ven sus wikis, pero no se puede generar otra (el token no lee el repo).
               <p className="text-[15px]">
-                <bdi dir="ltr" className="font-mono">{sinBidi(repoElegido ?? '')}</bdi>: la conexión no está activa.{' '}
+                <bdi dir="ltr" className="font-mono break-all">{sinBidi(repoElegido ?? '')}</bdi>: la conexión no está activa.{' '}
                 <Link to={`/o/${org.id}/connections/github?repo=${encodeURIComponent(repoElegido ?? '')}`} className="font-medium underline underline-offset-4">
                   Reconecta el repo para generar otra</Link>
               </p>
             ) : (
               <form onSubmit={estimarElegido} className="flex flex-col gap-4" noValidate>
-                <p className="text-[15px]">Generar la wiki de <bdi dir="ltr" className="font-mono font-semibold">{sinBidi(repoElegido ?? '')}</bdi>
+                <p className="text-[15px]">Generar la wiki de <bdi dir="ltr" className="font-mono font-semibold break-all">{sinBidi(repoElegido ?? '')}</bdi>
                   {conexionElegida ? null : <span className="text-muted-foreground"> (repo público)</span>}</p>
                 <div className="md:max-w-xs">
                   <CampoTexto id="wiki-rama-repo" etiqueta="Rama (opcional)" valor={ramaElegido} onCambio={setRamaElegido} mono placeholder="main" />
@@ -420,7 +420,7 @@ export default function PaginaWiki() {
       {doc.isError ? <ErrorBloque error={doc.error} onReintentar={() => doc.refetch()} /> : null}
 
       <section className="flex flex-col gap-3" aria-labelledby="t-historial">
-        <h3 id="t-historial" className="text-[17px] font-semibold">Historial{consulta.repo ? <span className="font-mono text-[13px] font-normal text-muted-foreground"> · <bdi dir="ltr">{sinBidi(consulta.repo)}</bdi></span> : null}</h3>
+        <h3 id="t-historial" className="text-[17px] font-semibold">Historial{consulta.repo ? <span className="font-mono text-[13px] font-normal break-all text-muted-foreground"> · <bdi dir="ltr">{sinBidi(consulta.repo)}</bdi></span> : null}</h3>
         {sinFormato ? (repoElegido ? <p className="text-texto-3">—</p>
           : <p className="text-sm text-muted-foreground">Escribe el repo como owner/repo (o pega su URL de GitHub) para ver su historial.</p>)
           : historial.isError ? <ErrorBloque error={historial.error} onReintentar={() => historial.refetch()} />

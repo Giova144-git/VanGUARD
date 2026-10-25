@@ -100,6 +100,9 @@ function ReposDelPaso({ repos, enCurso }: { repos: NonNullable<ScanRun['repos']>
 
 function Pasos({ run }: { run: ScanRun }) {
   const org = useOrg();
+  // api() en producción deja pasar un cuerpo fuera de contrato: una entrada nula o sin nombre de texto se salta (sinBidi
+  // lanzaría y tumbaría la auditoría); estado y código desconocidos ya caen a su respaldo en lineaRepo.
+  const repos = Array.isArray(run.repos) ? run.repos.filter((r) => !!r && typeof r.repo_full_name === 'string') : [];
   return (
     <ol className="overflow-hidden rounded-xl border bg-card" aria-label="Pasos de la auditoría">
       {run.steps.map((s) => {
@@ -121,8 +124,8 @@ function Pasos({ run }: { run: ScanRun }) {
             <span className="text-sm text-muted-foreground">{p.texto}</span>
             {e === 'sin_mirar' && prov ? <Link to={`/o/${org.id}/connections/${prov}`} className="inline-flex items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4"><KeyRound className="size-3.5" />Sin conexión · Conectar</Link> : null}
             {e === 'error' && t.modulo ? <Link to={`/o/${org.id}/${t.modulo}`} className="inline-flex items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4">Abrir {entradaNav(t.modulo)?.nombre}<ChevronRight className="size-3.5" /></Link> : null}
-            {s.name === 'repo' && Array.isArray(run.repos) && run.repos.length >= 2
-              ? <ReposDelPaso repos={run.repos} enCurso={run.status === 'queued' || run.status === 'running'} /> : null}
+            {s.name === 'repo' && repos.length >= 2
+              ? <ReposDelPaso repos={repos} enCurso={run.status === 'queued' || run.status === 'running'} /> : null}
           </li>
         );
       })}

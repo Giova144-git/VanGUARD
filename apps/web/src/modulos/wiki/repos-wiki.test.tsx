@@ -97,11 +97,26 @@ describe('PaginaWiki · varios repos', () => {
     expect(caida).not.toContain('Generar la wiki de');
   });
 
+  it('a 375 px un repo largo parte en «Generar la wiki de», en el aviso de la conexión caída y en el historial', () => {
+    expect(pagina(ADMIN, CX)).toContain(`Generar la wiki de <bdi dir="ltr" class="font-mono font-semibold break-all">${REPO}</bdi>`);
+    expect(pagina(ADMIN, [revocada(GH)])).toContain(`<bdi dir="ltr" class="font-mono break-all">${REPO}</bdi>: la conexión no está activa.`);
+    expect(pagina(VIEWER, CX)).toMatch(/Historial<span class="[^"]*break-all[^"]*"> · <bdi dir="ltr">/);
+  });
+
   it('sin conexiones GitHub, la página de siempre: sin lista y con el campo del repo a la vista', () => {
     const html = pagina(ADMIN, CX.filter((c) => c.provider !== 'github'));
     expect(html).not.toContain('aria-label="Repos conectados"');
     expect(html).not.toContain('Otro repo público');
     expect(html).toContain('id="wiki-repo"');
+  });
+
+  it('una corrida fuera de contrato (sin repo; api() en producción la deja pasar) no tumba la página del viewer', () => {
+    const rota = { ...RUNS[0]!, id: 'c5000000-0000-4000-8000-0000000000f1', repo_full_name: null, finished_at: '2030-01-01T00:00:00.000Z' };
+    const conRota = [rota, ...RUNS] as unknown as WikiRun[];
+    expect(wikiAnterior(conRota, { repo_full_name: REPO })?.id).toBe(LISTA.id);
+    const html = pagina(VIEWER, [...CX, GH2], `/o/${ORG}/wiki`, [[['org', ORG, 'wiki', 'runs', REPO], conRota]]);
+    expect(html).toContain('Wiki lista');
+    expect(html).toContain('aria-label="Wiki del repo"');            // la buena se abre igual
   });
 
   it('el nombre del repo sale con sus controles bidi a la vista y en <bdi dir="ltr">', () => {

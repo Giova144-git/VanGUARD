@@ -130,7 +130,9 @@ export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: 
     <section id="revision-codigo" className="flex scroll-mt-20 flex-col gap-4 rounded-xl border bg-card p-5" aria-labelledby="t-revision">
       <div className="flex flex-wrap items-center gap-3">
         <h3 id="t-revision" className="flex-1 text-[17px] font-semibold">Revisión automática de código</h3>
-        <Etiqueta {...chipHook(c ?? { state: 'off', last_event_at: null, last_ping_at: null }, (t) => cuando(t))} />
+        {/* Sin revisiones, «último evento» confunde («Aún no hay revisiones» debajo): solo «Conectada» (UX P1-12). */}
+        <Etiqueta {...(c?.state === 'connected' && !(q.data?.recent.length) ? { texto: 'Conectada', rol: 'bien' as const }
+          : chipHook(c ?? { state: 'off', last_event_at: null, last_ping_at: null }, (t) => cuando(t)))} />
         {/* «Silenciar repo 1 h» desde WhatsApp: sin avisos de revisión de este repo hasta esa hora (el check sigue). */}
         {silenciado ? <Etiqueta texto={silenciado} icono={BellOff} /> : null}
         {org.puedeEscribir && s.available ? (
@@ -185,7 +187,7 @@ function Umbral({ org, prefs, puedeEscribir }: { org: string; prefs: ReturnType<
   }
   return (
     <p className="text-[15px]">
-      {u ? <>Te avisamos por WhatsApp desde <span className="font-semibold">{severidad(u).etiqueta}</span></> : 'No te avisamos por WhatsApp'}
+      {u ? <>Te avisamos por WhatsApp de severidad <span className="font-semibold">{severidad(u).etiqueta.toLowerCase()}</span>{u === 'critical' ? '' : ' o más'}</> : 'No te avisamos por WhatsApp'}
       {puedeEscribir ? <> · <Link to={`/o/${org}/settings#avisos`} className="font-medium underline underline-offset-4">Cambiar</Link></> : null}
     </p>
   );

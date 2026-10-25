@@ -57,7 +57,7 @@ export default function PaginaCloudflare() {
           <p className="text-[15px]"><span className="font-mono"><bdi dir="ltr">{sinBidi(zona)}</bdi></span>{plan ? <span className="text-muted-foreground"> · plan {sinBidi(plan)}</span> : null}</p>
         </section>
       ) : null}
-      <BotonRevisar kind="cloudflare" titulo="Revisar Cloudflare ahora" descripcion="Tu zona: tráfico, IPs y configuración" />
+      <BotonRevisar kind="cloudflare" titulo="Revisar Cloudflare ahora" descripcion="Tu zona o tu sitio: tráfico, IPs y configuración" />
     </PantallaModulo>
   );
 }

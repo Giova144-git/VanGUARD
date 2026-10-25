@@ -31,7 +31,8 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
   switch (accion.clase) {
     case 'prompt': {
       const id = typeof accion.args?.finding_id === 'string' ? accion.args.finding_id : null;
-      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{verbo}<ChevronRight className="size-4" /></Link> : null;
+      // Quien no puede generar el prompt (viewer, «Ver demo») abre el mismo detalle: «Ver detalle», no «Generar» (UX P1-9).
+      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{puedeEscribir ? verbo : 'Ver detalle'}<ChevronRight className="size-4" /></Link> : null;
     }
     case 'copiar':
       return accion.copiar ? <BotonCopiar valor={accion.copiar} texto={verbo} /> : null;

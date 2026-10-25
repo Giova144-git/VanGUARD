@@ -28,9 +28,9 @@ function resumen(org: OrgActual) {
 }
 
 describe('PaginaResumen · lo que falta conectar', () => {
-  it('el viewer ve «Falta: Cloudflare, Rendimiento» sin enlace y «Conectar Cloudflare» apagado con su motivo', () => {
+  it('el viewer ve «Sin revisar: Cloudflare, Rendimiento» sin enlace y «Conectar Cloudflare» apagado con su motivo', () => {
     const html = resumen(VIEWER);
-    expect(html).toContain('Falta: Cloudflare, Rendimiento');
+    expect(html).toContain('Sin revisar: Cloudflare, Rendimiento');
     expect(html).not.toMatch(/href="\/o\/[^"]+\/connections"[^>]*>Conectar</);
     expect(html).toContain('Conectar Cloudflare');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Conectar Cloudflare/);

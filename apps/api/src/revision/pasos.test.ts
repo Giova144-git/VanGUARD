@@ -472,6 +472,34 @@ describe('paso diff · pull_request (B7)', () => {
   });
 });
 
+// La misma clave que la auditoría (asignaciones/varias-codebases.md §2.2, B2): con meta.hallazgos_por_repo el repo entra
+// en dedupe_key; el resource visible no cambia.
+describe('paso diff · clave de los hallazgos por repo (varias-codebases B2)', () => {
+  const claves = async (meta: Fila) => {
+    conexion = { id: CONN, status: 'active', meta: { default_branch: 'main', repo_id: 42, ...meta } };
+    Object.assign(fila, { status: 'queued', alert_state: 'none' });
+    rpcs = [];
+    expect(await correr()).toBe('ack');
+    return filas().map((f) => ({ resource: f.resource, clave: f.dedupe_key }));
+  };
+
+  it('con la marca, otra dedupe_key para el mismo hallazgo (repo en minúsculas); sin ella, la de hoy', async () => {
+    const hoy = await claves({ repo_full_name: 'Acme/Tienda' });
+    const marcada = await claves({ repo_full_name: 'Acme/Tienda', hallazgos_por_repo: true });
+    const minusculas = await claves({ repo_full_name: 'acme/tienda', hallazgos_por_repo: true });
+    const otroRepo = await claves({ repo_full_name: 'acme/landing', hallazgos_por_repo: true });
+    expect(hoy.length).toBeGreaterThan(0);
+    expect(marcada.map((f) => f.resource)).toEqual(hoy.map((f) => f.resource));
+    for (const [i, f] of marcada.entries()) {
+      expect(f.clave).toMatch(/^[0-9a-f]{64}$/);
+      expect(f.clave).not.toBe(hoy[i]!.clave);
+      expect(f.clave).toBe(minusculas[i]!.clave);
+      expect(f.clave).not.toBe(otroRepo[i]!.clave);
+    }
+    expect(await claves({ repo_full_name: 'acme/landing' })).toEqual(hoy);   // sin la marca, el repo no entra
+  });
+});
+
 describe('ocultarRutas', () => {
   it('solo la evidencia casa con el cable trampa → evidence {redacted:true} y conserva título y recurso', async () => {
     const f = { rule_id: 'CB_SECRET_GENERIC', severity: 'medium', confirmed: false, origin: 'rule' as const,

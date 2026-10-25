@@ -6,7 +6,7 @@ import { db } from '../lib/db.ts';
 import { activeKid, getKeys } from '../lib/keyring.ts';
 import { ProviderError } from '../lib/http.ts';
 import { log } from '../lib/log.ts';
-import { TOPE_SUBPETICIONES, conexionActiva, guardarHallazgos, type Borrador } from './comun.ts';
+import { TOPE_SUBPETICIONES, claveDeRepo, conexionActiva, guardarHallazgos, type Borrador } from './comun.ts';
 import { DETALLE_POR_MENSAJE, depsVulnerables, detallar, esTransitorio, filaDep, type Dep } from './osv.ts';
 import { arbolRepo, elegirArchivosRiesgo, leerContenidos, lockfilesDe, rutasEnv } from './repo.ts';
 
@@ -109,6 +109,9 @@ export const pasoRepo: FnPaso = async (env, m, intento = 1) => {
   if (!conn) return { status: 'skipped', error_code: 'no_connection' };
   const repo = String(conn.meta.repo_full_name ?? '');
   const admin = db(env);
+  // Con meta.hallazgos_por_repo, el repo entra en dedupe_key de cada fila (archivos, rondas de OSV y cierre): el mismo
+  // hallazgo en dos repos son dos filas y la auto-verificación de uno no cierra el del otro (varias-codebases.md §2.2).
+  const clave = claveDeRepo(conn.meta);
 
   // ── repo:osv (continuación): ronda N sobre las deps que viajan en el mensaje ──
   if (m.cursor?.startsWith('osv')) {
@@ -142,7 +145,8 @@ export const pasoRepo: FnPaso = async (env, m, intento = 1) => {
     const cupo = TOPE_HALLAZGOS - est.escritas;
     if (resto.length && est.ronda < RONDAS_OSV) {
       const { dentro, fuera } = recortar<Borrador>(d.filas, cupo);
-      const g = await guardarHallazgos(env, m, 'codebase', conn.id, dentro, false, undefined, presupuesto(gastadas, SUB.encolar));
+      const g = await guardarHallazgos(env, m, 'codebase', conn.id, dentro.map(clave), false, undefined,
+        presupuesto(gastadas, SUB.encolar));
       const sigue = osvIncompleto || fuera.length > 0 || g.descartadas > 0;
       return { continuar: { cursor: aCursor({ ronda: est.ronda + 1, parcial: est.parcial || sigue, tripwire: est.tripwire || g.descartadas > 0,
         osvIncompleto: sigue, escritas: est.escritas + g.n, omitidas: est.omitidas + fuera.length }), deps: resto.map(aCompacta) } };
@@ -152,7 +156,8 @@ export const pasoRepo: FnPaso = async (env, m, intento = 1) => {
     const osvVioTodo = !osvIncompleto && fuera.length === 0;
     const parcial = est.parcial || !osvVioTodo;
     // cierre: auto-verifica si vio todo
-    const g = await guardarHallazgos(env, m, 'codebase', conn.id, dentro, !parcial, undefined, presupuesto(gastadas, SUB_CIERRE));
+    const g = await guardarHallazgos(env, m, 'codebase', conn.id, dentro.map(clave), !parcial, undefined,
+      presupuesto(gastadas, SUB_CIERRE));
     const tripwire = est.tripwire || g.descartadas > 0;
     const omitidas = est.omitidas + fuera.length;
     const cov = await leerCobertura(env, m);
@@ -204,8 +209,8 @@ export const pasoRepo: FnPaso = async (env, m, intento = 1) => {
   const parcial = leido.truncado || leido.incompletos.length > 0 || !gitignoreSabido || lockParcial || depsDeMas || fuera.length > 0;
   const cierre = deps.length === 0;
   const gastadas = ANTES_DE_GITHUB + leido.subpeticiones;
-  const g = await guardarHallazgos(env, m, 'codebase', conn.id, dentro, cierre && !parcial, undefined,   // sin deps es el cierre
-    presupuesto(gastadas, cierre ? SUB_CIERRE : SUB.cobertura + SUB.encolar));
+  const g = await guardarHallazgos(env, m, 'codebase', conn.id, dentro.map(clave), cierre && !parcial,   // sin deps: cierre
+    undefined, presupuesto(gastadas, cierre ? SUB_CIERRE : SUB.cobertura + SUB.encolar));
   const tripwire = g.descartadas > 0;
 
   const omitidoSi = (f: (r: string) => boolean) => fuera.some((b) => f(b.rule_id));

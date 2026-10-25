@@ -93,10 +93,14 @@ beforeEach(() => {
   actual = null;
   lineas = [];
   tablas = {
+    // CONN es la conexión GitHub más antigua: el repo principal (varias-codebases B0/B7).
     connections: [
-      { id: CONN, org_id: ORG, provider: 'github', meta: { repo_full_name: 'Acme/Tienda' } },
-      { id: CONN_OTRO, org_id: ORG, provider: 'github', meta: { repo_full_name: 'acme/otro' } },
-      { id: CONN_SB, org_id: ORG, provider: 'supabase', meta: { project_ref: 'abcd' } },
+      { id: CONN, org_id: ORG, provider: 'github', kind: 'read', created_at: '2026-10-20T10:00:00+00:00',
+        meta: { repo_full_name: 'Acme/Tienda' } },
+      { id: CONN_OTRO, org_id: ORG, provider: 'github', kind: 'read', created_at: '2026-10-24T17:00:00+00:00',
+        meta: { repo_full_name: 'acme/otro' } },
+      { id: CONN_SB, org_id: ORG, provider: 'supabase', kind: 'read', created_at: '2026-10-19T10:00:00+00:00',
+        meta: { project_ref: 'abcd' } },
     ],
     scan_runs: [],
     findings: [],
@@ -215,6 +219,43 @@ describe('hallazgosDelRepo: los de la auditoría de ESE repo, también para la s
   it('repo auditado sin hallazgos → [] (auditó y no encontró nada), con su fecha', async () => {
     tablas.scan_runs!.push(scan('full_audit', [['supabase', 'failed'], ['repo', 'done']], T_REPO, { params: { connection_id: CONN } }));
     expect(await hallazgosDelRepo(admin(), ORG, 'ACME/tienda')).toEqual({ hallazgos: [], auditoria_at: '2026-10-24T18:00:00.000Z' });
+  });
+
+  describe('varios repos (varias-codebases B7): qué repo leyó cada auditoría', () => {
+    const cobertura = (codebase: Record<string, unknown>) =>
+      ({ coverage: { seen: 1, total: 4, missing: [], detail: { codebase } } });
+    const LAS_18 = { hallazgos: [], auditoria_at: '2026-10-24T18:00:00.000Z' };   // auditado y limpio (T_REPO)
+
+    it('full_audit sin params.connection_id y con detail.codebase.connection_id del repo 1 → el repo 2, sin auditar', async () => {
+      tablas.scan_runs!.push(scan('full_audit', [['repo', 'done']], T_REPO, cobertura({ connection_id: CONN, miradas: {} })));
+      expect(await hallazgosDelRepo(admin(), ORG, 'acme/otro')).toEqual({});
+      expect(await hallazgosDelRepo(admin(), ORG, 'acme/tienda')).toEqual(LAS_18);
+      // «Analizar este repo» del 2.º: ya cuenta como auditado.
+      tablas.scan_runs!.push(scan('repo', [['repo', 'done']], '2026-10-24T19:00:00+00:00',
+        { params: { connection_id: CONN_OTRO }, ...cobertura({ connection_id: CONN_OTRO }) }));
+      expect(await hallazgosDelRepo(admin(), ORG, 'acme/otro')).toEqual({ hallazgos: [], auditoria_at: '2026-10-24T19:00:00.000Z' });
+    });
+
+    it('con detail.codebase.repos manda la entrada de cada repo: solo cuenta la que quedó done', async () => {
+      const repos = [{ connection_id: CONN, status: 'done' },
+        { connection_id: CONN_OTRO, status: 'failed', error_code: 'unauthorized' }];
+      tablas.scan_runs!.push(scan('full_audit', [['repo', 'done']], T_REPO, cobertura({ connection_id: CONN_OTRO, repos })));
+      expect(await hallazgosDelRepo(admin(), ORG, 'acme/tienda')).toEqual(LAS_18);
+      expect(await hallazgosDelRepo(admin(), ORG, 'acme/otro')).toEqual({});   // ni el connection_id plano lo salva
+    });
+
+    it('auditoría de antes de B0 (sin repos, connection_id ni params): la de la conexión GitHub de LECTURA más antigua', async () => {
+      // El token de estados del bloqueo de merge (kind 'action'), aunque sea más antiguo y de acme/otro, no entra.
+      tablas.connections!.push({ id: 'c0aa0000-0000-4000-8000-000000000006', org_id: ORG, provider: 'github', kind: 'action',
+        created_at: '2026-10-01T10:00:00+00:00', meta: { repo_full_name: 'acme/otro' } });
+      tablas.scan_runs!.push(scan('full_audit', [['repo', 'done']], T_REPO));
+      expect(await hallazgosDelRepo(admin(), ORG, 'acme/tienda')).toEqual(LAS_18);
+      expect(await hallazgosDelRepo(admin(), ORG, 'acme/otro')).toEqual({});
+      const cx = doble.ops.find((o) => o.table === 'connections')!;
+      expect(cx.filters).toEqual(expect.arrayContaining([['provider', 'eq', 'github'], ['kind', 'eq', 'read']]));
+      expect(pedidos.find((p) => p.table === 'connections')?.orden).toEqual([['created_at', true], ['id', true]]);
+      expect(doble.ops.find((o) => o.table === 'scan_runs')?.columns).toContain('coverage');
+    });
   });
 
   it('error de la base → ApiError internal (nunca hallazgos a medias)', async () => {

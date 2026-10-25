@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
-import { AlertPrefs, AlertPrefsIn, CodeReview, CodeReviewConfig, CodeReviewPut, CodeReviewSaved, CodeReviewState,
-  type NotificationStatus } from '@vanguard/contracts';
+import { AlertPrefs, AlertPrefsIn, CodeReview, CodeReviewConfig, CodeReviewPut, CodeReviewQuery, CodeReviewSaved,
+  CodeReviewState, type NotificationStatus } from '@vanguard/contracts';
 import { newWebhookSecret } from '@vanguard/core/crypto';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
@@ -97,24 +97,30 @@ function aRevision(f: Fila, avisos: Fila[], ahora: number): CodeReview | null {
   return r.success ? r.data : null;
 }
 
-// E45 · GET /api/orgs/:org/code-review · user · P0 → CodeReviewState. ≤ 4 subpeticiones: conexión, config y revisiones
-// (en paralelo) y los WhatsApp de esas revisiones.
+// E45 · GET /api/orgs/:org/code-review[?connection_id=] · user · P0 → CodeReviewState de ESE repo (varias-codebases.md
+// §3). Sin parámetro, la conexión principal (B0); malformado → 422; ajena, inexistente o no GitHub → sin_conexion, sin
+// distinguir. ≤ 4 subpeticiones, en serie: conexión → su config → las 10 últimas revisiones de ESA config (sin config,
+// ninguna) → los WhatsApp de esas revisiones.
 revision.get('/orgs/:org/code-review', async (c) => {
+  const q = CodeReviewQuery.safeParse({ connection_id: c.req.query('connection_id') || undefined });
+  if (!q.success) {
+    throw new ApiError('invalid_body', 'Revisa la conexión', { field_errors: { connection_id: ['Id no válido'] } });
+  }
   const orgId = c.get('orgId');
   const admin = db(c.env);
-  const [conn, cfg, revs] = await Promise.all([
-    conexionGithub(c),
-    admin.from('code_review_configs').select(COLUMNAS_CONFIG).eq('org_id', orgId).order('created_at', { ascending: false })
-      .limit(1),
-    admin.from('code_reviews').select(COLUMNAS_REVISION).eq('org_id', orgId).order('created_at', { ascending: false })
-      .limit(10),
-  ]);
-  if (cfg.error || revs.error) {
-    log('error', 'revision.estado_error', { rid: c.get('rid'), code: cfg.error?.code ?? revs.error?.code ?? null });
+  const conn = await conexionGithub(c, q.data.connection_id);
+  if (!conn) return c.json(CodeReviewState.parse({ available: false, reason: 'sin_conexion', config: null, recent: [] }));
+  const { data: cfg, error: ec } = await admin.from('code_review_configs').select(COLUMNAS_CONFIG).eq('org_id', orgId)
+    .eq('connection_id', conn.id).maybeSingle();
+  const filaCfg = (cfg ?? null) as unknown as Fila | null;
+  const revs = filaCfg && !ec
+    ? await admin.from('code_reviews').select(COLUMNAS_REVISION).eq('org_id', orgId).eq('config_id', String(filaCfg.id))
+      .order('created_at', { ascending: false }).limit(10)
+    : { data: [], error: null };
+  if (ec || revs.error) {
+    log('error', 'revision.estado_error', { rid: c.get('rid'), code: ec?.code ?? revs.error?.code ?? null });
     throw new ApiError('internal', 'No pudimos leer la revisión de código');
   }
-  if (!conn) return c.json(CodeReviewState.parse({ available: false, reason: 'sin_conexion', config: null, recent: [] }));
-  const filaCfg = ((cfg.data ?? []) as unknown as Fila[]).find((f) => f.connection_id === conn.id) ?? null;
   const filas = (revs.data ?? []) as unknown as Fila[];
   const porRevision = new Map<string, Fila[]>();
   if (filas.length) {

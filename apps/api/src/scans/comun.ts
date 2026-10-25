@@ -29,6 +29,15 @@ export async function conexionActiva(env: CloudflareBindings, m: MsgScan, provid
   return (data as Conexion | null) ?? null;
 }
 
+// Clave de los hallazgos de código por repo (varias-codebases.md §2.2). Solo conexiones nacidas con
+// meta.hallazgos_por_repo (E8 la pone si la org ya tenía otro repo): las de antes conservan su clave y sus hallazgos
+// abiertos no se duplican. El resource visible no cambia; el repo solo entra en el hash de dedupe_key.
+export function claveDeRepo(meta: Record<string, unknown>): (b: Borrador) => Borrador {
+  const repo = meta.hallazgos_por_repo === true && typeof meta.repo_full_name === 'string'
+    ? meta.repo_full_name.toLowerCase() : null;
+  return repo ? (b) => ({ ...b, dedupe_input: `${repo}|${b.dedupe_input ?? b.resource}` }) : (b) => b;
+}
+
 // Toda la evidencia pasa por redact() antes de salir del paso; dedupe_key = sha256hex(org|regla|recurso) (§05). La usa
 // también la revisión de código (revision/pasos.ts), que en vez de prefiltrar pasa sus filas por ocultarRutas.
 export async function aFila(orgId: string, b: Borrador) {

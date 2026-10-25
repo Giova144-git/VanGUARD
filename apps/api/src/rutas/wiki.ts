@@ -64,11 +64,15 @@ wiki.post('/orgs/:org/wiki/estimate', requireAdmin, async (c) => {
   const salida = salidaGithub(TOPE_SUBPETICIONES - SUBPETICIONES_RUTA_E40);
   let estimacion: Estimacion;
   try {
-    // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub, nada más.
-    estimacion = await conTokenGithub(c.env, db(c.env), c.get('orgId'), body.connection_id, async (githubToken) => {
-      const deps = depsWiki({ fetch: salida.fetch, githubToken });
-      return estimar(await pasoArbol(body, deps), deps);
-    });
+    // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub, nada más. La
+    // conexión tiene que ser la del repo pedido (B8 de varias-codebases.md). Con conexión, repo_full_name es el de la
+    // conexión y no el canónico (repo renombrado): es el que el FRONT manda a E41 y la llave de la caché, como en E41.
+    estimacion = await conTokenGithub(c.env, db(c.env), c.get('orgId'), body.connection_id, body.repo_full_name,
+      async (githubToken, repoConexion) => {
+        const deps = depsWiki({ fetch: salida.fetch, githubToken });
+        const e = estimar(await pasoArbol(body, deps), deps);
+        return repoConexion === null ? e : { ...e, repo_full_name: repoConexion };
+      });
   } catch (e) {
     errorGithub(c, e, conToken, salida, 'wiki.estimar_github');
   }
@@ -97,8 +101,11 @@ wiki.post('/orgs/:org/wiki/estimate', requireAdmin, async (c) => {
 // desde el host real). Resuelve el commit con leerMeta (≤ 3 subpeticiones, sin modelo): con la llave completa decide
 // aquí mismo si sirve la caché, sin encolar nada. El árbol lo lee el paso arbol de la cola: pasoArbol aquí serían ≤ 25
 // subpeticiones más que no hacen falta para decidir. La fila guarda commit_sha y branch para que el paso arbol
-// documente ese mismo commit. Dos E41 iguales a la vez no pagan dos veces: el índice único de corridas en curso de 0010
-// deja una sola fila y un solo mensaje (crearCorrida).
+// documente ese mismo commit. Con conexión, repo_full_name de la fila es el meta.repo_full_name de la conexión, el que
+// se comprobó: los pasos arbol y area lo vuelven a comprobar (B8) y con un repo renombrado el canónico de leerMeta ya no
+// casaría (la conexión conserva el nombre de antes); además así casan hallazgosDelRepo y el ?repo= de E43, que el FRONT
+// pide con el nombre de la conexión. Sin conexión, el canónico, como siempre. Dos E41 iguales a la vez no pagan dos
+// veces: el índice único de corridas en curso de 0010 deja una sola fila y un solo mensaje (crearCorrida).
 wiki.post('/orgs/:org/wiki/runs', requireAdmin, requireColaPropia, async (c) => {
   const body = await cuerpo(c, WikiRunCreate);
   const { success } = await c.env.RL_COSTLY.limit({ key: `u:${c.get('userId')}` });
@@ -113,16 +120,20 @@ wiki.post('/orgs/:org/wiki/runs', requireAdmin, requireColaPropia, async (c) => 
   const connectionId = body.connection_id?.toLowerCase();   // como se guarda: va a la fila y la lee el paso arbol
   const conToken = connectionId !== undefined;
   const salida = salidaGithub(TOPE_SUBPETICIONES - SUBPETICIONES_RUTA_E41);
-  let meta: MetaRepo;
+  let leido: { meta: MetaRepo; repo: string };
   try {
-    meta = await conTokenGithub(c.env, admin, orgId, connectionId, (githubToken) =>
-      leerMeta(body, depsWiki({ fetch: salida.fetch, githubToken })));
+    leido = await conTokenGithub(c.env, admin, orgId, connectionId, body.repo_full_name,
+      async (githubToken, repoConexion) => {
+        const meta = await leerMeta(body, depsWiki({ fetch: salida.fetch, githubToken }));
+        return { meta, repo: repoConexion ?? meta.full_name };
+      });
   } catch (e) {
     errorGithub(c, e, conToken, salida, 'wiki.correr_github');
   }
 
+  const { meta, repo } = leido;
   const force = body.force === true;
-  const creada = await crearCorrida(admin, { orgId, repo: meta.full_name, commitSha: meta.commit_sha, branch: meta.branch,
+  const creada = await crearCorrida(admin, { orgId, repo, commitSha: meta.commit_sha, branch: meta.branch,
     userId: c.get('userId'), connectionId, maxUsd: body.max_usd ?? MAX_USD_POR_DEFECTO, force });
   if (creada.tipo === 'nueva') {
     try {

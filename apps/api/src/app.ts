@@ -41,7 +41,8 @@ app.route('/webhooks', webhooksGithub);                  // E47: revisión de c�
 // 64 KB, también sin Content-Length (bodyLimit cuenta el cuerpo al leerlo).
 app.use('/ingest/*', bodyLimit({ maxSize: MAX_CUERPO, onError: demasiadoGrande }));
 app.route('/ingest', ingest);
-// MCP propio (S13 §13.7): sin sesión ni originGuard (solo Bearer vgk_, sin cookie ni CORS); mcpAuth pone el tenant del
-// token y aplica RL_API con clave mcp:<token_id>. Una ruta exacta: /mcp/* sigue en el 404 de Hono.
+// MCP propio (S13 §13.7): sin sesión ni originGuard (solo Bearer vgk_, sin cookie ni CORS); mcpAuth cobra RL_API con
+// clave mcp-ip:<ip> antes de buscar el token y pone el tenant del token; mcp/protocolo.ts cobra mcp:<token_id> por cada
+// petición JSON-RPC y no acepta lotes. Una ruta exacta: /mcp/* sigue en el 404 de Hono.
 app.use('/mcp', limiteCuerpo);
 app.all('/mcp', mcpAuth, handleMcp);

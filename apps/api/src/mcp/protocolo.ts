@@ -5,18 +5,27 @@ import { log } from '../lib/log.ts';
 
 // Servidor MCP propio (S13 §13.7): Streamable HTTP SIN estado y con respuesta JSON (sin SSE), escrito a mano sobre
 // JSON-RPC 2.0 en vez del SDK: cero dependencias nuevas en el bundle del Worker, ~0,1 ms de CPU por mensaje y nada de
-// eval (el validador es zod). Cada POST trae un mensaje (o un lote) y se responde en el acto; GET no abre stream (405).
+// eval (el validador es zod). Cada POST trae UN mensaje y se responde en el acto; GET no abre stream (405). Sin lotes: la
+// versión 2025-06-18 del protocolo los quitó y un lote de 20 get_overview hacía 301 subpeticiones con un solo cobro.
 // Métodos: initialize, ping, tools/list, tools/call, prompts/list y prompts/get. Ninguno llama a Claude ni escribe.
 export const VERSIONES = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const;
 export const MAX_TEXTO = 100_000;   // > 100 KB → isError en vez de un JSON cortado (S13 §13.7)
+// Presupuesto de subpeticiones por POST (Workers Free: ≤ 40 de 50, TOPE_SUBPETICIONES; como rutas/wiki.ts): con un
+// mensaje por POST, el peor caso es SUBPETICIONES_BASE más lo que declara la herramienta o el prompt. Base: mcpAuth hace
+// RL_API mcp-ip + SELECT de mcp_tokens + UPDATE de last_used_at (≤ 1 por minuto) y despachar, RL_API mcp:<token_id>; las
+// dos de RL_API se cuentan por si acaso. La más cara es get_overview: 4 + 15 = 19 de 40 (mcp.test.ts mide cada una).
+export const SUBPETICIONES_BASE = 4;
+export const LIMITADO = -32000;   // RL_API mcp:<token_id> agotado: manejadorMcp responde 429 con Retry-After
 
 export type Herramienta = {
   name: string; title: string; description: string; scope: McpScope; input: z.ZodObject;
+  subpeticiones: number;   // las de run() en el peor caso (ver SUBPETICIONES_BASE)
   run: (args: Record<string, unknown>, c: Context<AppEnv>) => Promise<unknown>;
 };
 export type ArgumentoPrompt = { name: string; description: string; required?: boolean };
 export type Prompt = {
   name: string; title: string; description: string; scope: McpScope; arguments: ArgumentoPrompt[];
+  subpeticiones: number;   // las de get() en el peor caso
   get: (args: Record<string, string>, c: Context<AppEnv>) => Promise<{ description: string; text: string }>;
 };
 export type Servidor = { nombre: string; titulo: string; version: string; instrucciones: string; herramientas: Herramienta[]; prompts: Prompt[] };
@@ -50,7 +59,9 @@ async function llamar(s: Servidor, ctx: McpCtx, p: Record<string, unknown>, c: C
   const h = s.herramientas.find((x) => x.name === p.name);
   if (!h) return null;
   const t0 = Date.now();
-  const fin = (ok: boolean, code?: string) => log(ok ? 'info' : 'warn', 'mcp_call', { token_id: ctx.tokenId, tool: h.name, ms: Date.now() - t0, ok, code });
+  // mcp_id y no token_id: redact() tacha toda clave con «token» y se perdía la traza. Nunca el token ni su hash.
+  const fin = (ok: boolean, code?: string) => log(ok ? 'info' : 'warn', 'mcp_call',
+    { mcp_id: ctx.tokenId, tool: h.name, ms: Date.now() - t0, ok, code });
   if (!ctx.scopes.includes(h.scope)) { fin(false, 'scope'); return texto(`Este token no tiene el permiso ${h.scope}.`, true); }
   const a = h.input.safeParse(obj(p.arguments));
   if (!a.success) {
@@ -76,6 +87,10 @@ async function despachar(s: Servidor, m: Mensaje, c: Context<AppEnv>): Promise<R
   if (!esPeticion) return null;
   if (!idValido(m.id) || m.jsonrpc !== '2.0' || typeof m.method !== 'string') return ko(idValido(m.id) ? m.id : null, -32600, 'Petición JSON-RPC no válida');
   const id = m.id;
+  // RL_API con clave mcp:<token_id> por CADA petición, no por POST (§06.9): cada tools/call y cada prompts/get cuentan
+  // aunque algún día vuelvan los lotes; initialize, ping y las listas también, como cuando se cobraba cada POST.
+  const { success } = await c.env.RL_API.limit({ key: `mcp:${ctx.tokenId}` });
+  if (!success) return ko(id, LIMITADO, 'Demasiadas llamadas con este token. Espera un minuto.');
   const p = obj(m.params);
   switch (m.method) {
     case 'initialize': {
@@ -106,10 +121,10 @@ async function despachar(s: Servidor, m: Mensaje, c: Context<AppEnv>): Promise<R
       if (falta) return ko(id, -32602, `Falta el argumento ${falta.name}`);
       try {
         const r = await x.get(args, c);
-        log('info', 'mcp_prompt', { token_id: ctx.tokenId, prompt: x.name, ok: true });
+        log('info', 'mcp_prompt', { mcp_id: ctx.tokenId, prompt: x.name, ok: true });
         return ok(id, { description: r.description, messages: [{ role: 'user', content: { type: 'text', text: r.text } }] });
       } catch (e) {
-        log('warn', 'mcp_prompt', { token_id: ctx.tokenId, prompt: x.name, ok: false });
+        log('warn', 'mcp_prompt', { mcp_id: ctx.tokenId, prompt: x.name, ok: false });
         return ko(id, e instanceof McpFallo ? -32602 : -32603, e instanceof McpFallo ? e.message : 'Error interno de VanGUARD');
       }
     }
@@ -117,7 +132,8 @@ async function despachar(s: Servidor, m: Mensaje, c: Context<AppEnv>): Promise<R
   }
 }
 
-/** Manejador de /mcp (tras mcpAuth). Un lote se contesta con un arreglo; si todo eran notificaciones, 202 sin cuerpo. */
+/** Manejador de /mcp (tras mcpAuth): un mensaje JSON-RPC por POST. Un lote (arreglo) → 400 con -32600 «Invalid
+ *  Request» sin id, como pide Streamable HTTP para lo que no se acepta; una notificación → 202 sin cuerpo. */
 export function manejadorMcp(s: Servidor) {
   return async (c: Context<AppEnv>) => {
     if (c.req.method !== 'POST') {
@@ -126,15 +142,19 @@ export function manejadorMcp(s: Servidor) {
     }
     let cuerpo: unknown;
     try { cuerpo = await c.req.json(); } catch { return c.json(ko(null, -32700, 'El cuerpo no es JSON válido'), 400); }
-    const lote = Array.isArray(cuerpo);
-    const mensajes = (lote ? cuerpo : [cuerpo]) as unknown[];
-    if (!mensajes.length || mensajes.length > 20) return c.json(ko(null, -32600, 'Lote vacío o de más de 20 mensajes'), 400);
-    const respuestas: Respuesta[] = [];
-    for (const m of mensajes) {   // en serie: cada herramienta ya hace sus lecturas en paralelo
-      const r = await despachar(s, obj(m) as Mensaje, c);
-      if (r) respuestas.push(r);
+    if (Array.isArray(cuerpo)) {
+      return c.json(ko(null, -32600, 'Invalid Request: este servidor no acepta lotes JSON-RPC (MCP 2025-06-18 los quitó). '
+        + 'Manda un mensaje por POST.'), 400);
     }
-    if (!respuestas.length) return c.body(null, 202);
-    return c.json(lote ? respuestas : respuestas[0]);
+    if (!cuerpo || typeof cuerpo !== 'object') {
+      return c.json(ko(null, -32600, 'Invalid Request: el cuerpo no es un mensaje JSON-RPC'), 400);
+    }
+    const r = await despachar(s, cuerpo as Mensaje, c);
+    if (!r) return c.body(null, 202);
+    if (r.error?.code === LIMITADO) {
+      c.header('Retry-After', '60');
+      return c.json(r, 429);
+    }
+    return c.json(r);
   };
 }

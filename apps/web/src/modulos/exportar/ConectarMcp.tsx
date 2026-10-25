@@ -129,7 +129,7 @@ export function ConectarMcp({ org, puedeEscribir }: { org: string; puedeEscribir
   return (
     <>
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Conectar por MCP">
-        <div className="flex items-center gap-2"><KeyRound className="size-5 text-info" /><h3 className="flex-1 text-[17px] font-semibold">Conecta tu IA por MCP</h3><Etiqueta texto="Solo lectura" /></div>
+        <div className="flex items-center gap-2"><KeyRound className="size-5 text-muted-foreground" /><h3 className="flex-1 text-[17px] font-semibold">Conecta tu IA por MCP</h3><Etiqueta texto="Solo lectura" /></div>
         <p className="text-sm text-muted-foreground">
           Con el MCP de VanGUARD tu IA consulta el estado de tu repo, tus vulnerabilidades y los prompts de corrección, sin copiar y pegar.
           Nunca escribe en VanGUARD ni gasta tu presupuesto de IA.
@@ -141,7 +141,7 @@ export function ConectarMcp({ org, puedeEscribir }: { org: string; puedeEscribir
         </details>
       </section>
       <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Resolver con un botón">
-        <div className="flex items-center gap-2"><Wand2 className="size-5 text-info" /><h3 className="flex-1 text-[17px] font-semibold">Resuelve tus vulnerabilidades con un botón</h3></div>
+        <div className="flex items-center gap-2"><Wand2 className="size-5 text-muted-foreground" /><h3 className="flex-1 text-[17px] font-semibold">Resuelve tus vulnerabilidades con un botón</h3></div>
         <p className="text-sm text-muted-foreground">
           Con el MCP conectado, copia el comando y pégalo en tu IA abierta en el repo: trae cada corrección de VanGUARD y la aplica
           una por una, mostrándote el diff antes. En cada hallazgo tienes además «Resolver con mi IA».

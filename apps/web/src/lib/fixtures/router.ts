@@ -1,7 +1,7 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
+  fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, RepoFullName, ScanCreate, WikiRepoRef, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
   type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
   type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
   type WikiRun, type ZipFinding,
@@ -651,27 +651,51 @@ function probarCanal(org: string, body: unknown) {
 
 // ── DeepWiki (E40–E44) ───────────────────────────────────────────────────────────────────────────────────────
 // E42 devuelve wikiRunRunning en las primeras consultas de cada corrida y luego wikiRunDone, para ver el progreso.
-// fx.wikiRuns solo existen en la demo con datos; en otra org cada generación es una corrida nueva de esa org.
+// fx.wikiRuns solo existen en la demo con datos (son del repo de la víctima); cualquier otra generación es una corrida
+// nueva de esa org y de su repo. E43 filtra por ?repo= sin distinguir mayúsculas (varias-codebases §4.1).
 const consultasWiki = new Map<string, number>();
-const wikisNuevas = new Map<string, string>();                  // corrida → org
+const wikisNuevas = new Map<string, { org: string; repo: string }>();   // corrida → org y repo
 function verWikiRun(org: string, id: string, contar = true): WikiRun {
-  const deOrg = wikisNuevas.get(id);
-  const deDemo = deOrg === undefined && !vacia(org);
-  if (deOrg !== org && !deDemo) return falla(404, 'not_found', 'Esa wiki no existe');
+  const nueva = wikisNuevas.get(id);
+  const deDemo = nueva === undefined && !vacia(org);
+  if (nueva?.org !== org && !deDemo) return falla(404, 'not_found', 'Esa wiki no existe');
   if (deDemo && id !== fx.wikiRunDone.id) return fx.wikiRuns.find((x) => x.id === id) ?? falla(404, 'not_found', 'Esa wiki no existe');
   const n = (consultasWiki.get(id) ?? 0) + (contar ? 1 : 0);   // sin contar: el doc no adelanta el progreso
   consultasWiki.set(id, n);
-  return n <= 3 ? { ...fx.wikiRunRunning, id } : { ...fx.wikiRunDone, id };
+  const repo = nueva ? { repo_full_name: nueva.repo } : {};
+  return n <= 3 ? { ...fx.wikiRunRunning, id, ...repo } : { ...fx.wikiRunDone, id, ...repo };
 }
-const listarWikis = (org: string) => vacia(org)
-  ? [...wikisNuevas].filter(([, o]) => o === org).map(([id]) => verWikiRun(org, id, false)).reverse()   // más recientes primero
-  : fx.wikiRuns;
+function listarWikis(org: string, q: URLSearchParams) {
+  const repo = q.get('repo');
+  if (repo !== null && !RepoFullName.safeParse(repo).success) falla(422, 'invalid_body', 'Repo no válido', { field_errors: { repo: ['owner/repo'] } });
+  const nuevas = [...wikisNuevas].filter(([id, w]) => w.org === org && id !== fx.wikiRunDone.id).map(([id]) => verWikiRun(org, id, false)).reverse();   // más recientes primero
+  const todas = vacia(org) ? nuevas : [...nuevas, ...fx.wikiRuns];
+  return repo === null ? todas : todas.filter((r) => r.repo_full_name.toLowerCase() === repo.toLowerCase());
+}
+// B8 (§7): un connection_id tiene que ser una conexión GitHub de lectura activa de la org y del MISMO repo; si no, 404.
+function conexionWiki(org: string, b: { connection_id?: unknown; repo_full_name?: unknown }) {
+  if (b.connection_id === undefined) return;
+  const repo = typeof b.repo_full_name === 'string' ? b.repo_full_name.toLowerCase() : '';
+  const c = listaDe(org).find((x) => x.id === b.connection_id && x.provider === 'github' && x.kind === 'read' && x.status === 'active');
+  if (!c || String(c.meta.repo_full_name ?? '').toLowerCase() !== repo) falla(404, 'not_found', 'Conexión no encontrada');
+}
+function estimarWiki(org: string, body: unknown) {
+  exigirAdmin();
+  const b = WikiRepoRef.safeParse(body);
+  if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
+  conexionWiki(org, b.data);
+  return { ...fx.wikiEstimate, repo_full_name: b.data.repo_full_name };   // solo lee GitHub; cached_run_id null
+}
 function generarWiki(org: string, body: unknown) {
   exigirAdmin();
-  const b = (body ?? {}) as { max_usd?: number };
+  const b = (body ?? {}) as { max_usd?: number; repo_full_name?: unknown; connection_id?: unknown };
   if (b.max_usd != null && (b.max_usd <= 0 || b.max_usd > 5)) falla(422, 'invalid_body', 'El tope va de 0 a 5 USD');
-  const id = vacia(org) ? crypto.randomUUID() : fx.wikiRunDone.id;
-  if (vacia(org)) wikisNuevas.set(id, org);
+  conexionWiki(org, b);
+  const repo = typeof b.repo_full_name === 'string' ? b.repo_full_name : fx.wikiRunDone.repo_full_name;
+  // En la demo, la del repo de la víctima es la corrida del fixture (con su documento); la de otro repo, una nueva.
+  const delFixture = !vacia(org) && repo.toLowerCase() === fx.wikiRunDone.repo_full_name.toLowerCase();
+  const id = delFixture ? fx.wikiRunDone.id : crypto.randomUUID();
+  if (!delFixture) wikisNuevas.set(id, { org, repo });
   consultasWiki.set(id, 0);                                      // cada generación vuelve a mostrar el progreso
   return { wiki_run_id: id, cached: false };
 }
@@ -724,10 +748,10 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/traffic`),                 (m) => traficoDe(m[1]!)],
   ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[1]!, m[2]!)],
-  ['POST', r(`${ORG}\\/wiki\\/estimate`),         () => { exigirAdmin(); return fx.wikiEstimate; }],   // solo lee GitHub; cached_run_id null
+  ['POST', r(`${ORG}\\/wiki\\/estimate`),         (m, b) => estimarWiki(m[1]!, b)],
   ['POST', r(`${ORG}\\/wiki\\/runs`),             (m, b) => generarWiki(m[1]!, b)],
-  ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m) => listarWikis(m[1]!)],
-  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), (m) => ({ ...fx.wikiDoc, run_id: verWikiRun(m[1]!, m[2]!, false).id })],
+  ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m, _b, q) => listarWikis(m[1]!, q)],
+  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), (m) => { const w = verWikiRun(m[1]!, m[2]!, false); return { ...fx.wikiDoc, run_id: w.id, repo_full_name: w.repo_full_name }; }],
   ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                (m) => listarContactos(m[1]!)],
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],

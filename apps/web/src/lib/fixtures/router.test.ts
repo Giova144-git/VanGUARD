@@ -380,3 +380,26 @@ describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo
     expect(await fallo(`/api/orgs/${DEMO}/alert-prefs`, 'PUT', { review_whatsapp_min: 'altisima', review_voice_min: 'off' })).toMatchObject({ status: 422 });
   });
 });
+
+// Al final a propósito: estos casos dejan un 2.º repo en la org de demo (el tope de 3 orgs por dueño ya está gastado).
+describe('varias codebases (asignaciones/varias-codebases.md §6.5)', () => {
+  const REPO = fx.wikiRunDone.repo_full_name;
+  const REPO_2 = fx.conexionGithub2.meta.repo_full_name;
+  const CONN_GITHUB = fx.connections.find((c) => c.provider === 'github')!.id;
+
+  it('wiki: E43 filtra por ?repo= sin distinguir mayúsculas (422 si no es owner/repo) y E40/E41 exigen el repo de la conexión', async () => {
+    expect((await pedir<WikiRun[]>(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO.toUpperCase()}`)).map((r) => r.id)).toEqual(fx.wikiRuns.map((r) => r.id));
+    expect(await pedir(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO_2}`)).toEqual([]);
+    expect(await fallo(`/api/orgs/${DEMO}/wiki/runs?repo=foo`)).toMatchObject({ status: 422 });
+    const otroRepo = { repo_full_name: REPO_2, connection_id: CONN_GITHUB };
+    expect(await fallo(`/api/orgs/${DEMO}/wiki/estimate`, 'POST', otroRepo)).toMatchObject({ status: 404, message: 'Conexión no encontrada' });
+    expect(await fallo(`/api/orgs/${DEMO}/wiki/runs`, 'POST', otroRepo)).toMatchObject({ status: 404, message: 'Conexión no encontrada' });
+    expect(await pedir(`/api/orgs/${DEMO}/wiki/estimate`, 'POST', { repo_full_name: REPO_2 })).toMatchObject({ repo_full_name: REPO_2 });
+    // La wiki de otro repo de la demo es una corrida nueva, de ese repo, con su documento.
+    const { wiki_run_id: id } = await pedir<{ wiki_run_id: string }>(`/api/orgs/${DEMO}/wiki/runs`, 'POST', { repo_full_name: REPO_2 });
+    expect(id).not.toBe(fx.wikiRunDone.id);
+    expect((await pedir<WikiRun[]>(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO_2}`)).map((r) => r.id)).toEqual([id]);
+    expect((await pedir<WikiRun[]>(`/api/orgs/${DEMO}/wiki/runs?repo=${REPO}`)).map((r) => r.id)).toEqual(fx.wikiRuns.map((r) => r.id));
+    expect(await pedir(`/api/orgs/${DEMO}/wiki/runs/${id}/doc`)).toMatchObject({ run_id: id, repo_full_name: REPO_2 });
+  });
+});

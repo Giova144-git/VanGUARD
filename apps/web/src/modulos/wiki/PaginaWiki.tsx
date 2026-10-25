@@ -1,10 +1,12 @@
 // /o/:orgId/wiki «Wiki del repo» (DeepWiki, E40–E44): explica un repo a un directivo. Estimar antes de gastar; la
 // caché del mismo commit es gratis. El viewer (y el «Ver demo» del jurado) solo ve historial y documento: nunca gasta IA.
+// Con repos conectados (varias-codebases §6.3) la página los lista todos y abre sola la última wiki lista del elegido.
+// Ninguna wiki se genera sola al conectar un repo: gastaría IA sin estimar (decisión D2 de Giovanni).
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { BookOpen, ChevronDown, Coins, FileText, RotateCw, Sparkles } from 'lucide-react';
 import { Collapsible as CollapsiblePrimitive } from 'radix-ui';
-import type { WikiDoc, WikiEstimate, WikiRun } from '@vanguard/contracts';
+import type { ConnectionPublic, WikiDoc, WikiEstimate, WikiRun } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
@@ -15,6 +17,7 @@ import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { CampoTexto } from '@/componentes/vg/FormToken';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
+import { SectorPlegable } from '@/componentes/vg/SectorPlegable';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
@@ -27,6 +30,7 @@ import { comoMarkdown, consultaHistorial, topeUsd, wikiAnterior } from './texto'
 import { useEstancada } from './estancada';
 import { useEstimarWiki, useGenerarWiki } from '@/lib/mutaciones';
 import { extraerRepo, extraerRepoYRama } from '@/lib/pre-guardas';
+import { activaDeRepo, nombreRepo, repoConsultable, reposGithub } from '@/lib/repos';
 import { deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 
@@ -204,23 +208,101 @@ function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string
   );
 }
 
+// Estado de la wiki de un repo en la lista (§4.1): «Wiki lista · commit abc1234 · hace 2 h», «Generando…» o «Sin wiki».
+function EstadoWikiRepo({ q, repo }: { q: ReturnType<typeof useWikiRuns>; repo: string }) {
+  if (q.isError) return <span className="text-sm text-muted-foreground">No pudimos leer sus wikis</span>;
+  if (!q.data) return <span className="text-texto-3">—</span>;
+  const runs = q.data.filter((r) => r.repo_full_name.toLowerCase() === repo.toLowerCase());
+  if (runs.some((r) => r.status === 'queued' || r.status === 'running')) return <Etiqueta texto="Generando…" rol="info" />;
+  const lista = wikiAnterior(runs, { repo_full_name: repo });
+  if (!lista) return <Etiqueta texto="Sin wiki" />;
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+      <Etiqueta texto="Wiki lista" rol="bien" />
+      <span>commit <span className="font-mono">{corto(lista.commit_sha)}</span> · {hace(lista.finished_at ?? lista.created_at)}</span>
+    </span>
+  );
+}
+
+// Una fila por repo conectado. Cada una pide su historial (E43 ?repo=, ≤ 5 consultas): el del repo elegido es la misma
+// consulta que el historial de abajo.
+function FilaRepoWiki({ org, c, actual, alElegir }: { org: string; c: ConnectionPublic; actual: boolean; alElegir: (repo: string) => void }) {
+  const repo = nombreRepo(c);
+  const q = useWikiRuns(org, repo, repoConsultable(repo));
+  return (
+    <li>
+      <button type="button" onClick={() => alElegir(repo)} disabled={!repoConsultable(repo)} aria-current={actual || undefined}
+        className={cn('flex min-h-14 w-full flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3 text-left last:border-b-0 hover:bg-muted disabled:cursor-default disabled:hover:bg-transparent', actual && 'bg-info-relleno')}>
+        {/* El nombre no se recorta: un repo largo parte en dos líneas (375 px). */}
+        <span className="min-w-0 font-mono text-[15px] font-semibold break-all"><bdi dir="ltr">{sinBidi(repo || c.label)}</bdi></span>
+        {c.status === 'active' ? null : <Etiqueta texto="Conexión no activa" />}
+        <span className="ml-auto"><EstadoWikiRepo q={q} repo={repo} /></span>
+      </button>
+    </li>
+  );
+}
+
+// Todos los repos conectados (activos o no, sin repetidos por nombre): con la conexión caída, el anónimo de la demo sigue
+// viendo la wiki ya generada (§4.2).
+export function ReposWiki({ org, repos, elegido, alElegir }: { org: string; repos: ConnectionPublic[]; elegido: string | null; alElegir: (repo: string) => void }) {
+  return (
+    <section className="flex flex-col gap-3" aria-labelledby="t-repos-wiki">
+      <h3 id="t-repos-wiki" className="text-[17px] font-semibold">{repos.length === 1 ? 'Tu repo' : `Tus repos (${repos.length})`}</h3>
+      <ul className="overflow-hidden rounded-xl border bg-card" aria-label="Repos conectados">
+        {repos.map((c) => <FilaRepoWiki key={c.id} org={org} c={c} alElegir={alElegir}
+          actual={!!elegido && nombreRepo(c).toLowerCase() === elegido.toLowerCase()} />)}
+      </ul>
+    </section>
+  );
+}
+
+// Formulario del repo escrito a mano (repos públicos): sin conexiones es el de siempre; con ellas va plegado.
+function FormRepoLibre({ repo, rama, errorRepo, repoConexion, cambiarRepo, setRama, onSubmit, ocupado }: {
+  repo: string; rama: string; errorRepo: string | null; repoConexion: boolean; cambiarRepo: (v: string) => void; setRama: (v: string) => void;
+  onSubmit: (ev: FormEvent) => void; ocupado: boolean;
+}) {
+  const valido = extraerRepo(repo);
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
+      <div className="grid gap-4 md:grid-cols-[2fr_1fr]">
+        <CampoTexto id="wiki-repo" etiqueta="Repositorio" valor={repo} onCambio={cambiarRepo} mono placeholder="owner/repo" error={errorRepo}
+          ayuda={repo.trim() && !valido ? 'Formato owner/repo, o pega la URL del repo en GitHub.'
+            : repoConexion ? 'Un repo público de GitHub. Los de tus conexiones están en la lista.' : 'Escribe un repo público, o conecta GitHub para uno privado.'} />
+        <CampoTexto id="wiki-rama" etiqueta="Rama (opcional)" valor={rama} onCambio={setRama} mono placeholder="main" />
+      </div>
+      <div><BotonAccion variante="principal" tam="grande" icono={Coins} ocupado={ocupado} type="submit">Estimar costo</BotonAccion></div>
+    </form>
+  );
+}
+
 export default function PaginaWiki() {
   const org = useOrg();
   const [params, setParams] = useSearchParams();
   const crudo = params.get('run');
-  const runId = esId(crudo) ? crudo : null;
   const elegir = (id: string) => { const p = new URLSearchParams(params); p.set('run', id); setParams(p); };
-  const gh = useConexiones(org.id).data?.find((c) => c.provider === 'github' && c.kind === 'read' && c.status === 'active');
-  const repoConexion = typeof gh?.meta.repo_full_name === 'string' ? gh.meta.repo_full_name : '';
+  const conexiones = useConexiones(org.id);
+  // Varias codebases (§6.3): la lista de repos conectados manda. Sin conexiones GitHub, la página de siempre.
+  const repos = useMemo(() => reposGithub(conexiones.data), [conexiones.data]);
+  const conRepos = repos.length > 0;
+  const crudoRepo = params.get('repo');
+  // ?repo= elige el repo: uno conectado (con el nombre de su conexión) o el público que se estimó a mano. Sin él, el primero.
+  const repoElegido = !conRepos ? null
+    : (crudoRepo && repoConsultable(crudoRepo)
+      ? repos.map(nombreRepo).find((n) => n.toLowerCase() === crudoRepo.toLowerCase()) ?? crudoRepo
+      : nombreRepo(repos[0]!));
+  const conexionElegida = repoElegido ? repos.find((c) => nombreRepo(c).toLowerCase() === repoElegido.toLowerCase()) ?? null : null;
+  const activaElegida = repoElegido ? activaDeRepo(conexiones.data, repoElegido) : null;
   const [repo, setRepo] = useState('');
   const [rama, setRama] = useState('');
+  const [ramaElegido, setRamaElegido] = useState('');
   const [errorRepo, setErrorRepo] = useState<string | null>(null);
-  useEffect(() => { if (repoConexion && !repo) setRepo(repoConexion); }, [repoConexion, repo]);
   const repoValido = useMemo(() => extraerRepo(repo), [repo]);
   // El historial espera 400 ms a que se deje de escribir y solo pregunta por un owner/repo válido (E43 da 422 si no).
   const [repoQuieto, setRepoQuieto] = useState(repo);
   useEffect(() => { const t = setTimeout(() => setRepoQuieto(repo), 400); return () => clearTimeout(t); }, [repo]);
-  const consulta = useMemo(() => consultaHistorial(repoQuieto), [repoQuieto]);
+  const libre = useMemo(() => consultaHistorial(repoQuieto), [repoQuieto]);
+  // Con repos conectados el historial es el del repo elegido; sin ellos, el del campo (como antes de varias codebases).
+  const consulta = repoElegido ? { repo: repoElegido, consultar: repoConsultable(repoElegido) } : libre;
   const cambiarRepo = (v: string) => {
     setRepo(v);
     const r = extraerRepoYRama(v)?.rama;   // una URL …/tree/<rama> rellena la rama si estaba vacía
@@ -231,18 +313,41 @@ export default function PaginaWiki() {
   const generar = useGenerarWiki(org.id);
   const historial = useWikiRuns(org.id, consulta.repo, consulta.consultar);
   const sinFormato = !consulta.consultar || (historial.isError && esApiError(historial.error) && historial.error.status === 422);
+  // Sin ?run=, la última wiki lista del repo elegido se abre sola (para el viewer y para el admin) y queda en la URL.
+  const ultima = repoElegido && !crudo ? wikiAnterior(historial.data ?? [], { repo_full_name: repoElegido }) : null;
+  const ultimaId = ultima?.id ?? null;
+  const runId = esId(crudo) ? crudo : crudo ? null : ultimaId;
+  useEffect(() => {
+    if (ultimaId && !crudo) setParams((p) => { const n = new URLSearchParams(p); n.set('run', ultimaId); return n; }, { replace: true });
+  }, [ultimaId, crudo, setParams]);
+  const elegirRepo = (r: string) => {
+    const p = new URLSearchParams(params);
+    p.set('repo', r);
+    p.delete('run');                       // la del repo nuevo se abre sola
+    setParams(p);
+    estimar.reset();
+    setRamaElegido('');
+  };
   const [lento, setLento] = useState(false);
   const run = useWikiRun(org.id, runId, lento);
   const estancada = useEstancada(run.data);
   useEffect(() => setLento(estancada), [estancada]);
   const doc = useWikiDoc(org.id, runId, run.data?.status === 'succeeded');
-  // Repo de la conexión GitHub (privado: va con su connection_id) o texto libre para repos públicos.
-  const e = { ref: rama.trim() || undefined, connection_id: repoValido && repoValido === repoConexion ? gh?.id : undefined };
+  // Generar va con lo mismo que se estimó: repo, rama y el connection_id de la conexión ACTIVA de ese repo (privado), o
+  // sin él (repo público escrito a mano).
+  const e = { ref: estimar.variables?.ref, connection_id: estimar.variables?.connection_id };
+  const pedir = (repoFullName: string, ref: string) =>
+    estimar.mutate({ repo_full_name: repoFullName, ref: ref.trim() || undefined, connection_id: activaDeRepo(conexiones.data, repoFullName)?.id });
   const pedirEstimacion = (ev: FormEvent) => {
     ev.preventDefault();
     if (!repoValido) { setErrorRepo('Escribe owner/repo o la URL del repo'); return; }
     setErrorRepo(null);
-    estimar.mutate({ repo_full_name: repoValido, ...e });
+    if (conRepos) { const p = new URLSearchParams(params); p.set('repo', repoValido); p.delete('run'); setParams(p); }
+    pedir(repoValido, rama);
+  };
+  const estimarElegido = (ev: FormEvent) => {
+    ev.preventDefault();
+    if (repoElegido) pedir(repoElegido, ramaElegido);
   };
   const lanzar = (force: boolean) => {
     if (!estimar.data) return;
@@ -253,7 +358,7 @@ export default function PaginaWiki() {
   // est_usd no se manda max_usd y el servidor usa su tope por defecto.
   const reintentar = (r: WikiRun) => {
     generar.mutate({ repo_full_name: r.repo_full_name, ...(r.branch ? { ref: r.branch } : {}),
-      connection_id: r.repo_full_name === repoConexion ? gh?.id : undefined,
+      connection_id: activaDeRepo(conexiones.data, r.repo_full_name)?.id,
       ...(r.est_usd != null ? { max_usd: topeUsd(r.est_usd) } : {}), force: true }, { onSuccess: (x) => elegir(x.wiki_run_id) });
   };
   // «Regenerar» espera la promesa: ConfirmarEnSitio pinta el resultado o el error en su sitio (L6).
@@ -262,26 +367,45 @@ export default function PaginaWiki() {
     const r = await generar.mutateAsync({ repo_full_name: estimar.data.repo_full_name, ...e, max_usd: topeUsd(estimar.data.est.usd), force: true });
     elegir(r.wiki_run_id);
   };
+  const formLibre = (
+    <FormRepoLibre repo={repo} rama={rama} errorRepo={errorRepo} repoConexion={conRepos} cambiarRepo={cambiarRepo} setRama={setRama}
+      onSubmit={pedirEstimacion} ocupado={estimar.isPending && !!estimar.variables && estimar.variables.repo_full_name === repoValido} />
+  );
 
   return (
     <div className="flex flex-col gap-6">
       <BarraModulo titulo="Wiki del repo" descripcion="Tu repo explicado para un directivo: qué es, cómo funciona, sus piezas, el mapa y los riesgos." />
 
+      {conRepos ? <ReposWiki org={org.id} repos={repos} elegido={repoElegido} alElegir={elegirRepo} /> : null}
+
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Repositorio">
-        {org.puedeEscribir ? (
-          <form onSubmit={pedirEstimacion} className="flex flex-col gap-4" noValidate>
-            <div className="grid gap-4 md:grid-cols-[2fr_1fr]">
-              <CampoTexto id="wiki-repo" etiqueta="Repositorio" valor={repo} onCambio={cambiarRepo} mono placeholder="owner/repo" error={errorRepo}
-                ayuda={repo.trim() && !repoValido ? 'Formato owner/repo, o pega la URL del repo en GitHub.'
-                  : repoConexion ? 'Por defecto, el repo de tu conexión con GitHub. También puedes escribir uno público.' : 'Escribe un repo público, o conecta GitHub para uno privado.'} />
-              <CampoTexto id="wiki-rama" etiqueta="Rama (opcional)" valor={rama} onCambio={setRama} mono placeholder="main" />
-            </div>
-            <div><BotonAccion variante="principal" tam="grande" icono={Coins} ocupado={estimar.isPending} type="submit">Estimar costo</BotonAccion></div>
-            {estimar.isError ? <ErrorBloque error={estimar.error} /> : null}
-          </form>
-        ) : (
+        {!org.puedeEscribir ? (
           <p className="text-sm text-muted-foreground">Modo demo: solo lectura. Puedes leer las wikis ya generadas; generar una nueva gasta IA y lo hace un administrador.</p>
+        ) : conexiones.isPending ? <p className="text-texto-3" aria-busy="true">—</p>
+        : !conRepos ? formLibre : (
+          <>
+            {conexionElegida && !activaElegida ? (
+              // Con la conexión caída se ven sus wikis, pero no se puede generar otra (el token no lee el repo).
+              <p className="text-[15px]">
+                <bdi dir="ltr" className="font-mono">{sinBidi(repoElegido ?? '')}</bdi>: la conexión no está activa.{' '}
+                <Link to={`/o/${org.id}/connections/github?repo=${encodeURIComponent(repoElegido ?? '')}`} className="font-medium underline underline-offset-4">
+                  Reconecta el repo para generar otra</Link>
+              </p>
+            ) : (
+              <form onSubmit={estimarElegido} className="flex flex-col gap-4" noValidate>
+                <p className="text-[15px]">Generar la wiki de <bdi dir="ltr" className="font-mono font-semibold">{sinBidi(repoElegido ?? '')}</bdi>
+                  {conexionElegida ? null : <span className="text-muted-foreground"> (repo público)</span>}</p>
+                <div className="md:max-w-xs">
+                  <CampoTexto id="wiki-rama-repo" etiqueta="Rama (opcional)" valor={ramaElegido} onCambio={setRamaElegido} mono placeholder="main" />
+                </div>
+                <div><BotonAccion variante="principal" tam="grande" icono={Coins} type="submit"
+                  ocupado={estimar.isPending && estimar.variables?.repo_full_name === repoElegido}>Estimar costo</BotonAccion></div>
+              </form>
+            )}
+            <SectorPlegable titulo="Otro repo público">{formLibre}</SectorPlegable>
+          </>
         )}
+        {org.puedeEscribir && estimar.isError ? <ErrorBloque error={estimar.error} /> : null}
       </section>
 
       {org.puedeEscribir && estimar.data ? <Estimacion e={estimar.data} ocupado={generar.isPending} alGenerar={lanzar} alRegenerar={regenerar} alVer={elegir}
@@ -296,8 +420,9 @@ export default function PaginaWiki() {
       {doc.isError ? <ErrorBloque error={doc.error} onReintentar={() => doc.refetch()} /> : null}
 
       <section className="flex flex-col gap-3" aria-labelledby="t-historial">
-        <h3 id="t-historial" className="text-[17px] font-semibold">Historial{consulta.repo ? <span className="font-mono text-[13px] font-normal text-muted-foreground"> · {consulta.repo}</span> : null}</h3>
-        {sinFormato ? <p className="text-sm text-muted-foreground">Escribe el repo como owner/repo (o pega su URL de GitHub) para ver su historial.</p>
+        <h3 id="t-historial" className="text-[17px] font-semibold">Historial{consulta.repo ? <span className="font-mono text-[13px] font-normal text-muted-foreground"> · <bdi dir="ltr">{sinBidi(consulta.repo)}</bdi></span> : null}</h3>
+        {sinFormato ? (repoElegido ? <p className="text-texto-3">—</p>
+          : <p className="text-sm text-muted-foreground">Escribe el repo como owner/repo (o pega su URL de GitHub) para ver su historial.</p>)
           : historial.isError ? <ErrorBloque error={historial.error} onReintentar={() => historial.refetch()} />
           : historial.data ? <Historial runs={historial.data} actual={runId} alElegir={elegir} /> : <p className="text-texto-3">—</p>}
       </section>

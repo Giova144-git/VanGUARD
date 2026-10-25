@@ -88,6 +88,18 @@ const error = async (r: Response) => ApiErrorBody.parse(await r.json()).error;
 describe('E11 · POST /api/orgs/:org/scans con kind zip', () => {
   beforeEach(() => { filas = []; });
 
+  it('sin JOBS_Q (vista previa) → 503 «no corren en la vista previa» ANTES de insertar nada, para cualquier kind', async () => {
+    for (const body of [{ kind: 'full_audit' }, { kind: 'repo' }, { kind: 'zip', filename: 'a.zip', size_bytes: 10 }]) {
+      const r = await post(`/${ORG}/scans`, body, 'ana', envDoble({ ...PROD, JOBS_Q: undefined }));
+      expect(r.status).toBe(503);
+      const e = await error(r);
+      expect(e.message).toBe('Las auditorías no corren en la vista previa');
+      expect(e.details?.reason).toBe('sin_cola');
+    }
+    expect(filas).toEqual([]);
+    expect(doble.ops.some((o) => o.table === 'scan_runs' && o.action !== 'select')).toBe(false);
+  });
+
   it('crea el scan en waiting_result sin encolar nada y con el nombre saneado ( «..», > 100 car.)', async () => {
     const d = envDoble(PROD);
     const r = await crearZip(`mi..proyecto ${'x'.repeat(100)}.zip`, 4096, 'ana', d);

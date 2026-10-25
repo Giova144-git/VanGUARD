@@ -1,6 +1,6 @@
 // «Revisión automática de código» (§6.1 y F6): bandera por 404, lo que ve el viewer y que el secreto del alta no se
 // queda en el MutationCache ni en el almacenamiento tras reset(). Sin jsdom: renderToStaticMarkup y la caché a mano.
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { MutationObserver, QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -123,6 +123,67 @@ describe('TarjetaRevisionCodigo', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// Evolución (evolucion-entre-revisiones.md §6.2 y §9.3): la foto de Codebase de cada push, con los deltas del router.
+describe('TarjetaRevisionCodigo · foto de cada push (evolución F3)', () => {
+  const CON_FOTO: CodeReviewState = { ...ESPERANDO, recent: ESPERANDO.recent.map((r) => ({ ...r, delta: fx.deltasRevision[r.id] ?? null })) };
+  const NOTA = 'un push no ve lo que se quita';
+
+  it('la fila del push de las 19:20Z dice «1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior», con una sola nota', () => {
+    const html = tarjeta(ADMIN, CON_FOTO);
+    expect(html).toContain('1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior');
+    expect(html).toContain('0 nuevos · 7 siguen abiertos · 2 corregidos desde el push anterior (1 comprobado por una auditoría)');
+    expect(html.split(NOTA)).toHaveLength(2);
+    // Debajo de lo que ya hay en la fila: después de los chips, dentro del mismo botón.
+    const fila = html.slice(html.indexOf(`id="revision-${CON_FOTO.recent[0]!.id}"`));
+    expect(fila.indexOf('1 nuevo · 7 siguen abiertos')).toBeGreaterThan(fila.indexOf('WhatsApp en 6,4 s'));
+    expect(fila.indexOf('1 nuevo · 7 siguen abiertos')).toBeLessThan(fila.indexOf('</button>'));
+    expect(tarjeta(VIEWER, CON_FOTO)).toContain('1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior');
+  });
+
+  it('con dos o más repos la foto es de toda la org', () => {
+    expect(tarjeta(ADMIN, CON_FOTO, undefined, undefined, true)).toContain('1 nuevo · 7 siguen abiertos en Codebase (todos los repos) · 0 corregidos');
+  });
+
+  it('sin delta (null o ausente: BACK sin 0015 o foto fallida), nada; un PR, nada aunque traiga delta', () => {
+    for (const estado of [ESPERANDO, { ...ESPERANDO, recent: ESPERANDO.recent.map((r) => ({ ...r, delta: null })) }]) {
+      const html = tarjeta(ADMIN, estado);
+      expect(html).toContain('Revisiones recientes');
+      expect(html).not.toContain('siguen abiertos');
+      expect(html).not.toContain(NOTA);
+    }
+    const pr = { ...CON_FOTO.recent[0]!, event: 'pull_request' as const, pr_number: 7 };
+    const html = tarjeta(ADMIN, { ...CON_FOTO, recent: [pr] });
+    expect(html).toContain('PR #7 · ');
+    expect(html).not.toContain('siguen abiertos');
+    expect(html).not.toContain(NOTA);
+  });
+});
+
+// Anexo de botones de WhatsApp (avisos-whatsapp-botones.md, «FRONT»): la acción tomada desde el mensaje y el repo silenciado.
+describe('TarjetaRevisionCodigo · acciones desde WhatsApp', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-24T19:40:00.000Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+  const conAccion = (whatsapp_action: unknown) => ({ ...ESPERANDO, recent: [{ ...ESPERANDO.recent[0]!,
+    alert: { ...ESPERANDO.recent[0]!.alert, whatsapp_action: whatsapp_action as never, whatsapp_action_at: '2026-10-24T19:22:05.000Z' } }] });
+
+  it('la fila de la revisión dice lo que se hizo desde WhatsApp y a qué hora; una acción nueva, el texto por defecto', () => {
+    expect(tarjeta(ADMIN, conAccion('fix_sent'))).toContain('Arreglo enviado por WhatsApp · 15:22');
+    expect(tarjeta(VIEWER, conAccion('pr_reopened'))).toContain('PR reabierto por WhatsApp · 15:22');
+    const rara = tarjeta(ADMIN, conAccion('__proto__'));
+    expect(rara).toContain('Acción desde WhatsApp · 15:22');
+    expect(rara).not.toContain('__proto__');
+    expect(tarjeta(ADMIN, ESPERANDO)).not.toContain('desde WhatsApp');   // BACK sin el anexo: nada
+  });
+
+  it('«Silenciado hasta hh:mm» (hora de Caracas) solo con muted_until en el futuro', () => {
+    const silenciado = (muted_until: string | null) => tarjeta(VIEWER, { ...ESPERANDO, config: { ...ESPERANDO.config!, muted_until } });
+    expect(silenciado('2026-10-24T20:30:00.000Z')).toContain('Silenciado hasta 16:30');
+    expect(silenciado('2026-10-24T19:00:00.000Z')).not.toContain('Silenciado hasta');
+    expect(silenciado(null)).not.toContain('Silenciado hasta');
+    expect(tarjeta(ADMIN, ESPERANDO)).not.toContain('Silenciado hasta');
   });
 });
 

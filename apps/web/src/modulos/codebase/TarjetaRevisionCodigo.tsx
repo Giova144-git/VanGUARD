@@ -4,9 +4,10 @@
 // mutación va con gcTime 0 y reset() en cuanto llega (lib/mutaciones.ts), y nunca toca storage, la URL ni la caché de consultas.
 // Una tarjeta por repo (varias-codebases §6.2): todo va por `conexion.id` (E45 ?connection_id=, la clave de la consulta y
 // el contenedor del secreto). La monta PestanaRepo, con key `${org}:${conexion.id}`.
+// Cada push con `delta` (evolucion-entre-revisiones.md §6.2) suma en su fila una línea con la foto de Codebase.
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { ChevronDown, ExternalLink, GitCommitHorizontal, GitPullRequest } from 'lucide-react';
+import { BellOff, ChevronDown, ExternalLink, GitCommitHorizontal, GitPullRequest } from 'lucide-react';
 import type { CodeReview, CodeReviewConfig, ConnectionPublic, MergeGateConfig } from '@vanguard/contracts';
 import { BotonCopiar } from '@/componentes/vg/BotonCopiar';
 import { ConfirmarEnSitio } from '@/componentes/vg/ConfirmarEnSitio';
@@ -17,10 +18,13 @@ import { useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
 import { usePrefsAvisos, useRevisionCodigo } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
+import { NOTA_FOTO_PUSH, lineaFoto } from '@/lib/evolucion';
 import { cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
 import { tomarSecreto, useGuardarRevision } from '@/lib/mutaciones';
-import { avisoAlApagar, chipAviso, chipBloqueo, chipHook, chipParcial, chipPr, chipRevision, textoErrorHook, umbralWhatsapp } from '@/lib/revision';
+import {
+  avisoAlApagar, chipAccionWhatsapp, chipAviso, chipBloqueo, chipHook, chipParcial, chipPr, chipRevision, textoErrorHook, textoSilenciado, umbralWhatsapp,
+} from '@/lib/revision';
 import { severidad } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { DetalleBloqueo } from './BloqueoFila';
@@ -62,6 +66,15 @@ export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: 
     window.addEventListener('touchstart', parar, { once: true, passive: true });
     return () => { parar(); window.removeEventListener('wheel', parar); window.removeEventListener('touchstart', parar); };
   }, [hayAbierta, abierta]);
+  // «Silenciado hasta…» (anexo de botones de WhatsApp) se quita solo al llegar la hora, aunque E45 no cambie.
+  const silenciadoHasta = q.data?.config?.muted_until;
+  const [, repintar] = useState(0);
+  useEffect(() => {
+    const falta = typeof silenciadoHasta === 'string' ? Date.parse(silenciadoHasta) - Date.now() : NaN;
+    if (!(falta > 0)) return;
+    const t = setTimeout(() => repintar((n) => n + 1), Math.min(falta + 1000, 86_400_000));
+    return () => clearTimeout(t);
+  }, [silenciadoHasta]);
 
   if (q.isError && esApiError(q.error) && q.error.status === 404) return null;
   if (!q.data) return null;   // hasta saber si la ruta existe no se promete nada
@@ -70,6 +83,7 @@ export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: 
   const c = s.config;
   const rama = c?.branch ?? (typeof conexion.meta.default_branch === 'string' ? conexion.meta.default_branch : null);
   const ramaVista = rama ? <bdi dir="ltr" className="font-mono text-foreground">{sinBidi(rama)}</bdi> : 'la rama por defecto';
+  const silenciado = textoSilenciado(c);
 
   const cambiar = (enabled: boolean, confirmado = false) => {
     setError(null);
@@ -117,6 +131,8 @@ export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: 
       <div className="flex flex-wrap items-center gap-3">
         <h3 id="t-revision" className="flex-1 text-[17px] font-semibold">Revisión automática de código</h3>
         <Etiqueta {...chipHook(c ?? { state: 'off', last_event_at: null, last_ping_at: null }, (t) => cuando(t))} />
+        {/* «Silenciar repo 1 h» desde WhatsApp: sin avisos de revisión de este repo hasta esa hora (el check sigue). */}
+        {silenciado ? <Etiqueta texto={silenciado} icono={BellOff} /> : null}
         {org.puedeEscribir && s.available ? (
           <label className="flex items-center gap-2 text-sm font-medium">
             <Interruptor activo={!!c?.enabled} etiqueta="Revisar cada push" ocupado={guardar.isPending} deshabilitado={apagando} onCambio={(v) => cambiar(v)} />
@@ -152,7 +168,7 @@ export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: 
         </div>
       ) : null}
       <Recientes recientes={s.recent} abierta={abierta} alternar={alternar} conHallazgo={conHallazgo} gate={c?.gate} puedeEscribir={org.puedeEscribir}
-        alAccion={() => setRapidoHasta((h) => Math.max(h, Date.now() + 60_000))} />
+        varios={varios} alAccion={() => setRapidoHasta((h) => Math.max(h, Date.now() + 60_000))} />
     </section>
   );
 }
@@ -223,19 +239,24 @@ function PasosGithub({ c, secreto, rotado }: { c: CodeReviewConfig; secreto: str
 }
 
 // `gate`: la config del bloqueo (umbral para el chip y si «Dar por bueno» se puede ofrecer); `alAccion`: tras una acción
-// de E54 se sondea rápido un minuto, hasta que la cola publique el estado.
-function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscribir, alAccion }: {
+// de E54 se sondea rápido un minuto, hasta que la cola publique el estado. `varios`: con 2 o más repos la foto de cada
+// push es de toda la org («en Codebase (todos los repos)»).
+function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscribir, varios, alAccion }: {
   recientes: CodeReview[]; abierta: string | null; alternar: (id: string) => void; conHallazgo: (id: string) => string;
-  gate?: MergeGateConfig; puedeEscribir: boolean; alAccion: () => void;
+  gate?: MergeGateConfig; puedeEscribir: boolean; varios: boolean; alAccion: () => void;
 }) {
   if (!recientes.length) return <p className="text-[15px] text-muted-foreground">Aún no hay revisiones: llegan con el próximo push.</p>;
+  // Evolución (§6.2): la foto de Codebase de cada push con `delta`; un PR o un push sin foto, nada.
+  const fotos = new Map(recientes.map((r) => [r.id, lineaFoto(r, varios)]));
   return (
     <div className="flex flex-col gap-2">
       <h4 className="text-[15px] font-semibold">Revisiones recientes</h4>
       <ul className="overflow-hidden rounded-xl border" aria-label="Revisiones recientes">
         {recientes.map((r) => {
           const abiertaEsta = abierta === r.id;
-          const chips = [chipRevision(r), chipBloqueo(r, gate?.min_severity), chipPr(r), chipParcial(r), chipAviso(r.alert)].filter((x) => x !== null);
+          const foto = fotos.get(r.id);
+          const chips = [chipRevision(r), chipBloqueo(r, gate?.min_severity), chipPr(r), chipParcial(r), chipAviso(r.alert), chipAccionWhatsapp(r.alert)]
+            .filter((x) => x !== null);
           return (
             <li key={r.id} id={`revision-${r.id}`} className="scroll-mt-20 border-b last:border-b-0">
               <button type="button" onClick={() => alternar(r.id)} aria-expanded={abiertaEsta} aria-controls={`revision-${r.id}-detalle`}
@@ -250,6 +271,8 @@ function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscri
                 {/* Los chips largos parten línea en vez de desbordar a 375 px. */}
                 <span className="flex min-w-0 flex-1 flex-wrap justify-end gap-2">{chips.map((x) => <Etiqueta key={x.texto} {...x} className="h-auto min-h-6 max-w-full shrink py-0.5 text-left" />)}</span>
                 <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', abiertaEsta && 'rotate-180')} aria-hidden />
+                {/* Una línea propia debajo de lo que ya hay en la fila (chips del bloqueo incluidos). Solo números. */}
+                {foto ? <span className="basis-full text-sm text-muted-foreground">{foto}</span> : null}
               </button>
               {abiertaEsta ? <Detalle r={r} conHallazgo={conHallazgo}>
                 <DetalleBloqueo r={r} gate={gate} puedeEscribir={puedeEscribir} alAccion={alAccion} />
@@ -258,6 +281,7 @@ function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscri
           );
         })}
       </ul>
+      {[...fotos.values()].some(Boolean) ? <p className="text-sm text-muted-foreground">{NOTA_FOTO_PUSH}</p> : null}
     </div>
   );
 }

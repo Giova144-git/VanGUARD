@@ -799,6 +799,9 @@ function verRevision(org: string, q: URLSearchParams): CodeReviewState {
   }
   const copia = { ...structuredClone(r.estado), config: vistaConfig(org, gh, r.estado.config) };
   if (copia.config && tipoSesionFalsa() === 'anonima') copia.config.webhook_url = null;   // la URL solo la ve un admin
+  // Evolución (§6.5): cada revisión con su foto de Codebase, también sobre codeReviewStateBloqueo. El PR #7 y cualquier
+  // revisión que no esté en deltasRevision salen con delta null, como un BACK con 0015 sin foto.
+  for (const x of copia.recent) x.delta = structuredClone(deMapa<string, CodeReview['delta']>(fx.deltasRevision, x.id, null));
   return copia;
 }
 function guardarRevision(org: string, body: unknown): CodeReviewSaved {

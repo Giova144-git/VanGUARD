@@ -37,12 +37,23 @@ function errorAccion(e: unknown): string {
 export function DetalleBloqueo({ r, gate, puedeEscribir, alAccion }: {
   r: CodeReview; gate: MergeGateConfig | undefined; puedeEscribir: boolean; alAccion?: () => void;
 }) {
+  const org = useOrg();
+  const sinE54 = useRutaAusente(org.id, 'E54');
+  const sinRepublicar = useRutaAusente(org.id, 'E54-republish');
   const g = r.gate;
   if (!g) return null;
   const pr = r.event === 'pull_request';
   const n = typeof g.blocking === 'number' && Number.isFinite(g.blocking) ? g.blocking : 0;
   const mas = n - g.findings.length;
-  const rama = <bdi dir="ltr" className="font-mono">{sinBidi(r.branch)}</bdi>;
+  const rama = <bdi dir="ltr" className="font-mono break-all">{sinBidi(r.branch)}</bdi>;
+  // Los botones que AccionesBloqueo ofrecería (mismas condiciones, con la bandera por 404 de E54).
+  const acciones = puedeEscribir && !!gate?.enabled && !sinE54
+    && (sePuedeAprobar(g) || !!g.override_at || (sePuedeRepublicar(g) && !sinRepublicar) || g.pr_action === 'closed');
+  // Sin nada que explicar ni que ofrecer (✓ publicado, «revisando…», PR reabierto) basta el chip de la fila: nada de un
+  // recuadro con solo el título.
+  const explica = g.findings.length > 0 || (g.state === 'error' && r.status !== 'failed' && r.partial) || g.state === 'failure'
+    || g.pr_action === 'closed' || g.pr_action === 'reopened_by_human' || g.pr_action === 'close_failed';
+  if (!explica && !acciones) return null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border px-3 py-3" role="group" aria-label="Check VanGUARD en GitHub">
       <p className="text-sm font-semibold">Check “VanGUARD” en GitHub</p>
@@ -52,7 +63,7 @@ export function DetalleBloqueo({ r, gate, puedeEscribir, alAccion }: {
           {g.findings.map((f, i) => (
             <li key={`${f.rule_id}-${f.resource}-${i}`} className="flex flex-wrap items-center gap-2">
               <ChapaSeveridad severity={f.severity} />
-              <span className="text-[15px] font-medium">{sinBidi(f.title)}</span>
+              <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
               <span className="font-mono text-[13px] text-muted-foreground break-all"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>
             </li>
           ))}

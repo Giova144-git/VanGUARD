@@ -119,7 +119,7 @@ export function BloqueoMerge({ c, gate, conexion }: { c: CodeReviewConfig; gate:
   const [prueba, setPrueba] = useState<Prueba | null>(null);
   if (sinRuta) return null;
 
-  const rama = <bdi dir="ltr" className="font-mono">{sinBidi(c.branch)}</bdi>;
+  const rama = <bdi dir="ltr" className="font-mono break-all">{sinBidi(c.branch)}</bdi>;
   const repo = REPO_VALIDO.test(c.repo_full_name) ? c.repo_full_name : null;
   const chip = chipEstadoBloqueo(gate);
   const tok = gate.statuses_connection;
@@ -144,7 +144,8 @@ export function BloqueoMerge({ c, gate, conexion }: { c: CodeReviewConfig; gate:
       <div className="flex flex-wrap items-center gap-3">
         <ShieldCheck className="size-5 text-muted-foreground" strokeWidth={1.5} aria-hidden />
         <h4 id={`t-bloqueo-${conexion.id}`} className="flex-1 text-[15px] font-semibold">Bloquear merges con críticos</h4>
-        <Etiqueta texto={chip.texto} rol={chip.rol} />
+        {/* «Activo: GitHub exige “VanGUARD”» no cabe en una línea a 375 px: parte en dos en vez de desbordar. */}
+        <Etiqueta texto={chip.texto} rol={chip.rol} className="h-auto min-h-6 max-w-full shrink py-0.5 text-left" />
         {org.puedeEscribir ? (
           <label className="flex items-center gap-2 text-sm font-medium">
             <Interruptor activo={gate.enabled} etiqueta="Bloquear merges con críticos" ocupado={guardar.isPending} deshabilitado={fase !== 'reposo'} onCambio={cambiar} />

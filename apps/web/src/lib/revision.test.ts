@@ -73,6 +73,7 @@ describe('chips del bloqueo de merge (§6.2)', () => {
     expect(chipBloqueo(pr({ state: 'error' }, { partial: true }))).toEqual({ texto: 'GitHub: no pudimos leerlo entero', rol: 'aviso' });
     expect(chipBloqueo(pr({ state: 'error' }, { status: 'failed' }))).toEqual({ texto: 'GitHub: no pudimos revisar', rol: 'aviso' });
     expect(chipBloqueo(pr({ state: 'pending' }))).toEqual({ texto: 'GitHub: revisando…', rol: 'info' });
+    expect(chipBloqueo(pr({ state: 'success', error: 'estado_ajeno' }))).toEqual({ texto: 'Otro publicó “VanGUARD” en este commit', rol: 'mal' });   // P1
     expect(chipBloqueo(pr({ state: null, error: 'dry_run' }))).toEqual({ texto: 'No publicado: Solo se publica desde officialvanguard.com', rol: 'neutra' });
     expect(chipBloqueo(pr({ state: null, error: 'otro_repo' }))?.texto).toBe('No publicado: El token de estados es de otro repo');
     expect(chipBloqueo(pr({ state: null, error: null }))).toBeNull();
@@ -97,8 +98,8 @@ describe('chips del bloqueo de merge (§6.2)', () => {
     expect(chipPr(pr({ pr_action: 'closed' }))).toEqual({ texto: 'PR cerrado por VanGUARD', rol: 'aviso' });
     expect(chipPr(pr({ pr_action: 'reopened_by_human' }))?.texto).toBe('PR reabierto a mano');
     expect(chipPr(pr({ pr_action: 'reopened' }))?.texto).toBe('PR reabierto');
-    expect(chipPr(pr({ pr_action: 'close_failed', pr_close_error: 'forbidden' }))?.texto).toBe('No pudimos cerrar el PR: al token le falta Pull requests: Read and write');
-    expect(chipPr(pr({ pr_action: 'close_failed', pr_close_error: '__proto__' }))?.texto).toBe('No pudimos cerrar el PR: GitHub no lo aceptó');
+    expect(chipPr(pr({ pr_action: 'close_failed', pr_close_error: 'forbidden' }))).toEqual({ texto: 'No pudimos cerrar el PR', rol: 'aviso' });
+    expect(textoErrorCierre('forbidden')).toBe('al token le falta Pull requests: Read and write');
     expect(chipPr(pr({ pr_action: null }))).toBeNull();
     expect(chipPr(pr({ pr_action: 'zzz' as never }))).toBeNull();
   });

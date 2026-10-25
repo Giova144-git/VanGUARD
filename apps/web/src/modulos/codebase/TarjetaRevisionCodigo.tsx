@@ -247,7 +247,8 @@ function Recientes({ recientes, abierta, alternar, conHallazgo, gate, puedeEscri
                   {r.event === 'pull_request' && r.pr_number ? `PR #${r.pr_number} · ` : ''}<bdi dir="ltr">{sinBidi(r.branch)}</bdi> · {r.head_sha.slice(0, 7)}
                 </span>
                 <span className="text-[12.5px] text-texto-3">{cuando(r.created_at)}</span>
-                <span className="flex flex-1 flex-wrap justify-end gap-2">{chips.map((x) => <Etiqueta key={x.texto} {...x} />)}</span>
+                {/* Los chips largos parten línea en vez de desbordar a 375 px. */}
+                <span className="flex min-w-0 flex-1 flex-wrap justify-end gap-2">{chips.map((x) => <Etiqueta key={x.texto} {...x} className="h-auto min-h-6 max-w-full shrink py-0.5 text-left" />)}</span>
                 <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', abiertaEsta && 'rotate-180')} aria-hidden />
               </button>
               {abiertaEsta ? <Detalle r={r} conHallazgo={conHallazgo}>

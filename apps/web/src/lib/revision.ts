@@ -215,7 +215,7 @@ export function chipPr(r: Pick<CodeReview, 'gate'>): Chip | null {
     case 'closed': return { texto: 'PR cerrado por VanGUARD', rol: 'aviso' };
     case 'reopened_by_human': return { texto: 'PR reabierto a mano', rol: 'neutra' };
     case 'reopened': return { texto: 'PR reabierto', rol: 'neutra' };
-    case 'close_failed': return { texto: `No pudimos cerrar el PR: ${textoErrorCierre(r.gate.pr_close_error)}`, rol: 'aviso' };
+    case 'close_failed': return { texto: 'No pudimos cerrar el PR', rol: 'aviso' };   // el motivo, en la fila abierta
     default: return null;
   }
 }

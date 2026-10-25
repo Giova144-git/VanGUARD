@@ -14,7 +14,7 @@ import { useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { useAccionBloqueo, useRutaAusente } from '@/lib/mutaciones';
-import { sePuedeAprobar, sePuedeRepublicar, textoParcialBloqueo } from '@/lib/revision';
+import { sePuedeAprobar, sePuedeRepublicar, textoErrorCierre, textoParcialBloqueo } from '@/lib/revision';
 import { deMapa } from '@/lib/severidad';
 import { PanelConfirmar } from './BloqueoMerge';
 
@@ -73,6 +73,7 @@ export function DetalleBloqueo({ r, gate, puedeEscribir, alAccion }: {
       {g.state === 'failure' && pr ? <p className="text-sm">Arréglalo con un push nuevo al PR. Aunque lo quites, la clave quedó en el historial de la rama: rótala.</p> : null}
       {g.pr_action === 'closed' ? <p className="text-sm">VanGUARD cerró este pull request con un comentario. Corrige el código, rota las claves expuestas y vuelve a abrirlo.</p> : null}
       {g.pr_action === 'reopened_by_human' ? <p className="text-sm">Alguien lo reabrió sin commits nuevos: respetamos esa decisión y mantenemos el ✗.</p> : null}
+      {g.pr_action === 'close_failed' ? <p className="text-sm">No pudimos cerrar el PR: {textoErrorCierre(g.pr_close_error)}. El ✗ y el aviso por WhatsApp salieron igual.</p> : null}
       {puedeEscribir && gate?.enabled ? <AccionesBloqueo r={r} alAccion={alAccion} /> : null}
     </div>
   );

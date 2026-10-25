@@ -92,7 +92,9 @@ export function leerParamsBajoAtaque(x: unknown): ParamsBajoAtaque | null {
 
 // ── Cloudflare: entrypoint de la fase y una regla ───────────────────────────────────────────────────────────────────
 type Entrypoint = { tipo: 'ok'; id: string; reglas: Obj[] } | { tipo: 'no_existe' } | FalloCf;
-type FalloCf = { tipo: 'fallo'; status: number | null; caido: boolean; codigo: number | null };
+// incierto: hubo POST sin respuesta clara y el GET de reconciliación no vio la regla (Cloudflare pudo guardarla igual).
+type FalloCf = { tipo: 'fallo'; status: number | null; caido: boolean; codigo: number | null; incierto?: boolean;
+  creoRuleset?: boolean };
 type Creada = { tipo: 'creada'; rulesetId: string; reglaId: string; creoRuleset: boolean };
 type SinCupo = { tipo: 'sin_cupo'; cupo: number };
 
@@ -105,6 +107,14 @@ const falloRed = (e: unknown): FalloCf => ({ tipo: 'fallo', status: e instanceof
   codigo: null });
 const idDeRef = (reglas: unknown, ref: string) => {
   const r = (Array.isArray(reglas) ? reglas : []).map(obj).find((x) => x.ref === ref);
+  return typeof r?.id === 'string' && ID_CF.test(r.id) ? r.id : null;
+};
+// Al buscar una regla ya mandada: por su ref y, si Cloudflare lo hubiera quitado, por su descripción exacta (lleva los
+// 8 hex del approval_id y la hora: no casa con otra regla).
+const idDeRegla = (reglas: readonly Obj[], ref: string | null, descripcion: string | null) => {
+  const id = ref ? idDeRef(reglas, ref) : null;
+  if (id || !descripcion) return id;
+  const r = reglas.find((x) => x.description === descripcion);
   return typeof r?.id === 'string' && ID_CF.test(r.id) ? r.id : null;
 };
 
@@ -150,11 +160,13 @@ const cupoDe = (plan: string | null) => (plan ? CUPO_REGLAS_CONFIG[plan] ?? null
 const cuerpoRuleset = (regla: ReglaBajoAtaque) => ({ name: 'default', kind: 'zone', phase: FASE_CONFIG, rules: [regla] });
 
 // Sin respuesta clara al POST (red, plazo, 429, 5xx): Cloudflare pudo crearla igual. Si el entrypoint ya trae nuestro
-// ref, cuenta como creada y no queda una regla sin fila que la deshaga.
+// ref, cuenta como creada y no queda una regla sin fila que la deshaga. Si este GET falla o aún no la ve, el fallo
+// vuelve incierto: executeUnderAttack deja la fila sin confirmar y housekeeping la sigue buscando.
 async function reconciliar(token: string, p: ParamsBajoAtaque, fallo: FalloCf, creo: boolean): Promise<Creada | FalloCf> {
   const ep = await leerEntrypoint(token, p.zone_id);
   const id = ep.tipo === 'ok' ? idDeRef(ep.reglas, p.ref) : null;
-  return ep.tipo === 'ok' && id ? { tipo: 'creada', rulesetId: ep.id, reglaId: id, creoRuleset: creo } : fallo;
+  return ep.tipo === 'ok' && id ? { tipo: 'creada', rulesetId: ep.id, reglaId: id, creoRuleset: creo }
+    : { ...fallo, incierto: true, creoRuleset: creo };
 }
 
 async function anadirRegla(token: string, p: ParamsBajoAtaque, rulesetId: string, regla: ReglaBajoAtaque): Promise<Creada | FalloCf> {
@@ -497,9 +509,14 @@ export async function proponerBajoAtaque(env: CloudflareBindings, o: OpcionesBaj
 export type ResultadoBajoAtaque =
   | { tipo: 'ejecutado'; action_id: string; en: string; resultado: string; repetido: boolean; expires_at: string | null }
   | { tipo: 'rechazado'; action_id: string | null; error: string; status: number | null }   // 4xx o cupo: 200 ok:false
-  | { tipo: 'caido'; action_id: string | null; status: number | null }                     // red, plazo, 429 o 5xx: 502
+  // red, plazo, 429 o 5xx: 502. comprobando: la regla pudo quedar puesta y housekeeping la busca (MENSAJE_SIN_CONFIRMAR).
+  | { tipo: 'caido'; action_id: string | null; status: number | null; comprobando?: true }
   | { tipo: 'en_curso'; action_id: string }                                                // otra ejecución de ese host
   | { tipo: 'invalido' };                                                                   // params ilegibles: no se toca nada
+
+/** El 502 de E21 cuando la regla pudo quedar puesta: la app ve la fila en curso hasta que housekeeping lo sepa. */
+export const MENSAJE_SIN_CONFIRMAR = 'Cloudflare no respondió a tiempo. Comprobamos en unos minutos si el modo bajo ataque '
+  + 'quedó activo.';
 
 function interno(rid: string, evento: string, code: string | null | undefined): never {
   log('error', evento, { rid, code: code ?? null });
@@ -541,7 +558,9 @@ const mensajeRechazo = (cf: FalloCf | SinCupo) => (cf.tipo === 'sin_cupo' ? `Tu 
  *  aprobación a la vez: se devuelve esa fila sin tocar Cloudflare, D7); (3) hermanas usadas; (4) la regla con
  *  expires_at = ahora + ttl_s DENTRO de la expresión (crearRegla); (5) executed con provider_ref = id de la regla y el
  *  previous completo, e incidente mitigated (si el UPDATE falla, se borra la regla antes del 500); (6) 4xx o cupo →
- *  failed y ok:false; red/5xx → failed y 502. Lanza ApiError internal solo si la base falla. El ref de params es el del
+ *  failed y ok:false; red/5xx antes del POST → failed y 502; tras un POST sin respuesta clara que el GET tampoco aclara
+ *  → sin confirmar (proposed con previous.reconciliar) y 502 comprobando. Lanza ApiError internal solo si la base
+ *  falla. ≈ 15 subpeticiones con las de E21 (§12). El ref de params es el del
  *  group (las filas ok/no del botón de WhatsApp lo comparten, cada una con su id; en la in_app group = id) o el de la
  *  propia fila: con el índice de 0017 solo hay un modo vivo por host, así que el ref compartido sigue siendo único. */
 export async function executeUnderAttack(env: CloudflareBindings, approval: AprobacionCanjeada,
@@ -613,16 +632,27 @@ export async function executeUnderAttack(env: CloudflareBindings, approval: Apro
 
   if (cf.tipo !== 'creada') {
     // (6) failed + approvals.result {error:'cf_<status>' | 'cf_cupo'}; la aprobación queda usada (se vuelve a proponer).
+    // Sin respuesta clara al POST ni la regla en el GET (incierto), Cloudflare pudo guardarla: la fila sigue proposed
+    // (ocupa el host en el índice de 0017, así no sale una 2.ª regla al reproponer) con previous.reconciliar, y
+    // housekeeping la busca por su ref hasta adoptarla (executed) o confirmar que no está (failed). Si este UPDATE
+    // falla, queda proposed sin la marca y housekeeping la trata como huérfana: la retira.
     const codigo = cf.tipo === 'sin_cupo' ? 'cf_cupo' : `cf_${cf.status ?? (cf.caido ? 'red' : 'credencial')}`;
+    const incierto = cf.tipo === 'fallo' && cf.incierto === true;
+    const fila = incierto
+      ? admin.from('actions').update({ previous: { ...previous, reconciliar: codigo,
+        creo_ruleset: cf.tipo === 'fallo' && cf.creoRuleset === true } }).eq('id', actionId).eq('org_id', org).eq('status', 'proposed')
+      : admin.from('actions').update({ status: 'failed' }).eq('id', actionId).eq('org_id', org);
     const [a, b] = await Promise.all([
-      admin.from('actions').update({ status: 'failed' }).eq('id', actionId).eq('org_id', org),
+      fila,
       admin.from('approvals').update({ result: { error: codigo } }).eq('id', approval.id).eq('org_id', org),
     ]);
     if (a.error || b.error) {
       log('error', 'bajo_ataque.fallo_sin_registro', { ...registro, code: a.error?.code ?? b.error?.code ?? null });
     }
-    log('warn', 'bajo_ataque.fallido', { ...registro, action_id: actionId, codigo });
-    if (cf.tipo === 'fallo' && cf.caido) return { tipo: 'caido', action_id: actionId, status: cf.status };
+    log('warn', incierto ? 'bajo_ataque.sin_confirmar' : 'bajo_ataque.fallido', { ...registro, action_id: actionId, codigo });
+    if (cf.tipo === 'fallo' && cf.caido) {
+      return { tipo: 'caido', action_id: actionId, status: cf.status, ...(incierto ? { comprobando: true as const } : {}) };
+    }
     return { tipo: 'rechazado', action_id: actionId, status: cf.tipo === 'fallo' ? cf.status : null, error: mensajeRechazo(cf) };
   }
 
@@ -652,74 +682,123 @@ export async function executeUnderAttack(env: CloudflareBindings, approval: Apro
 }
 
 // ── Deshacer (E22, E10 y caducidad de housekeeping) ─────────────────────────────────────────────────────────────────
-export type AccionBajoAtaque = { id: string; org_id: string; provider_ref?: string | null; previous?: unknown };
+/** target (el host de la fila) y barrer (por defecto sí): con los dos, el Deshacer retira también las demás reglas de
+ *  VanGUARD de ese host. E22 pasa barrer:false en una failed («Reintentar»): con otra executed viva en el host, barrer
+ *  borraría la regla de esa. Sin target (E10) solo se retira la de la fila. */
+export type AccionBajoAtaque = { id: string; org_id: string; provider_ref?: string | null; previous?: unknown;
+  target?: string | null; barrer?: boolean };
 /** Los textos de MENSAJE_DESHACER con el permiso de Config Rules. */
 export const MENSAJE_DESHACER_BAJO_ATAQUE: Record<Exclude<ResultadoDeshacer, 'deshecho'>, string> = {
   ...MENSAJE_DESHACER,
   sin_permiso: ERROR_SIN_PERMISO_CONFIG,
   rechazado: 'Cloudflare no dejó retirar la regla: bórrala a mano en Rules → Configuration Rules',
 };
+/** Reglas de VanGUARD de OTROS intentos en el mismo host que un Deshacer retira por llamada, además de la de cada fila
+ *  (las de un E21 que, antes de la fila sin confirmar, dio failed sin saber si Cloudflare la guardó). Cota del
+ *  presupuesto de subpeticiones: lo que quede se barre en el siguiente Deshacer. */
+export const MAX_BARRIDO = 3;
+const DESCRIPCION_NUESTRA = /^VanGUARD #[A-Z0-9-]{6} · bajo ataque · /;
+// ¿Regla de bajo ataque de VanGUARD para ese host? Por su ref vg_ua_ (o la descripción de notasBajoAtaque, por si
+// Cloudflare quitara el ref) y el host entre comillas en la expresión: «"x.com"» no casa con «"demo.x.com"».
+const nuestraDe = (r: Obj, host: string) => (REF.test(str(r.ref) ?? '') || DESCRIPCION_NUESTRA.test(str(r.description) ?? ''))
+  && (str(r.expression) ?? '').includes(`"${host}"`);
 
 // 2xx o 404 = ya no está; 401/403 = el token; 408, 429 y 5xx = pasajero; otro 4xx = rechazado.
 const delStatus = (s: number): ResultadoDeshacer => ((s >= 200 && s < 300) || s === 404 ? 'deshecho'
   : s === 403 ? 'sin_permiso' : s === 401 ? 'token_invalido' : caidoHttp(s) ? 'caido' : 'rechazado');
+type NoDeshecho = Exclude<ResultadoDeshacer, 'deshecho'>;
+// Un GET del entrypoint que no sirve: red, plazo o un 2xx ilegible = pasajero; si no, por su status (404 no llega aquí).
+const falloEp = (ep: FalloCf): NoDeshecho => {
+  const r = ep.status === null || ep.caido ? 'caido' : delStatus(ep.status);
+  return r === 'deshecho' ? 'caido' : r;
+};
+// DELETE por id; red o plazo = caido. Nunca lanza.
+async function borrarId(token: string, zone: string, rs: string, regla: string): Promise<ResultadoDeshacer> {
+  try { return delStatus(await borrarReglaCf(token, zone, rs, regla)); } catch { return 'caido'; }
+}
 
-/** GET del entrypoint de la fase y DELETE de la regla que trae ese ref (§8, D8): 'no_estaba' si la fase no tiene ruleset
- *  o ninguna regla lo trae. 1 o 2 subpeticiones, contadas con cuenta(). Nunca lanza. */
-async function borrarPorRef(token: string, zone: string, ref: string,
-  cuenta: () => void): Promise<ResultadoDeshacer | 'no_estaba'> {
+type Busqueda = { rs: string; regla: string } | 'no_estaba' | NoDeshecho;
+/** GET del entrypoint de la fase y la regla de ese ref (o de esa descripción, idDeRegla): 'no_estaba' si la fase no
+ *  tiene ruleset o ninguna regla la trae. 1 subpetición, contada con cuenta(). Nunca lanza. */
+async function buscarPorRef(token: string, zone: string, ref: string, descripcion: string | null,
+  cuenta: () => void): Promise<Busqueda> {
   cuenta();
   const ep = await leerEntrypoint(token, zone);
   if (ep.tipo === 'no_existe') return 'no_estaba';
-  if (ep.tipo === 'fallo') return ep.status === null || ep.caido ? 'caido' : delStatus(ep.status);
-  const regla = idDeRef(ep.reglas, ref);
-  if (!regla) return 'no_estaba';
-  cuenta();
-  try { return delStatus(await borrarReglaCf(token, zone, ep.id, regla)); } catch { return 'caido'; }
+  if (ep.tipo === 'fallo') return falloEp(ep);
+  const regla = idDeRegla(ep.reglas, ref, descripcion);
+  return regla ? { rs: ep.id, regla } : 'no_estaba';
 }
 
 /** DELETE /zones/{previous.zone_id}/rulesets/{previous.ruleset_id}/rules/{provider_ref} con el token de
  *  previous.connection_id (un sobre por conexión); 2xx o 404 = ya no está. Sin provider_ref (la retirada fallida de una
- *  huérfana, que E55 enseña y E22 «Reintentar» admite) se busca por previous.ref: GET del entrypoint y DELETE de esa regla
- *  (borrarPorRef; si no está, deshecho). El ruleset nunca se borra (D9: pudo ganar reglas del cliente). Alcance zone (P1)
- *  → invalido por ahora. Las deshechas pasan a undone en UNA escritura (executed o failed: E22 reintenta las que la
- *  caducidad no pudo retirar). Subpeticiones = 2 por conexión + 1 por regla (2 por la del ref) + 1. Las executed siempre
- *  traen provider_ref: la caducidad y E10 no pasan por el ref. Lanza ApiError internal si la base falla. */
+ *  huérfana, que E55 enseña y E22 «Reintentar» admite) se busca por previous.ref (o su descripción) en el GET del
+ *  entrypoint; si no está, deshecho. Con target y barrer (E22 sobre la executed y la caducidad), ese mismo GET da las
+ *  demás reglas de VanGUARD de ese host (nuestraDe) y se borran tras la propia, ≤ MAX_BARRIDO por llamada; las failed
+ *  con esos refs pasan a undone. Si el GET falla, la de provider_ref se borra por id como siempre (sin barrer). El
+ *  ruleset nunca se borra (D9: pudo ganar reglas del cliente). Alcance zone (P1) → invalido por ahora. Las deshechas
+ *  pasan a undone en UNA escritura (executed o failed: E22 reintenta las que la caducidad no pudo retirar).
+ *  Subpeticiones = 2 por conexión + 1 GET por zona (si hay que buscar o barrer) + 1 por regla + ≤ MAX_BARRIDO + ≤ 2
+ *  escrituras. Lanza ApiError internal si la base falla. */
 export async function deshacerBajoAtaque(env: CloudflareBindings, acciones: readonly AccionBajoAtaque[],
   o: { rid: string; ahora?: number }): Promise<{ resultados: Map<string, ResultadoDeshacer>; subpeticiones: number }> {
   const resultados = new Map<string, ResultadoDeshacer>();
   let subpeticiones = 0;
-  type Regla = { id: string; zone: string } & ({ rs: string; regla: string } | { ref: string });
+  type Regla = { id: string; org: string; zone: string; ref: string | null; desc: string | null; host: string | null;
+    propia: { rs: string; regla: string } | null };
   const grupos = new Map<string, { org: string; conn: string; xs: Regla[] }>();
   for (const a of acciones) {
     const prev = obj(a.previous);
     const conn = uuid(prev.connection_id), zone = str(prev.zone_id), rs = str(prev.ruleset_id), regla = str(a.provider_ref);
     const ref = str(prev.ref);
-    const x: Regla | null = prev.scope !== 'host' || !UUID.test(a.org_id) || !conn || !zone || !ZONA_ID.test(zone) ? null
-      : regla ? (rs && ID_CF.test(rs) && ID_CF.test(regla) ? { id: a.id, zone, rs, regla } : null)
-      : ref && REF.test(ref) ? { id: a.id, zone, ref } : null;
-    if (!x || !conn) { resultados.set(a.id, 'invalido'); continue; }
+    const valida = prev.scope === 'host' && UUID.test(a.org_id) && zone !== null && ZONA_ID.test(zone)
+      && (regla ? rs !== null && ID_CF.test(rs) && ID_CF.test(regla) : ref !== null && REF.test(ref));
+    if (!valida || !conn || !zone) { resultados.set(a.id, 'invalido'); continue; }
+    const x: Regla = { id: a.id, org: a.org_id, zone, ref: ref && REF.test(ref) ? ref : null, desc: str(prev.descripcion),
+      host: a.barrer === false ? null : hostCanonico(a.target), propia: regla && rs ? { rs, regla } : null };
     const k = `${a.org_id}|${conn}`;
     const g = grupos.get(k) ?? { org: a.org_id, conn, xs: [] };
     g.xs.push(x);
     grupos.set(k, g);
   }
   const admin = db(env);
+  const barridas: { org: string; ref: string }[] = [];
+  let quedan = MAX_BARRIDO, sinBarrer = 0;
   for (const g of grupos.values()) {
     subpeticiones += 2;
     try {
       await withSecret(env, admin, { orgId: g.org, connectionId: g.conn, provider: 'cloudflare', kind: 'action' }, async (token) => {
+        const eps = new Map<string, Entrypoint>();
+        const borradas = new Set<string>();
+        const del = (zone: string, rs: string, regla: string) => { subpeticiones++; borradas.add(regla); return borrarId(token, zone, rs, regla); };
         for (const x of g.xs) {
-          if ('ref' in x) {
-            const r = await borrarPorRef(token, x.zone, x.ref, () => { subpeticiones++; });
-            resultados.set(x.id, r === 'no_estaba' ? 'deshecho' : r);
+          // Un GET por zona si hay que buscar la regla por su ref o barrer el host; si no, DELETE por id como siempre.
+          let ep = eps.get(x.zone) ?? null;
+          if (!ep && (!x.propia || x.host)) {
+            subpeticiones++;
+            ep = await leerEntrypoint(token, x.zone);
+            eps.set(x.zone, ep);
+          }
+          if (!ep || ep.tipo === 'fallo') {
+            resultados.set(x.id, x.propia ? await del(x.zone, x.propia.rs, x.propia.regla) : ep ? falloEp(ep) : 'caido');
             continue;
           }
-          subpeticiones++;
-          try {
-            resultados.set(x.id, delStatus(await borrarReglaCf(token, x.zone, x.rs, x.regla)));
-          } catch {
-            resultados.set(x.id, 'caido');
+          if (ep.tipo === 'no_existe') { resultados.set(x.id, 'deshecho'); continue; }   // fase sin ruleset: no queda ninguna
+          const listada = x.propia && ep.reglas.some((y) => y.id === x.propia?.regla) ? x.propia.regla : null;
+          const id = listada ?? idDeRegla(ep.reglas, x.ref, x.desc);
+          // La de provider_ref se borra por id aunque el GET no la traiga (404 = ya no estaba, como siempre).
+          const r = id ? await del(x.zone, ep.id, id) : x.propia ? await del(x.zone, x.propia.rs, x.propia.regla) : 'deshecho';
+          resultados.set(x.id, r);
+          if (r !== 'deshecho' || !x.host) continue;
+          for (const y of ep.reglas) {
+            const yid = str(y.id);
+            if (!yid || !ID_CF.test(yid) || borradas.has(yid) || !nuestraDe(y, x.host)) continue;
+            if (quedan <= 0) { sinBarrer++; continue; }
+            quedan--;
+            const s = await del(x.zone, ep.id, yid);
+            const yref = str(y.ref);
+            if (s === 'deshecho' && yref && REF.test(yref)) barridas.push({ org: x.org, ref: yref });
+            else if (s !== 'deshecho') log('warn', 'bajo_ataque.barrido_fallido', { rid: o.rid, action_id: x.id, resultado: s });
           }
         }
       });
@@ -729,14 +808,24 @@ export async function deshacerBajoAtaque(env: CloudflareBindings, acciones: read
       for (const x of g.xs) if (!resultados.has(x.id)) resultados.set(x.id, r);
     }
   }
+  if (sinBarrer) log('warn', 'bajo_ataque.barrido_incompleto', { rid: o.rid, quedan: sinBarrer });
+  const undone_at = new Date(o.ahora ?? Date.now()).toISOString();
   const hechos = acciones.filter((a) => resultados.get(a.id) === 'deshecho');
   if (hechos.length) {
     subpeticiones++;
-    const undone_at = new Date(o.ahora ?? Date.now()).toISOString();
     const orgs = [...new Set(hechos.map((a) => a.org_id))];
     const { error } = await admin.from('actions').update({ status: 'undone', undone_at }).in('id', hechos.map((x) => x.id))
       .in('org_id', orgs).eq('kind', 'under_attack_on').in('status', ['executed', 'failed']);
     if (error) interno(o.rid, 'bajo_ataque.undone_error', error.code);
+  }
+  if (barridas.length) {
+    // Las failed de esas reglas (un E21 que dio failed sin provider_ref, una retirada fallida) ya no tienen regla.
+    subpeticiones++;
+    const { error } = await admin.from('actions').update({ status: 'undone', undone_at })
+      .in('org_id', [...new Set(barridas.map((b) => b.org))]).eq('kind', 'under_attack_on').eq('status', 'failed')
+      .in('previous->>ref', barridas.map((b) => b.ref));
+    if (error) log('warn', 'bajo_ataque.barrido_sin_registro', { rid: o.rid, code: error.code ?? null });
+    log('info', 'bajo_ataque.barrido', { rid: o.rid, barridas: barridas.length });
   }
   for (const [id, r] of resultados) {
     if (r !== 'deshecho') log('warn', 'bajo_ataque.deshacer_fallido', { rid: o.rid, action_id: id, resultado: r });
@@ -744,62 +833,104 @@ export async function deshacerBajoAtaque(env: CloudflareBindings, acciones: read
   return { resultados, subpeticiones };
 }
 
-// ── Propuesta huérfana (D8, housekeeping) ───────────────────────────────────────────────────────────────────────────
-export type ResultadoHuerfana = 'retirada' | 'no_estaba' | 'sin_comprobar' | 'pendiente' | null;
+// ── Propuesta huérfana o sin confirmar (D8, housekeeping) ───────────────────────────────────────────────────────────
+export type ResultadoHuerfana = 'retirada' | 'adoptada' | 'no_estaba' | 'sin_comprobar' | 'pendiente' | null;
+/** Candidatas que se leen por minuto: se trata la más vieja que no espera su reintento. */
+export const CANDIDATAS_HUERFANA = 10;
+const esperaMs = (intentos: number) => Math.min(2 ** (intentos - 1), 60) * 60_000;   // 1, 2, 4… min, como la caducidad
+// Sin lo que solo sirve mientras se reintenta: la caducidad de una executed usa también intentos y reintento_en.
+const sinEspera = (prev: Obj): Obj => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== 'intentos' && k !== 'reintento_en'));
 
-/** Una proposed de bajo ataque de hace más de EN_CURSO_MS es un executeUnderAttack que murió entre el POST y el UPDATE
- *  (o antes): ocupa el host (índice de 0017) y pudo dejar la regla puesta. Se lee UNA (la más vieja); con su conexión,
- *  GET del entrypoint y, si una regla trae previous.ref, DELETE. La fila queda failed con previous.huerfana:
- *  'retirada' | 'no_estaba'; con un fallo permanente (permiso, token, credencial) o uno pasajero cuando ya pasó su
- *  expires_at (la regla ya no actúa), 'sin_comprobar' con previous.deshacer_error (E55 la enseña con los pasos); con uno
- *  pasajero antes de expires_at no se escribe y se reintenta el minuto siguiente. ≤ 6 subpeticiones. Nunca lanza. */
+/** Una proposed de bajo ataque de hace más de EN_CURSO_MS es una de dos: un executeUnderAttack que murió entre el POST
+ *  y el UPDATE (o antes), o una sin confirmar (previous.reconciliar: el POST no tuvo respuesta clara y el GET de E21
+ *  tampoco vio la regla). Las dos ocupan el host (índice de 0017) y pueden tener la regla puesta. Se leen hasta
+ *  CANDIDATAS_HUERFANA (las más viejas) y se trata UNA: la primera sin previous.reintento_en por llegar. Con su
+ *  conexión, GET del entrypoint y la regla de previous.ref (o de su descripción). La huérfana: DELETE y failed con
+ *  previous.huerfana 'retirada' | 'no_estaba'. La sin confirmar es el modo que el admin pidió: si está, executed con
+ *  provider_ref y ruleset_id (huerfana 'adoptada'; E55 la enseña activa, y Deshacer y la caducidad la retiran) y el
+ *  incidente mitigated; si no está, failed con 'no_estaba' (el host queda libre). Un fallo permanente (permiso, token,
+ *  credencial), o uno pasajero cuando ya pasó su expires_at (la regla ya no actúa), deja failed 'sin_comprobar' con
+ *  previous.deshacer_error (E55 la enseña con los pasos). Uno pasajero antes de expires_at la deja proposed con
+ *  previous.intentos y reintento_en (1, 2, 4… min), así no tapa a las demás. ≤ 6 subpeticiones. Nunca lanza. */
 export async function retirarHuerfanaBajoAtaque(env: CloudflareBindings, o: { rid: string; ahora?: number })
   : Promise<{ resultado: ResultadoHuerfana; subpeticiones: number }> {
   const ahora = o.ahora ?? Date.now();
   let subpeticiones = 1;
   try {
     const admin = db(env);
-    const { data, error } = await admin.from('actions').select('id, org_id, previous, expires_at').eq('kind', 'under_attack_on')
-      .eq('status', 'proposed').lt('created_at', new Date(ahora - EN_CURSO_MS).toISOString()).order('created_at').limit(1);
+    const { data, error } = await admin.from('actions').select('id, org_id, incident_id, previous, expires_at')
+      .eq('kind', 'under_attack_on').eq('status', 'proposed').lt('created_at', new Date(ahora - EN_CURSO_MS).toISOString())
+      .order('created_at').limit(CANDIDATAS_HUERFANA);
     if (error) {
       log('warn', 'bajo_ataque.huerfana_lectura_error', { rid: o.rid, code: error.code ?? null });
       return { resultado: null, subpeticiones };
     }
-    const f = obj(Array.isArray(data) ? data[0] : null);
+    const f = (Array.isArray(data) ? data : []).map(obj)
+      .find((x) => !(Date.parse(str(obj(x.previous).reintento_en) ?? '') > ahora)) ?? {};
     const id = str(f.id), org = uuid(f.org_id);
     if (!id || !org) return { resultado: null, subpeticiones };
     const prev = obj(f.previous);
     const conn = uuid(prev.connection_id), zone = str(prev.zone_id), ref = str(prev.ref);
-    let r: ResultadoDeshacer | 'no_estaba';
+    const adoptar = str(prev.reconciliar) !== null;
+    let r: Busqueda | ResultadoDeshacer;
     if (!conn || !zone || !ZONA_ID.test(zone) || !ref || !REF.test(ref)) r = 'invalido';
     else {
       subpeticiones += 2;
+      const cuenta = () => { subpeticiones++; };
       try {
         r = await withSecret(env, admin, { orgId: org, connectionId: conn, provider: 'cloudflare', kind: 'action' },
-          (token) => borrarPorRef(token, zone, ref, () => { subpeticiones++; }));
+          async (token): Promise<Busqueda | ResultadoDeshacer> => {
+            const b = await buscarPorRef(token, zone, ref, str(prev.descripcion), cuenta);
+            if (adoptar || typeof b === 'string') return b;
+            cuenta();
+            return borrarId(token, zone, b.rs, b.regla);
+          });
       } catch (e) {
         const material = e instanceof Error && !(e instanceof ApiError) && e.message === 'CRYPTO_MATERIAL_UNAVAILABLE';
         r = material ? 'caido' : 'sin_credencial';
       }
     }
+    // Toda escritura va con .eq('status','proposed'): si otra vía ya la cerró, no se pisa.
+    const escribir = (cambio: Obj) => {
+      subpeticiones++;
+      return admin.from('actions').update(cambio).eq('id', id).eq('org_id', org).eq('status', 'proposed');
+    };
     const vencida = Date.parse(str(f.expires_at) ?? '') <= ahora;
     if (r === 'caido' && !vencida) {
-      log('warn', 'bajo_ataque.huerfana', { rid: o.rid, action_id: id, resultado: 'pendiente' });
+      const intentos = (typeof prev.intentos === 'number' ? prev.intentos : 0) + 1;
+      const u = await escribir({ previous: { ...prev, intentos, reintento_en: new Date(ahora + esperaMs(intentos)).toISOString() } });
+      if (u.error) log('warn', 'bajo_ataque.huerfana_update_error', { rid: o.rid, code: u.error.code ?? null });
+      log('warn', 'bajo_ataque.huerfana', { rid: o.rid, action_id: id, resultado: 'pendiente', intentos });
       return { resultado: 'pendiente', subpeticiones };
     }
+    if (typeof r === 'object') {
+      // La sin confirmar está en Cloudflare: executed, como si E21 hubiera visto la respuesta.
+      const u = await escribir({ status: 'executed', provider_ref: r.regla,
+        previous: { ...sinEspera(prev), ruleset_id: r.rs, huerfana: 'adoptada' } });
+      if (u.error) {
+        // Sigue proposed con su marca: el minuto siguiente la vuelve a encontrar.
+        log('warn', 'bajo_ataque.huerfana_update_error', { rid: o.rid, code: u.error.code ?? null });
+        return { resultado: 'pendiente', subpeticiones };
+      }
+      const inc = uuid(f.incident_id);
+      if (inc) {
+        subpeticiones++;
+        const m = await admin.from('incidents').update({ status: 'mitigated', mitigated_at: new Date(ahora).toISOString() })
+          .eq('id', inc).eq('org_id', org).in('status', ['open', 'ack']);
+        if (m.error) log('warn', 'bajo_ataque.incidente_error', { rid: o.rid, code: m.error.code ?? null });
+      }
+      log('warn', 'bajo_ataque.huerfana', { rid: o.rid, action_id: id, resultado: 'adoptada' });
+      return { resultado: 'adoptada', subpeticiones };
+    }
     const resultado: ResultadoHuerfana = r === 'deshecho' ? 'retirada' : r === 'no_estaba' ? 'no_estaba' : 'sin_comprobar';
-    const cambio = resultado === 'sin_comprobar' ? { ...prev, huerfana: resultado, deshacer_error: r }
-      : { ...prev, huerfana: resultado };
-    subpeticiones++;
-    const u = await admin.from('actions').update({ status: 'failed', previous: cambio }).eq('id', id).eq('org_id', org)
-      .eq('status', 'proposed');
+    const base = { ...sinEspera(prev), huerfana: resultado };
+    const u = await escribir({ status: 'failed', previous: resultado === 'sin_comprobar' ? { ...base, deshacer_error: r } : base });
     if (u.error) log('warn', 'bajo_ataque.huerfana_update_error', { rid: o.rid, code: u.error.code ?? null });
     log(resultado === 'sin_comprobar' ? 'error' : 'warn', 'bajo_ataque.huerfana', { rid: o.rid, action_id: id, resultado,
-      ...(resultado === 'sin_comprobar' ? { motivo: r } : {}) });
+      ...(adoptar ? { sin_confirmar: true } : {}), ...(resultado === 'sin_comprobar' ? { motivo: r } : {}) });
     return { resultado, subpeticiones };
   } catch (e) {
     log('warn', 'bajo_ataque.huerfana_error', { rid: o.rid, name: e instanceof Error ? e.name : typeof e });
     return { resultado: null, subpeticiones };
   }
 }
-

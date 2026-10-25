@@ -31,6 +31,7 @@ vi.mock('../lib/credentials.ts', () => ({ withSecret: cred.withSecret }));
 const { CANDIDATOS_CADUCIDAD, ERROR_SCAN_INTERRUMPIDA, ERROR_WIKI_INTERRUMPIDA, housekeeping, LIMITE_CIERRE, LIMITE_VIGILANTE,
   MAX_REINTENTOS, VIGILANTE_SCAN_MS, VIGILANTE_WIKI_MS } = await import('./housekeeping.ts');
 const { CRON_MINUTO, onCron } = await import('../cron.ts');
+const { MAX_BARRIDO } = await import('../actions/under-attack.ts');
 const { SIN_AVANCE_MS } = await import('../wiki/corridas.ts');
 
 // Filtros que usa el respaldo del vigilante, evaluados sobre una fila: in, lt (fechas) y el or de started_at.
@@ -185,7 +186,7 @@ describe('housekeeping · caducidad de «Bloquear IP» (§08.8)', () => {
 
     const [sel, up, porRegla] = llamadaActions();
     expect(sel!.metodos).toEqual([
-      ['select', 'id, org_id, kind, provider_ref, previous'], ['eq', 'status', 'executed'], ['in', 'kind', ['block_ip', 'under_attack_on']],
+      ['select', 'id, org_id, kind, target, provider_ref, previous'], ['eq', 'status', 'executed'], ['in', 'kind', ['block_ip', 'under_attack_on']],
       ['lt', 'expires_at', AHORA.toISOString()], ['order', 'expires_at'], ['limit', CANDIDATOS_CADUCIDAD],
     ]);
     expect(fetchMock.mock.calls.map((c) => [String(c[0]), (c[1] as RequestInit).method])).toEqual([
@@ -357,6 +358,75 @@ describe('housekeeping · modo bajo ataque: caducidad por tipo y propuesta huér
     r = await housekeeping(envDoble(PROD).env, AHORA);
     expect(leeHuerfana()).toBe(true);
     expect(r.subpeticiones).toBeLessThanOrEqual(29);
+  });
+
+  describe('fila sin confirmar de E21 y barrido de reglas de otros intentos', () => {
+    const HOST = 'demo.officialvanguard.com';
+    const OTRO_HOST = 'tienda.officialvanguard.com';
+    const INC = '9e0b0000-0000-4000-8000-000000000001';
+    const expr = (h: string) => `(http.host eq "${h}" and http.request.timestamp.sec lt 1792885320)`;
+    const vieja = (i: number) => ({ id: String(i).repeat(32), ref: `vg_ua_${String(i).repeat(32)}`, expression: expr(HOST) });
+    const cfCon = (reglas: Record<string, unknown>[], status: (url: string) => number = () => 200) =>
+      fetchMock.mockImplementation(async (url: string, init: RequestInit) => (init.method === 'GET' && url === EP
+        ? new Response(JSON.stringify({ result: { id: RS, rules: reglas } })) : new Response('{}', { status: status(url) })));
+
+    it('una sin confirmar (previous.reconciliar) con la regla puesta → executed con provider_ref, sin DELETE; incidente mitigated', async () => {
+      const prev = { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF, reconciliar: 'cf_503', intentos: 1,
+        reintento_en: new Date(AHORA.getTime() - 1000).toISOString() };
+      estado.huerfanas = () => ({ data: [{ id: 'h1', org_id: ORG, incident_id: INC, previous: prev,
+        expires_at: new Date(AHORA.getTime() + 27 * 60_000).toISOString() }] });
+      cfCon([{ id: 'e'.repeat(32), ref: REF, expression: expr(HOST) }]);
+      const r = await housekeeping(envDoble(PROD).env, AHORA);
+      expect(borrados()).toEqual([]);
+      const up = actions().find((l) => l.metodos.some(([m]) => m === 'update'))!;
+      expect(up.metodos).toEqual([['update', { status: 'executed', provider_ref: 'e'.repeat(32), previous: { connection_id: CONN,
+        zone_id: ZONA, scope: 'host', ref: REF, reconciliar: 'cf_503', ruleset_id: RS, huerfana: 'adoptada' } }], ['eq', 'id', 'h1'],
+      ['eq', 'org_id', ORG], ['eq', 'status', 'proposed']]);
+      expect(estado.llamadas.find((l) => l.tabla === 'incidents')!.metodos).toContainEqual(['update',
+        { status: 'mitigated', mitigated_at: AHORA.toISOString() }]);
+      expect(r.subpeticiones).toBe(1 + 1 + 1 + 6);              // rpc · vigilante · caducidad (lectura) · reconciliación
+    });
+
+    it('la caducidad lee target y retira también las demás reglas de VanGUARD de ese host (nunca las del cliente ni otro host)', async () => {
+      estado.vencidas = () => ({ data: [modo('u1', { target: HOST })] });
+      cfCon([{ id: modo('u1').provider_ref, ref: REF, expression: expr(HOST) }, vieja(7),
+        { id: 'c'.repeat(32), ref: 'del_cliente', expression: expr(HOST) }, { ...vieja(8), expression: expr(OTRO_HOST) }]);
+      const r = await housekeeping(envDoble(PROD).env, AHORA);
+      expect(r).toMatchObject({ deshechos: 1, error: null });
+      expect(actions()[0]!.metodos).toContainEqual(['select', 'id, org_id, kind, target, provider_ref, previous']);
+      expect(borrados()).toEqual([`${CF}/rulesets/${RS}/rules/${modo('u1').provider_ref}`, `${CF}/rulesets/${RS}/rules/${'7'.repeat(32)}`]);
+      // rpc · vigilante · lectura · sobre · GET · 2 DELETE · undone · undone del barrido · huérfana (la caducidad gastó 8 ≤ 15)
+      expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 1 + 2 + 1 + 1 + 1);
+    });
+
+    it('peor caso del minuto con barrido (3 bloqueos y 2 modos en 5 conexiones, MAX_BARRIDO reglas viejas) ≤ 40', async () => {
+      estado.vencidas = () => ({ data: [
+        ...[1, 2, 3].map((i) => vencida(`a${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, existed: false } })),
+        modo('u4', { target: HOST, previous: { connection_id: conn(4), zone_id: ZONA, scope: 'host', ruleset_id: RS } }),
+        modo('u5', { target: OTRO_HOST, previous: { connection_id: conn(5), zone_id: ZONA, scope: 'host', ruleset_id: RS } }),
+      ] });
+      // a1 retirado, a2 pasajero, a3 permanente; u4 retirado con 3 viejas de su host; u5 pasajero (sin barrido).
+      const malos: Record<string, number> = { a2: 503, a3: 403, u5: 503 };
+      cfCon([{ id: modo('u4').provider_ref, expression: expr(HOST) }, { id: modo('u5').provider_ref, expression: expr(OTRO_HOST) },
+        vieja(1), vieja(2), vieja(3), vieja(4)], (url) => malos[Object.keys(malos).find((k) => url.includes(`/${k}`)) ?? ''] ?? 200);
+      const r = await housekeeping(envDoble(PROD).env, AHORA);
+      expect(r).toMatchObject({ deshechos: 2, error: null });
+      expect(borrados().filter((u) => /\/rules\/[1-4]{32}$/.test(u))).toHaveLength(MAX_BARRIDO);
+      expect(leeHuerfana()).toBe(false);
+      expect(r.subpeticiones).toBe(1 + 1 + 1 + 11 + 13 + 3);   // rpc · vigilante · lectura · bloqueos · modos · 3 no retiradas
+      expect(r.subpeticiones).toBeLessThanOrEqual(40);
+    });
+
+    it('si deshacerBajoAtaque lanza con filas que barren, su tope cuenta el GET y MAX_BARRIDO', async () => {
+      estado.vencidas = () => ({ data: [modo('u1', { target: HOST })] });
+      estado.actualizar = (l) => (l?.metodos.some(([m, c, v]) => m === 'eq' && c === 'kind' && v === 'under_attack_on')
+        ? { error: { code: '57014' } } : { data: null });
+      cfCon([{ id: modo('u1').provider_ref, ref: REF, expression: expr(HOST) }]);
+      const r = await housekeeping(envDoble(PROD).env, AHORA);
+      expect(r.error).toBe('internal');
+      // rpc · vigilante · lectura · tope (sobre 2 + DELETE 1 + GET 1 + MAX_BARRIDO + 2 escrituras) · huérfana (10 ≤ 15).
+      expect(r.subpeticiones).toBe(1 + 1 + 1 + 2 + 1 + 1 + MAX_BARRIDO + 2 + 1);
+    });
   });
 
   it('si una función de deshacer lanza (falla su undone), lo que ya gastó cuenta y no se lee la huérfana', async () => {

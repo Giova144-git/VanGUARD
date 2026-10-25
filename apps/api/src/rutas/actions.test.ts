@@ -134,6 +134,9 @@ const aKapso = () => fetchMock.mock.calls.filter((c) => String(c[0]).startsWith(
   .map((c) => JSON.parse(String((c[1] as RequestInit).body)) as Fila & { type: string; text?: { body: string };
     interactive?: { body: { text: string }; action: { buttons: { reply: { id: string; title: string } }[] } } });
 const lineas = () => logs.mock.calls.map((c) => String(c[0])).join('\n');
+// Subpeticiones de la petición (tope del equipo: 40): consultas y RPC a la base, getClaims, 2 por sobre y Cloudflare.
+const subpeticiones = () => doble.ops.length + doble.rpcs.length + 1 + 2 * cred.withSecret.mock.calls.length
+  + aCloudflare().length;
 
 describe('E20–E22 · guardas', () => {
   it('fuera del host de producción (VG_ENV=local, workers.dev o www) → 403 sin leer nada ni llamar a nadie', async () => {
@@ -439,9 +442,25 @@ describe('E21 y E22 · under_attack_on (despacho por tipo)', () => {
     expect(RespuestaEscritura.parse(await (await confirmar()).json())).toMatchObject({ ok: false,
       error: 'Te falta el permiso Zone · Config Rules · Edit en el token de Modo blindaje' });
     aprob = { ...aprob, used_at: null };
-    cf[`POST ${POST_REGLA}`] = () => new Response('{}', { status: 503 });
+    // 5xx antes del POST (el GET del entrypoint): Cloudflare no recibió la regla → failed y «Vuelve a proponerlo».
+    cf[`GET ${EP}`] = () => new Response('{}', { status: 503 });
     const caido = await confirmar();
     expect([caido.status, (await error(caido)).message]).toEqual([502, 'Cloudflare no respondió. Vuelve a proponerlo.']);
+    expect(de('actions', 'update').at(-1)!.payload).toEqual({ status: 'failed' });
+  });
+
+  it('E21: POST 5xx y el GET de reconciliación sin la regla → 502 «comprobamos», la fila sin confirmar (no failed); ≤ 40 subpeticiones', async () => {
+    let gets = 0;
+    cf[`GET ${EP}`] = () => (++gets === 1 ? new Response(JSON.stringify({ success: true, result: { id: RS, rules: [] } }))
+      : new Response('{}', { status: 500 }));
+    cf[`POST ${POST_REGLA}`] = () => new Response('{}', { status: 503 });
+    const r = await confirmar();
+    expect([r.status, (await error(r)).message]).toEqual([502,
+      'Cloudflare no respondió a tiempo. Comprobamos en unos minutos si el modo bajo ataque quedó activo.']);
+    const [up] = de('actions', 'update');
+    expect(up!.payload).toMatchObject({ previous: { reconciliar: 'cf_503' } });
+    expect(de('actions', 'update').some((o) => (o.payload as Fila).status === 'failed')).toBe(false);
+    expect(subpeticiones()).toBeLessThanOrEqual(40);
   });
 
   it('E21: ya usado → 409 «Vuelve a proponerlo» (sirve a los dos tipos)', async () => {
@@ -468,6 +487,29 @@ describe('E21 y E22 · under_attack_on (despacho por tipo)', () => {
     accion = { ...accion, status: 'undone' };
     const r = await deshacer();
     expect([r.status, (await error(r)).details?.reason]).toEqual([409, 'undone']);
+  });
+
+  it('E22 «Desactivar» con dos reglas de VanGUARD en el host (la de otro intento caído) → borra las dos; ≤ 40 subpeticiones', async () => {
+    const VIEJA = 'e'.repeat(32);
+    const REF_VIEJA = refBajoAtaque('a9900000-0000-4000-8000-0000000000ee');
+    const expr = `(http.host eq "${HOST}" and http.request.timestamp.sec lt 1792885320)`;
+    accion = { ...accion, target: HOST };
+    cf[`GET ${EP}`] = () => new Response(JSON.stringify({ success: true, result: { id: RS, rules: [
+      { id: 'c'.repeat(32), ref: 'del_cliente', expression: `http.host eq "${HOST}"` },
+      { id: VIEJA, ref: REF_VIEJA, expression: expr }, { id: REGLA, ref: refBajoAtaque(APR), expression: expr }] } }));
+    cf[`DELETE ${POST_REGLA}/${VIEJA}`] = () => new Response(null, { status: 200 });
+    const r = await deshacer();
+    expect(RespuestaEscritura.parse(await r.json())).toMatchObject({ ok: true, resultado: 'Modo bajo ataque desactivado' });
+    expect(aCloudflare().map((c) => `${(c[1] as RequestInit).method} ${String(c[0])}`))
+      .toEqual([`GET ${EP}`, `DELETE ${POST_REGLA}/${REGLA}`, `DELETE ${POST_REGLA}/${VIEJA}`]);
+    expect(de('actions', 'select').find((o) => o.single)!.columns).toContain('target');
+    expect(de('actions', 'update').map((o) => o.payload)).toHaveLength(2);
+    expect(subpeticiones()).toBeLessThanOrEqual(40);
+    // Una failed («Reintentar») no barre: con otra executed viva en el host, borraría la regla de esa.
+    fetchMock.mockClear();
+    accion = { ...accion, status: 'failed', previous: { ...(accion.previous as Fila), deshacer_error: 'caido' } };
+    expect((await deshacer()).status).toBe(200);
+    expect(aCloudflare().map((c) => `${(c[1] as RequestInit).method} ${String(c[0])}`)).toEqual([`DELETE ${POST_REGLA}/${REGLA}`]);
   });
 
   it('E22: «Reintentar» la retirada fallida de una huérfana (failed sin provider_ref) → GET + DELETE por su ref', async () => {

@@ -8,7 +8,7 @@ vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
 const cred = vi.hoisted(() => ({ withSecret: vi.fn(), ctxs: [] as unknown[] }));
 vi.mock('../lib/credentials.ts', () => ({ withSecret: cred.withSecret }));
 
-const { deshacerBajoAtaque, ERROR_SIN_PERMISO_CONFIG, executeUnderAttack, hostsProtegidos, leerParamsBajoAtaque,
+const { deshacerBajoAtaque, ERROR_SIN_PERMISO_CONFIG, executeUnderAttack, hostsProtegidos, leerParamsBajoAtaque, MAX_BARRIDO,
   MENSAJE_DESHACER_BAJO_ATAQUE, retirarHuerfanaBajoAtaque } = await import('./under-attack.ts');
 
 // executeUnderAttack, deshacerBajoAtaque y la huérfana (modo-bajo-ataque.md §8 y §10) con fetch simulado por método y
@@ -151,11 +151,52 @@ describe('executeUnderAttack (E21)', () => {
     sinPut();
   });
 
-  it('5xx y la regla no aparece → failed y caido (502); otro 4xx → rechazado con el código de Cloudflare', async () => {
+  it('5xx y la regla aún no aparece en el GET → sin confirmar (caido comprobando, nunca failed); otro 4xx → rechazado', async () => {
     cf[`POST ${CF}/rulesets/${RS}/rules`] = () => json({}, 503);
-    expect(await ejecutar()).toEqual({ tipo: 'caido', action_id: ACT, status: 503 });
+    expect(await ejecutar()).toEqual({ tipo: 'caido', action_id: ACT, status: 503, comprobando: true });
+    expect(de('actions', 'update').map((o) => (o.payload as Fila).status)).toEqual([undefined]);
     cf[`POST ${CF}/rulesets/${RS}/rules`] = () => json({ success: false, errors: [{ code: 20021 }] }, 400);
     expect(await ejecutar()).toMatchObject({ tipo: 'rechazado', error: 'Cloudflare no aceptó la regla (código 20021)' });
+  });
+
+  it('POST 5xx y el GET de reconciliación también falla → la fila sigue proposed con previous.reconciliar (housekeeping)', async () => {
+    let gets = 0;
+    cf[`GET ${EP}`] = () => (++gets === 1 ? ruleset([]) : json({}, 500));
+    cf[`POST ${CF}/rulesets/${RS}/rules`] = () => json({}, 503);
+    expect(await ejecutar()).toEqual({ tipo: 'caido', action_id: ACT, status: 503, comprobando: true });
+    expect(metodos()).toEqual([`GET ${EP}`, `POST ${CF}/rulesets/${RS}/rules`, `GET ${EP}`]);
+    const ups = de('actions', 'update');
+    expect(ups).toHaveLength(1);
+    expect(ups[0]!.payload).toEqual({ previous: { connection_id: CONN, zone_id: ZONA, zone_name: 'officialvanguard.com', scope: 'host',
+      ref: REF, descripcion: 'VanGUARD #A1F3C9 · bajo ataque · ab000000 · hasta 2026-10-24T23:42:00Z', caduca_en_regla: true,
+      reconciliar: 'cf_503', creo_ruleset: false } });
+    // Sigue ocupando el host (índice de 0017): solo pasa a executed o failed desde housekeeping.
+    expect([eqDe(ups[0]!, 'id'), eqDe(ups[0]!, 'org_id'), eqDe(ups[0]!, 'status')]).toEqual([ACT, ORG, 'proposed']);
+    expect(de('approvals', 'update').map((o) => o.payload)).toContainEqual({ result: { error: 'cf_503' } });
+    expect(lineas()).toContain('"bajo_ataque.sin_confirmar"');
+    expect(lineas()).not.toContain(TOKEN);
+    sinPut();
+  });
+
+  it('plazo agotado en el POST del ruleset (fase sin ruleset) y GET 429 → sin confirmar con creo_ruleset; el GET inicial caído → failed', async () => {
+    let gets = 0;
+    cf[`GET ${EP}`] = () => (++gets === 1 ? json({}, 404) : json({}, 429));
+    cf[`POST ${CF}/rulesets`] = () => { throw Object.assign(new Error('plazo'), { name: 'TimeoutError' }); };
+    expect(await ejecutar()).toEqual({ tipo: 'caido', action_id: ACT, status: null, comprobando: true });
+    expect(de('actions', 'update')[0]!.payload).toMatchObject({ previous: { reconciliar: 'cf_red', creo_ruleset: true } });
+    // Sin POST no hay duda: Cloudflare no llegó a recibir la regla → failed y caido como siempre.
+    doble.ops.length = 0;
+    cf[`GET ${EP}`] = () => json({}, 503);
+    expect(await ejecutar()).toEqual({ tipo: 'caido', action_id: ACT, status: 503 });
+    expect(de('actions', 'update').map((o) => o.payload)).toEqual([{ status: 'failed' }]);
+  });
+
+  it('reproponer con una sin confirmar en ese host: el insert da 23505 y devuelve en_curso sin tocar Cloudflare', async () => {
+    errorInsert = { code: '23505' };
+    viva = [{ id: 'ac000000-0000-4000-8000-0000000000cc', status: 'proposed', created_at: '2026-10-24T22:40:00+00:00',
+      previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: refBajoAtaque(INC), reconciliar: 'cf_503' } }];
+    expect(await ejecutar()).toEqual({ tipo: 'en_curso', action_id: viva[0]!.id });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('el plan ya usa sus 10 reglas → rechazado sin POST', async () => {
@@ -296,6 +337,64 @@ describe('deshacerBajoAtaque (E22, E10 y caducidad)', () => {
     expect((await deshacerBajoAtaque(envDoble().env, [sinRef], { rid: 'r' })).resultados.get(ACT)).toBe('invalido');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  describe('barrido: TODAS las reglas de VanGUARD de ese host, no solo la de provider_ref', () => {
+    const VIEJA = 'e'.repeat(32);
+    const REF_VIEJA = refBajoAtaque('ab000000-0000-4000-8000-0000000000ee');
+    const expr = (h: string) => `(http.host eq "${h}" and http.request.timestamp.sec lt ${EPOCH})`;
+    const reglas = (extra: Fila[] = []) => [
+      { id: 'c'.repeat(32), ref: 'del_cliente', expression: `http.host eq "${HOST}"` },          // del cliente: nunca
+      { id: VIEJA, ref: REF_VIEJA, expression: expr(HOST) },                                    // otro intento (E21 caído)
+      { id: REGLA_ID, ref: REF, expression: expr(HOST) },                                       // la de esta fila
+      { id: 'a'.repeat(32), ref: refBajoAtaque(INC), expression: expr('otro.officialvanguard.com') },   // otro host
+      { id: 'b'.repeat(32), ref: refBajoAtaque(ACT), expression: expr(`x.${HOST}`) },           // subdominio: no casa
+      ...extra,
+    ];
+    beforeEach(() => {
+      cf[`GET ${EP}`] = () => ruleset(reglas());
+      cf[`DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`] = () => new Response(null, { status: 200 });
+      cf[`DELETE ${CF}/rulesets/${RS}/rules/${VIEJA}`] = () => new Response(null, { status: 200 });
+    });
+
+    it('Deshacer de la executed con dos reglas del host → borra las dos y deja undone la failed del otro intento', async () => {
+      const r = await deshacerBajoAtaque(envDoble().env, [accion({ target: HOST })], { rid: 'r', ahora: AHORA });
+      expect(r.resultados.get(ACT)).toBe('deshecho');
+      expect(metodos()).toEqual([`GET ${EP}`, `DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`,
+        `DELETE ${CF}/rulesets/${RS}/rules/${VIEJA}`]);
+      expect(r.subpeticiones).toBe(2 + 1 + 2 + 2);                 // sobre · GET · 2 DELETE · undone · undone del barrido
+      const [propia, barrida] = de('actions', 'update');
+      expect(propia!.filters).toContainEqual(['id', 'in', [ACT]]);
+      expect(barrida!.payload).toEqual({ status: 'undone', undone_at: new Date(AHORA).toISOString() });
+      expect(barrida!.filters).toEqual([['org_id', 'in', [ORG]], ['kind', 'eq', 'under_attack_on'], ['status', 'eq', 'failed'],
+        ['previous->>ref', 'in', [REF_VIEJA]]]);
+      sinPut();
+    });
+
+    it('por la descripción de VanGUARD aunque falte el ref; se para en MAX_BARRIDO; un fallo al barrer no tumba el Deshacer', async () => {
+      const mas = [1, 2, 3].map((i) => ({ id: String(i).repeat(32), description: `VanGUARD #A1F3C9 · bajo ataque · 0000000${i} · hasta x`,
+        expression: expr(HOST) }));
+      cf[`GET ${EP}`] = () => ruleset(reglas(mas));
+      for (const m of mas) cf[`DELETE ${CF}/rulesets/${RS}/rules/${m.id}`] = () => new Response(null, { status: 503 });
+      const r = await deshacerBajoAtaque(envDoble().env, [accion({ target: HOST })], { rid: 'r', ahora: AHORA });
+      expect(r.resultados.get(ACT)).toBe('deshecho');
+      const borrados = metodos().filter((m) => m.startsWith('DELETE'));
+      expect(borrados).toHaveLength(1 + MAX_BARRIDO);
+      expect(borrados.slice(0, 2)).toEqual([`DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`, `DELETE ${CF}/rulesets/${RS}/rules/${VIEJA}`]);
+      expect(lineas()).toContain('"bajo_ataque.barrido_incompleto"');
+    });
+
+    it('una failed («Reintentar», barrer:false) o sin target solo retira la suya; GET caído → DELETE por provider_ref como siempre', async () => {
+      await deshacerBajoAtaque(envDoble().env, [accion({ target: HOST, barrer: false })], { rid: 'r' });
+      expect(metodos()).toEqual([`DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`]);
+      fetchMock.mockClear();
+      await deshacerBajoAtaque(envDoble().env, [accion()], { rid: 'r' });
+      expect(metodos()).toEqual([`DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`]);
+      fetchMock.mockClear();
+      cf[`GET ${EP}`] = () => json({}, 503);
+      const r = await deshacerBajoAtaque(envDoble().env, [accion({ target: HOST })], { rid: 'r' });
+      expect([r.resultados.get(ACT), metodos()]).toEqual(['deshecho', [`GET ${EP}`, `DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`]]);
+    });
+  });
 });
 
 describe('retirarHuerfanaBajoAtaque (D8)', () => {
@@ -328,15 +427,17 @@ describe('retirarHuerfanaBajoAtaque (D8)', () => {
     expect(metodos().some((m) => m.startsWith('DELETE'))).toBe(false);
   });
 
-  it('403 → sin_comprobar con deshacer_error (E55 la enseña); 5xx antes de expires_at → pendiente sin escribir; vencida → sin_comprobar', async () => {
+  it('403 → sin_comprobar con deshacer_error (E55 la enseña); 5xx antes de expires_at → pendiente con su espera; vencida → sin_comprobar', async () => {
     cf[`GET ${EP}`] = () => json({}, 403);
     expect((await retirar()).resultado).toBe('sin_comprobar');
     expect((de('actions', 'update')[0]!.payload as { previous: Fila }).previous).toMatchObject({ huerfana: 'sin_comprobar',
       deshacer_error: 'sin_permiso' });
     cf[`GET ${EP}`] = () => json({}, 503);
-    const antes = de('actions', 'update').length;
-    expect(await retirar()).toEqual({ resultado: 'pendiente', subpeticiones: 4 });
-    expect(de('actions', 'update')).toHaveLength(antes);
+    expect(await retirar()).toEqual({ resultado: 'pendiente', subpeticiones: 5 });
+    // Sigue proposed, con el intento y cuándo volver a mirarla: así no tapa a las demás huérfanas el minuto siguiente.
+    const espera = de('actions', 'update').at(-1)!;
+    expect(espera.payload).toEqual({ previous: { ...fila().previous, intentos: 1, reintento_en: new Date(AHORA + 60_000).toISOString() } });
+    expect([eqDe(espera, 'id'), eqDe(espera, 'org_id'), eqDe(espera, 'status')]).toEqual([ACT, ORG, 'proposed']);
     huerfana = [fila({ expires_at: new Date(AHORA - 1000).toISOString() })];
     expect((await retirar()).resultado).toBe('sin_comprobar');
   });
@@ -345,5 +446,75 @@ describe('retirarHuerfanaBajoAtaque (D8)', () => {
     huerfana = [];
     expect(await retirar()).toEqual({ resultado: null, subpeticiones: 1 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe('una sin confirmar de E21 (previous.reconciliar): se busca la regla hasta encontrarla o confirmar que no está', () => {
+    const OTRA = 'ac000000-0000-4000-8000-000000000002';
+    const REF_OTRA = refBajoAtaque('ab000000-0000-4000-8000-0000000000ff');
+    const DESC = 'VanGUARD #A1F3C9 · bajo ataque · ab000000 · hasta 2026-10-24T23:42:00Z';
+    const sinConfirmar = (prev: Fila = {}, o: Fila = {}) => fila({ incident_id: INC, previous: { connection_id: CONN, zone_id: ZONA,
+      scope: 'host', ref: REF, descripcion: DESC, caduca_en_regla: true, reconciliar: 'cf_503', creo_ruleset: false, ...prev }, ...o });
+
+    it('la regla está → executed con provider_ref y ruleset_id (adoptada), sin DELETE, e incidente mitigated: 6 subpeticiones', async () => {
+      huerfana = [sinConfirmar({ intentos: 2, reintento_en: new Date(AHORA - 1000).toISOString() })];
+      cf[`GET ${EP}`] = () => ruleset([{ id: 'c'.repeat(32), ref: 'del_cliente' }, { id: REGLA_ID, ref: REF }]);
+      expect(await retirar()).toEqual({ resultado: 'adoptada', subpeticiones: 6 });
+      expect(metodos()).toEqual([`GET ${EP}`]);
+      const up = de('actions', 'update')[0]!;
+      // Sin intentos ni reintento_en: la caducidad la retirará al vencer como a cualquier executed.
+      expect(up.payload).toEqual({ status: 'executed', provider_ref: REGLA_ID, previous: { connection_id: CONN, zone_id: ZONA,
+        scope: 'host', ref: REF, descripcion: DESC, caduca_en_regla: true, reconciliar: 'cf_503', creo_ruleset: false, ruleset_id: RS,
+        huerfana: 'adoptada' } });
+      expect([eqDe(up, 'id'), eqDe(up, 'org_id'), eqDe(up, 'status')]).toEqual([ACT, ORG, 'proposed']);
+      const inc = de('incidents', 'update')[0]!;
+      expect([eqDe(inc, 'id'), eqDe(inc, 'org_id'), (inc.payload as Fila).status]).toEqual([INC, ORG, 'mitigated']);
+      expect(inc.filters).toContainEqual(['status', 'in', ['open', 'ack']]);
+      expect(de('actions', 'select')[0]!.columns).toContain('incident_id');
+    });
+
+    it('sin el ref (Cloudflare lo quitó) se reconoce por su descripción exacta', async () => {
+      huerfana = [sinConfirmar()];
+      cf[`GET ${EP}`] = () => ruleset([{ id: REGLA_ID, description: DESC }]);
+      expect((await retirar()).resultado).toBe('adoptada');
+      expect((de('actions', 'update')[0]!.payload as Fila).provider_ref).toBe(REGLA_ID);
+    });
+
+    it('no está (ruleset sin ella o fase sin ruleset) → failed con huerfana no_estaba, sin DELETE: el host queda libre', async () => {
+      huerfana = [sinConfirmar()];
+      cf[`GET ${EP}`] = () => ruleset([{ id: 'c'.repeat(32), ref: 'del_cliente' }]);
+      expect(await retirar()).toEqual({ resultado: 'no_estaba', subpeticiones: 5 });
+      expect(de('actions', 'update')[0]!.payload).toEqual({ status: 'failed', previous: { ...sinConfirmar().previous as Fila,
+        huerfana: 'no_estaba' } });
+      cf[`GET ${EP}`] = () => json({}, 404);
+      expect((await retirar()).resultado).toBe('no_estaba');
+      expect(metodos().some((m) => m.startsWith('DELETE'))).toBe(false);
+      expect(de('incidents', 'update')).toHaveLength(0);
+    });
+
+    it('Cloudflare caído → pendiente con espera creciente; el minuto siguiente se salta y pasa a la siguiente candidata', async () => {
+      huerfana = [sinConfirmar({ intentos: 1 }), fila({ id: OTRA, previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF_OTRA } })];
+      cf[`GET ${EP}`] = () => json({}, 503);
+      expect(await retirar()).toEqual({ resultado: 'pendiente', subpeticiones: 5 });
+      expect((de('actions', 'update')[0]!.payload as { previous: Fila }).previous).toMatchObject({ intentos: 2,
+        reintento_en: new Date(AHORA + 120_000).toISOString() });
+      // Con la primera esperando, la siguiente (una huérfana a secas) sí se procesa.
+      huerfana[0] = sinConfirmar({ intentos: 2, reintento_en: new Date(AHORA + 120_000).toISOString() });
+      cf[`GET ${EP}`] = () => ruleset([{ id: 'f'.repeat(32), ref: REF_OTRA }]);
+      cf[`DELETE ${CF}/rulesets/${RS}/rules/${'f'.repeat(32)}`] = () => new Response(null, { status: 200 });
+      expect((await retirar()).resultado).toBe('retirada');
+      expect(eqDe(de('actions', 'update').at(-1)!, 'id')).toBe(OTRA);
+    });
+
+    it('caída tras expires_at o 403 → failed sin_comprobar con deshacer_error (E55: retirada_fallida con los pasos)', async () => {
+      huerfana = [sinConfirmar({}, { expires_at: new Date(AHORA - 1000).toISOString() })];
+      cf[`GET ${EP}`] = () => json({}, 503);
+      expect((await retirar()).resultado).toBe('sin_comprobar');
+      expect(de('actions', 'update')[0]!.payload).toMatchObject({ status: 'failed', previous: { huerfana: 'sin_comprobar',
+        deshacer_error: 'caido' } });
+      huerfana = [sinConfirmar()];
+      cf[`GET ${EP}`] = () => json({}, 403);
+      expect((await retirar()).resultado).toBe('sin_comprobar');
+      expect(de('actions', 'update').at(-1)!.payload).toMatchObject({ previous: { deshacer_error: 'sin_permiso' } });
+    });
   });
 });

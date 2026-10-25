@@ -407,6 +407,17 @@ describe('housekeeping · vigilante de corridas colgadas (0011)', () => {
       scans: ['s1'], total: 3 }]);
   });
 
+  it('0022: una auditoría terminada cuyo cierre se perdió (scan_runs_cerradas) no cuenta como interrumpida', async () => {
+    estado.vigilante = () => ({ data: [{ tabla: 'scan_runs_cerradas', id: 's9', org_id: ORG }, { tabla: 'scan_runs', id: 's1', org_id: ORG2 }] });
+    const r = await housekeeping(envDoble().env, AHORA);
+    expect(r).toMatchObject({ subpeticiones: 2, vigilante: 'rpc', interrumpidas: { wiki: 0, scans: 1 }, error: null });
+    expect(lineasVigilante()).toEqual([{ level: 'warn', event: 'vigilante.interrumpidas', modo: 'rpc', wiki: [], scans: ['s1'],
+      total: 1 }]);
+    const ev = logs.mock.calls.map((a) => JSON.parse(String(a[0])) as Record<string, unknown>);
+    expect(ev.filter((e) => e.event === 'vigilante.cerradas')).toEqual([{ level: 'info', event: 'vigilante.cerradas',
+      scans: ['s9'], total: 1 }]);
+  });
+
   it('sin nada que cerrar no deja línea propia; otro error de la RPC va al resumen sin caer al respaldo', async () => {
     await housekeeping(envDoble().env, AHORA);
     expect(lineasVigilante()).toEqual([]);
@@ -519,6 +530,46 @@ describe('housekeeping · vigilante de corridas colgadas (0011)', () => {
     it('solo service_role la ejecuta', () => {
       expect(sql).toContain('revoke all on function public.vg_vigilar_corridas(int, int, int) from public, anon, authenticated;');
       expect(sql).toContain('grant execute on function public.vg_vigilar_corridas(int, int, int) to service_role;');
+    });
+  });
+
+  // 0022 reescribe la función con la misma firma: cierra como finalizar las auditorías con todos los pasos terminados
+  // (prueba en la base: supabase/tests/vigilante-terminadas.sql).
+  describe('0022_vigilante_cierra_terminadas.sql', () => {
+    const ruta = fileURLToPath(new URL('../../../../supabase/migrations/0022_vigilante_cierra_terminadas.sql', import.meta.url).href);
+    const crudo = readFileSync(ruta, 'utf8').replace(/--.*$/gm, '');
+    const sql = crudo.toLowerCase().replace(/\s+/g, ' ');
+    const entre = (desde: string, hasta: string) => {
+      const i = sql.indexOf(desde);
+      return sql.slice(i, sql.indexOf(hasta, i));
+    };
+    const terminada = "not exists (select 1 from jsonb_array_elements(s.steps) t(e) where t.e->>'status' in ('pending', 'running'))";
+
+    it('misma firma, sin drop, y los mismos permisos que la 0011', () => {
+      expect(sql).toContain('create or replace function public.vg_vigilar_corridas(p_wiki_seconds int default 600, '
+        + 'p_scan_seconds int default 900, p_limit int default 50) returns table (tabla text, id uuid, org_id uuid) language sql '
+        + "security definer set search_path = ''");
+      expect(sql).not.toContain('drop function');
+      expect(sql).toContain('revoke all on function public.vg_vigilar_corridas(int, int, int) from public, anon, authenticated;');
+      expect(sql).toContain('grant execute on function public.vg_vigilar_corridas(int, int, int) to service_role;');
+      expect(sql).toContain('revoke all on function private.vg_fuentes_fallaron(jsonb) from public, anon, authenticated;');
+      expect(sql.match(/for update skip locked/g)).toHaveLength(3);
+    });
+
+    it('terminada: sin pasos abiertos, compare-and-set en el select y en el update, y sale como scan_runs_cerradas', () => {
+      expect(entre('ct as', 'for update')).toContain(terminada);
+      expect(entre('ct as', 'for update')).toContain("jsonb_array_length(s.steps) > 0");
+      const ut = entre('ut as', 'returning');
+      expect(ut).toContain(terminada.replace('s.steps', 'u.steps'));
+      expect(ut).toContain("u.status in ('queued', 'running')");
+      expect(ut).toContain("then 'failed' else 'succeeded' end");
+      expect(ut).toContain("'todos los pasos de la auditoría fallaron'");
+      expect(ut).not.toMatch(/steps =|summary|score|coverage/);
+      expect(sql).toContain("select 'scan_runs_cerradas'::text, ut.id, ut.org_id from ut");
+      // Las de pasos abiertos siguen el camino de la 0011 y nunca se cruzan con las terminadas.
+      expect(entre('cs as', 'for update')).toContain(`not (jsonb_typeof(s.steps) = 'array' and jsonb_array_length(s.steps) > 0 and ${terminada})`);
+      expect(crudo).toContain(`error = '${ERROR_SCAN_INTERRUMPIDA}'`);
+      expect(crudo).toContain(`error = '${ERROR_WIKI_INTERRUMPIDA}'`);
     });
   });
 });

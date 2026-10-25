@@ -1,10 +1,13 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
-import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
   AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, McpTokenCreated, type McpTokenCreate, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
+  MergeGateConfig, MergeGateSaved, type MergeGateAction, type MergeGatePut,
+  UnderAttackProposal, type UnderAttackPropose,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
+import { esApiError } from './errores';
 
 function useInvalidar(org: string) {
   const qc = useQueryClient();
@@ -90,13 +93,10 @@ export function useAccionIncidente(org: string) {
   });
 }
 
-// «Bloquear esta IP» (E20–E22): simular → confirmar con el código de un solo uso → deshacer. Sin useMutation para el código.
-export function useBloqueo(org: string) {
-  const invalidar = useInvalidar(org);
-  const fin = () => invalidar('incident', 'incidents', 'overview', 'module');
+// Confirmar con el código de un solo uso (E21) y deshacer (E22): los comparten «Bloquear IP» y «Modo bajo ataque», que
+// el BACK despacha por el tipo de la aprobación o de la acción. `fin` refresca lo que cada una pinta.
+function canjeYDeshacer(org: string, fin: () => Promise<unknown>) {
   return {
-    proponer: (body: { incident_id: string; target: string }) =>
-      api(`/api/orgs/${org}/actions/propose`, { method: 'POST', body: { ...body, kind: 'block_ip' }, esquema: ProposeResponse }),
     confirmar: async (approvalId: string, code: string) => {
       const r = await api(`/api/orgs/${org}/actions/${approvalId}/confirm`, { method: 'POST', body: { code }, esquema: RespuestaEscritura });
       await fin();
@@ -107,6 +107,30 @@ export function useBloqueo(org: string) {
       await fin();
       return r;
     },
+  };
+}
+
+// «Bloquear esta IP» (E20–E22): simular → confirmar con el código de un solo uso → deshacer. Sin useMutation para el código.
+export function useBloqueo(org: string) {
+  const invalidar = useInvalidar(org);
+  const fin = () => invalidar('incident', 'incidents', 'overview', 'module');
+  return {
+    proponer: (body: { incident_id: string; target: string }) =>
+      api(`/api/orgs/${org}/actions/propose`, { method: 'POST', body: { ...body, kind: 'block_ip' }, esquema: ProposeResponse }),
+    ...canjeYDeshacer(org, fin),
+    refrescar: fin,
+  };
+}
+
+// «Modo bajo ataque» (E56, y E21/E22 como el bloqueo; asignaciones/modo-bajo-ataque.md §9). El host no viaja: el BACK lo
+// saca del incidente. fin() también refresca la oferta (E55), así la tarjeta pasa a «Hecho» sin recargar.
+export function useBajoAtaque(org: string) {
+  const invalidar = useInvalidar(org);
+  const fin = () => invalidar('incident', 'incidents', 'overview', 'module', 'under-attack');
+  return {
+    proponer: async (incidentId: string) => UnderAttackProposal.parse(await api(`/api/orgs/${org}/incidents/${incidentId}/under-attack/propose`,
+      { method: 'POST', body: { scope: 'host' } satisfies UnderAttackPropose, esquema: UnderAttackProposal })),
+    ...canjeYDeshacer(org, fin),
     refrescar: fin,
   };
 }
@@ -149,6 +173,56 @@ export const opcionesGuardarRevision = (org: string, qc: QueryClient) => ({
 export function useGuardarRevision(org: string) {
   const qc = useQueryClient();
   return useMutation(opcionesGuardarRevision(org, qc));
+}
+
+// ── Bloqueo de merge con críticos (E53, E54; bloqueo-merge-criticos.md §6.1 y §6.2) ─────────────────────────────────
+// Bandera por 404 de las escrituras nuevas: mientras el BACK no despliega E53 o E54, sus botones no se ofrecen. Vive en la
+// caché de consultas (una por QueryClient) para que todas las filas lo vean a la vez; queryFn no pide nada a nadie, solo
+// devuelve lo que ya hay (así una invalidación por prefijo no la borra).
+// 'E54-republish': «Publicar de nuevo» es P1; un BACK con E54 en P0 responde 409 {reason: 'p1'} y el botón se retira.
+export type RutaNueva = 'E53' | 'E54' | 'E54-republish';
+const claveAusente = (org: string, ruta: RutaNueva) => ['org', org, 'ruta-ausente', ruta];
+export function useRutaAusente(org: string, ruta: RutaNueva): boolean {
+  const qc = useQueryClient();
+  const clave = claveAusente(org, ruta);
+  return useQuery({ queryKey: clave, queryFn: () => qc.getQueryData<boolean>(clave) ?? false, initialData: false, staleTime: Infinity, gcTime: Infinity }).data;
+}
+const marcarSi404 = (qc: QueryClient, org: string, ruta: RutaNueva) => (e: unknown) => {
+  if (esApiError(e) && e.status === 404) qc.setQueryData(claveAusente(org, ruta), true);
+  if (ruta === 'E54' && esApiError(e) && e.status === 409 && e.details?.reason === 'p1') qc.setQueryData(claveAusente(org, 'E54-republish'), true);
+};
+
+// E53: encender o apagar el bloqueo, su umbral, «Cerrar los PR con críticos» y el token de estados (statuses_pat). El
+// token va en `variables` de la mutación: gcTime 0 y reset() en cuanto termina (lo hace BloqueoMerge) lo sacan del
+// MutationCache, como useGuardarRevision; nunca va a storage, a la URL ni a la caché de consultas (la respuesta no lo
+// trae). MergeGateSaved no lleva connection_id: es el de la pestaña desde la que se guardó (varias-codebases §2.6).
+export const opcionesGuardarBloqueo = (org: string, connectionId: string, qc: QueryClient) => ({
+  gcTime: 0,
+  mutationFn: (body: MergeGatePut) => api(`/api/orgs/${org}/code-review/gate`, { method: 'PUT', body, esquema: MergeGateSaved }),
+  onSuccess: (r: MergeGateSaved) => {
+    const g = MergeGateConfig.safeParse(r?.gate);   // api() en producción no impone el esquema
+    if (g.success) qc.setQueryData<CodeReviewState>(['org', org, 'revision', connectionId], (s) => (s?.config ? { ...s, config: { ...s.config, gate: g.data } } : s));
+  },
+  onError: marcarSi404(qc, org, 'E53'),
+  // La conexión de estados aparece (o cambia) en Conexiones. Sin esperar los refetch.
+  onSettled: () => { void qc.invalidateQueries({ queryKey: ['org', org, 'revision'] }); void qc.invalidateQueries({ queryKey: ['org', org, 'connections'] }); },
+});
+export function useGuardarBloqueo(org: string, connectionId: string) {
+  const qc = useQueryClient();
+  return useMutation(opcionesGuardarBloqueo(org, connectionId, qc));
+}
+
+// E54 · «Dar por bueno», «Deshacer» y «Reabrir el PR» de una revisión. 202 encolado: el paso `estado` publica después,
+// así que se vuelve a leer E45 al terminar.
+export const opcionesAccionBloqueo = (org: string, qc: QueryClient) => ({
+  mutationFn: ({ id, accion }: { id: string; accion: MergeGateAction }) =>
+    api(`/api/orgs/${org}/code-review/reviews/${encodeURIComponent(id)}/gate`, { method: 'POST', body: accion, esquema: RespuestaEscritura }),
+  onError: marcarSi404(qc, org, 'E54'),
+  onSettled: () => qc.invalidateQueries({ queryKey: ['org', org, 'revision'] }),
+});
+export function useAccionBloqueo(org: string) {
+  const qc = useQueryClient();
+  return useMutation(opcionesAccionBloqueo(org, qc));
 }
 
 // E49: umbrales de aviso de la revisión de código (WhatsApp y llamada).

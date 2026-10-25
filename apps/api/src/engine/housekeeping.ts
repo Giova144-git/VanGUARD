@@ -155,6 +155,10 @@ function contarInterrumpidas(r: ResultadoHousekeeping, filas: Obj[]) {
   const ids = (tabla: string) => filas.filter((f) => f.tabla === tabla).map((f) => String(f.id));
   const wiki = ids('wiki_runs');
   const scans = ids('scan_runs');
+  // 0022: auditorías con todos sus pasos terminados cuyo cierre se perdió; la RPC las cerró como finalizar (no cuentan
+  // como interrumpidas).
+  const cerradas = ids('scan_runs_cerradas');
+  if (cerradas.length) log('info', 'vigilante.cerradas', { scans: cerradas.slice(0, 10), total: cerradas.length });
   r.interrumpidas = { wiki: wiki.length, scans: scans.length };
   // Solo ids de corridas (sin repos ni nombres), para seguir en los logs qué se cerró.
   if (wiki.length || scans.length) {

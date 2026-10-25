@@ -72,4 +72,16 @@ describe('estadoPaso', () => {
     expect(textoFallo(null)).toBe('La auditoría falló');
     expect(textoFallo('')).toBe('La auditoría falló');
   });
+  it('una medición (kind lighthouse, «Medir ahora»): su paso actual y su fallo en español', () => {
+    expect(textoPasoActual('psi-mobile')).toBe('midiendo móvil con PageSpeed Insights');
+    expect(textoPasoActual('psi-desktop')).toBe('midiendo escritorio con PageSpeed Insights');
+    expect(textoPasoActual('perf-compare')).toBe('comparando con la medición anterior');
+    expect(textoPasoActual('psi')).toBe('Rendimiento');                                   // un full_audit con psi (P1-b)
+    expect(textoPasoActual('psi', 'lighthouse')).toBe('midiendo con PageSpeed Insights (suele tardar menos de un minuto)');   // el BACK
+    for (const k of ['psi-mobile', 'psi-desktop', 'psi'] as const) expect(textoPasoActual(k, 'lighthouse')).not.toMatch(/repetici|~1 min/);
+    expect(notaPaso({ error_code: 'runtime_error' })).toBe('Lighthouse no pudo cargar la página: esta medición quedó sin cifras');
+    expect(estadoPaso({ coverage: null }, { name: 'psi', status: 'done', error_code: 'runtime_error' })).toBe('en_parte');
+    expect(textoFallo(null, 'lighthouse')).toBe('La medición falló');
+    expect(textoFallo(null, 'full_audit')).toBe('La auditoría falló');
+  });
 });

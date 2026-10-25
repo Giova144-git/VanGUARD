@@ -18,6 +18,7 @@ import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
+import { DesdeAnterior } from '@/modulos/evolucion/DesdeAnterior';
 import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
@@ -39,7 +40,7 @@ function FilaAhora({ item, org, repo }: { item: AhoraItem; org: string; repo: st
       <Etiqueta texto={deMapa(NOMBRE, item.module, '—')} />
       <ChapaSeveridad severity={item.severity} />
       <ChipRepo repo={repo} />
-      <div className="flex min-w-0 flex-1 flex-col" title={item.rule_id}>
+      <div className="flex min-w-0 flex-1 basis-full flex-col sm:basis-auto" title={item.rule_id}>
         <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(item.title)}</span>
         <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(item.resource)}</bdi></span>
       </div>
@@ -66,14 +67,16 @@ function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones, pue
   );
   const chapa = proveedor === 'github' ? chapaGithub(reposGithub(conexiones)) : c ? chapaEstado(c) : null;
   return (
-    <Link to={`/o/${org}/${modulo}`} className="flex min-h-16 items-center gap-4 rounded-xl border bg-card px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+    // La chapa («Conectado · probado 24-10 17:41») va en su propia fila: en 3 columnas (lg, ~318 px) no cabe al lado del
+    // nombre, el contador y «Abrir», y partida en la fila de 24 px se montaba encima del nombre.
+    <Link to={`/o/${org}/${modulo}`} className="flex min-h-16 flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border bg-card px-4 py-3 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground"><Icono className="size-6" strokeWidth={1.5} /></span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-base font-semibold">{NOMBRE[modulo]}</span>
-        {chapa ? <Etiqueta texto={chapa.texto} rol={chapa.rol} className="w-fit" /> : <span className="text-texto-3">—</span>}
-      </span>
+      <span className="min-w-0 flex-1 text-base font-semibold">{NOMBRE[modulo]}</span>
       <MarcasContador contador={estado.data?.contador} grande />
       <span className="text-sm font-medium text-info">Abrir</span>
+      <span className="flex basis-full">
+        {chapa ? <Etiqueta texto={chapa.texto} rol={chapa.rol} className="h-auto min-h-6 w-fit max-w-full py-1 whitespace-normal" /> : <span className="text-texto-3">—</span>}
+      </span>
     </Link>
   );
 }
@@ -120,6 +123,7 @@ export default function PaginaResumen() {
             <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}
               <Link to={`/o/${org.id}/audit/${encodeURIComponent(o.last_scan.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver</Link></span>
           ) : null}
+          <DesdeAnterior org={org.id} ultima={o?.last_scan ?? null} />
         </div>
       </section>
 

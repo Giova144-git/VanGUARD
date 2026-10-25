@@ -1,8 +1,8 @@
 import { UnderAttackOffer, UnderAttackProposal, type UnderAttackMotivo } from '@vanguard/contracts';
 import {
-  CADUCIDAD_EN_REGLA, CUPO_REGLAS_CONFIG, hostCanonico, notasBajoAtaque, ofreceBajoAtaque, otpHashParam,
+  botonesAprobacion, CADUCIDAD_EN_REGLA, CUPO_REGLAS_CONFIG, hostCanonico, notasBajoAtaque, ofreceBajoAtaque, otpHashParam,
   pasosManualesBajoAtaque, pasosRetirarBajoAtaque, refBajoAtaque, reglaBajoAtaque, simularBajoAtaque, sixDigitCode,
-  textoCodigoBajoAtaque, TTL_BAJO_ATAQUE_S, type ReglaBajoAtaque,
+  textoCodigoBajoAtaque, textoConfirmarBajoAtaque, TTL_BAJO_ATAQUE_S, type ReglaBajoAtaque,
 } from '@vanguard/core';
 import { withSecret } from '../lib/credentials.ts';
 import { db } from '../lib/db.ts';
@@ -11,8 +11,12 @@ import { pedir, ProviderError } from '../lib/http.ts';
 import { activeKid, getKeys } from '../lib/keyring.ts';
 import { log } from '../lib/log.ts';
 import { ventanaAbierta } from '../lib/verificacion.ts';
-import { cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado } from '../notify/kapso.ts';
-import { elegirConexion, VIDA_BOTON_MS, type IncidenteBloqueo, type SinEntrega } from './approvals.ts';
+import {
+  cuerpoInteractivo, cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado, type MensajeKapso,
+} from '../notify/kapso.ts';
+import {
+  elegirConexion, ETAPA_BOTON, hashNonce, nuevoNonce, VIDA_BOTON_MS, type IncidenteBloqueo, type SinEntrega,
+} from './approvals.ts';
 import {
   CF_API, EN_CURSO_MS, MENSAJE_DESHACER, PLAZO_CF_MS, type AprobacionCanjeada, type ResultadoDeshacer,
 } from './block-ip.ts';
@@ -20,9 +24,10 @@ import { cabecerasCf, mutarEnSeco } from './cf-seco.ts';
 
 // «Modo bajo ataque» de Cloudflare (asignaciones/modo-bajo-ataque.md §5 y §8): una Configuration Rule (set_config,
 // security_level under_attack) SOLO para el host del incidente, con la caducidad dentro de su expresión. Aquí están las
-// lecturas de E55 (oferta, solo base), la propuesta de E56 (guardas, dry_run por mutarEnSeco y aprobación de 10 min),
-// executeUnderAttack (tras el canje de E21; el «Sí, activar» del botón de WhatsApp lo llamará igual que ok llama a
-// executeBlock), deshacerBajoAtaque (E22, E10 y caducidad de housekeeping) y la limpieza de una proposed huérfana.
+// lecturas de E55 (oferta, solo base; también decide el 2.º mensaje del despachador con el botón uat), la propuesta de
+// E56 y del botón uat (guardas, dry_run por mutarEnSeco y aprobación de 10 min: in_app con código o ok/no por WhatsApp),
+// executeUnderAttack (tras el canje de E21 o el «Sí, activar» del WhatsApp, igual que ok llama a executeBlock),
+// deshacerBajoAtaque (E22, E10 y caducidad de housekeeping) y la limpieza de una proposed huérfana.
 // En Cloudflare solo se hace POST de UNA regla (o del ruleset de la fase si no existe) y DELETE por id de la nuestra;
 // nunca PUT del entrypoint, que reemplazaría las reglas del cliente (D9). Anti-IDOR: todo por id Y org_id. Ni el token,
 // ni el cuerpo de Cloudflare, ni el código de 6 dígitos van a los logs.
@@ -49,8 +54,8 @@ export const ERROR_SIN_PERMISO_CONFIG = 'Te falta el permiso Zone · Config Rule
 const ERROR_TOKEN = 'El token de acciones ya no es válido. Vuelve a conectarlo.';
 const ERROR_CREDENCIAL = 'No pudimos abrir el token de acciones. Vuelve a conectarlo.';
 /** Entrega del código de E56 por WhatsApp de TEXTO con enviarKapso + cuerpoTexto, ya existentes (la misma regla que el
- *  respaldo de E20, D6). false: sin WhatsApp, solo la org de demo recibe el código en la respuesta. Los botones del modo
- *  bajo ataque y el 2.º aviso son otro trabajo (avisos-whatsapp-botones.md, pendiente de Giovanni). */
+ *  respaldo de E20, D6). false: sin WhatsApp, solo la org de demo recibe el código en la respuesta. El botón uat del 2.º
+ *  aviso (avisos-whatsapp-botones.md) no pasa por aquí: su confirmación es el interactivo ok/no. */
 export const CODIGO_POR_WHATSAPP = true;
 const NO_RESUELTOS = ['open', 'ack', 'mitigated'];
 const COLUMNAS_FILA = 'id, approval_id, target, status, provider_ref, previous, created_at, expires_at';
@@ -308,9 +313,12 @@ export type ResultadoPropuestaBajoAtaque =
       codigo?: number | null; action_id?: string; copiar?: string }
   | { ok: false; motivo: 'sin_entrega'; detalle: SinEntrega };
 export type OpcionesBajoAtaque = {
-  orgId: string; incidente: IncidenteBloqueo; scope: 'host' | 'zone'; connectionId?: string | undefined; requestedBy: string;
-  rid: string; ahora?: number;
-};
+  orgId: string; incidente: IncidenteBloqueo; scope: 'host' | 'zone'; connectionId?: string | undefined; rid: string;
+  ahora?: number;
+} & (
+  | { entrega?: 'app'; requestedBy: string }    // E56: código de 6 dígitos por WhatsApp de texto (o en la respuesta, demo)
+  | { entrega: 'whatsapp'; telefono: string }   // botón uat: «Sí, activar» / «Cancelar» al que lo pulsó (E.164 sin '+')
+);
 
 type Validacion = { tipo: 'ok'; validado: boolean; rulesetId: string | null }
   | { tipo: 'rechazo'; motivo: MotivoPropuestaBajoAtaque; cupo?: number; codigo?: number | null };
@@ -356,18 +364,13 @@ async function validarEnSeco(env: CloudflareBindings, admin: Cliente, o: Opcione
   }
 }
 
-// TODO(WhatsApp, pendiente de Giovanni; docs/plan_maestro_trabajo/asignaciones/avisos-whatsapp-botones.md): el 2.º
-// mensaje «Ataque desde {n} IPs en {host}…» con el botón uat («Modo bajo ataque») lo manda el despachador cuando
-// ofreceBajoAtaque(incidente, ips) diga ofrece; uat → las mismas guardas y dry_run de proponerBajoAtaque con las filas
-// ok/no (approvals.params = los de §4.2 + etapa, mismo group y ref = refBajoAtaque(group), cada fila con su id, como
-// filasWa de E20) en lugar de la in_app; ok → executeUnderAttack (canal whatsapp, requested_by de params; acepta el ref
-// del group o el de la propia fila) y responder con resultado y expires_at; no → hermanas usadas. Aquí no se toca nada.
-
-/** E56 (§5). Reutilizable desde un botón de WhatsApp: la regla, las guardas y el dry_run no dependen del canal; aquí la
- *  entrega es la de la app (fila in_app con el HMAC del código y el código por WhatsApp de texto o, solo en la org de
- *  demo, en la respuesta). El botón «Modo bajo ataque» (avisos-whatsapp-botones.md, pendiente) creará en su lugar las
- *  filas ok/no del mismo group, y su «Sí, activar» llamará a executeUnderAttack. Nunca escribe en Cloudflare. Lanza
- *  ApiError internal si la base falla. ≈ 14–15 subpeticiones. */
+/** E56 (§5) y el botón uat del 2.º aviso (avisos-whatsapp-botones.md): la regla, las guardas y el dry_run no dependen del
+ *  canal. Entrega 'app': fila in_app con el HMAC del código y el código por WhatsApp de texto o, solo en la org de demo,
+ *  en la respuesta. Entrega 'whatsapp' (botón uat): sin contacto ni código; dos filas ok/no del mismo group (cada una con
+ *  su id, ref = refBajoAtaque(group), params de §4.2 + etapa, requested_by null, solo sha256 del nonce) y el interactivo
+ *  «Sí, activar» / «Cancelar» al teléfono que pulsó; su ok llama a executeUnderAttack (actions/botones-escritura.ts).
+ *  Nunca escribe en Cloudflare. Lanza ApiError internal si la base falla. ≈ 14–15 subpeticiones (app); por WhatsApp,
+ *  lecturas 3 + secreto 1 + llaves ≤ 2 + entrypoint 1 + dry_run ≤ 2 + insert 1 + interactivo 2 + borrado 1 ≤ 13. */
 export async function proponerBajoAtaque(env: CloudflareBindings, o: OpcionesBajoAtaque): Promise<ResultadoPropuestaBajoAtaque> {
   const admin = db(env);
   const ahora = o.ahora ?? Date.now();
@@ -377,8 +380,8 @@ export async function proponerBajoAtaque(env: CloudflareBindings, o: OpcionesBaj
     ...(extra.cupo !== undefined ? { cupo: extra.cupo } : {}), ...(extra.codigo !== undefined ? { codigo: extra.codigo } : {}),
     ...(extra.action_id ? { action_id: extra.action_id } : {}), ...(extra.copiar ? { copiar: extra.copiar } : {}) });
 
-  // (1–3) La regla y lo que ya hay en ese host.
-  const l = await leerHost(admin, o.orgId, o.incidente, host, true, o.rid);
+  // (1–3) La regla y lo que ya hay en ese host (el contacto y la org solo para la entrega de la app).
+  const l = await leerHost(admin, o.orgId, o.incidente, host, o.entrega !== 'whatsapp', o.rid);
   const base = ofreceBajoAtaque(o.incidente, l.ips);
   if (!base.ofrece && (base.motivo === 'no_aplica' || base.motivo === 'sin_host')) return no(base.motivo);
   const viva = l.filas.find((f) => f.status === 'executed');
@@ -400,12 +403,16 @@ export async function proponerBajoAtaque(env: CloudflareBindings, o: OpcionesBaj
   const previa = sim(null);
   if (!previa.ok) return no(previa.reason === 'host_invalido' ? 'sin_host' : previa.reason, { zona });
 
-  // Entrega antes de tocar Cloudflare: fuera de la demo, sin WhatsApp no hay código fuera de banda (§06.7) → 502.
-  const tel = str(l.contacto.phone_e164);
-  const sinWa: SinEntrega | null = !CODIGO_POR_WHATSAPP ? 'sin_config' : !tel || !E164.test(tel) ? 'sin_contacto'
+  // Entrega antes de tocar Cloudflare: fuera de la demo, sin WhatsApp no hay código fuera de banda (§06.7) → 502. El
+  // botón uat contesta al que lo pulsó (acaba de escribir: ventana abierta), solo en producción y con Kapso.
+  const wa = o.entrega === 'whatsapp' ? `+${o.telefono}` : null;
+  const tel = wa ?? str(l.contacto.phone_e164);
+  const sinWa: SinEntrega | null = wa ? (!E164.test(wa) ? 'sin_contacto' : env.VG_ENV !== 'production' ? 'dry_run'
+    : !kapsoConfigurado(env) ? 'sin_config' : null)
+    : !CODIGO_POR_WHATSAPP ? 'sin_config' : !tel || !E164.test(tel) ? 'sin_contacto'
     : !str(l.contacto.verified_at) ? 'sin_verificar' : !ventanaAbierta(env, l.contacto.wa_last_inbound_at, ahora) ? 'ventana'
     : env.VG_ENV !== 'production' ? 'dry_run' : !kapsoConfigurado(env) ? 'sin_config' : null;
-  if (sinWa && !l.demo) return { ok: false, motivo: 'sin_entrega', detalle: sinWa };
+  if (sinWa && (wa || !l.demo)) return { ok: false, motivo: 'sin_entrega', detalle: sinWa };
 
   // (5) dry_run con la MISMA regla que mandará E21 (hasta = ahora + vida de la aprobación + ttl; solo para validar).
   const approvalId = crypto.randomUUID();
@@ -424,26 +431,55 @@ export async function proponerBajoAtaque(env: CloudflareBindings, o: OpcionesBaj
       ...(v.motivo === 'sin_permiso' ? { copiar: pasosManualesBajoAtaque(base.host, zona) } : {}) });
   }
 
+  const expires_at = new Date(ahora + VIDA_BOTON_MS).toISOString();
+  const params = { scope: 'host', target: base.host, zone_id: conexion.zone_id, zone_name: zona, connection_id: conexion.id,
+    incident_id: o.incidente.id, incident_code: o.incidente.code, ttl_s: TTL_BAJO_ATAQUE_S, group: approvalId, ref,
+    ruleset_id: v.rulesetId, plan: conexion.plan };
+  const insertar = async (filas: Obj | Obj[]) => {
+    const { error } = await admin.from('approvals').insert(filas);
+    if (error) {
+      log('error', 'bajo_ataque.aprobacion_error', { rid: o.rid, code: error.code ?? null });
+      throw new ApiError('internal', 'No pudimos guardar la aprobación');
+    }
+  };
+  const avisos = [...previa.avisos, v.validado ? 'Cloudflare validó la regla sin publicarla'
+    : 'No pudimos validarla con Cloudflare: se comprobará al confirmar'];
+  const respuesta = (id: string, delivery: 'whatsapp' | 'in_app', codigo: string | null) => UnderAttackProposal.parse({
+    approval_id: id, efecto: previa.efecto, avisos, expires_at, delivery, code: codigo, scope: 'host', target: base.host,
+    zone_name: zona, ttl_s: TTL_BAJO_ATAQUE_S, validado: v.validado });
+  const registro = { rid: o.rid, incidente: o.incidente.code, validado: v.validado };
+
+  // (6 · botón uat) ok/no del mismo group, sin código, y el interactivo de confirmación al que pulsó.
+  if (o.entrega === 'whatsapp') {
+    const destino = `+${o.telefono}`;
+    const n = { ok: nuevoNonce(), no: nuevoNonce() };
+    const botones = botonesAprobacion(o.incidente.code, n, 'uat');   // valida código y nonces antes de escribir nada
+    const filas = await Promise.all((['ok', 'no'] as const).map(async (b) => ({ id: crypto.randomUUID(), org_id: o.orgId,
+      incident_id: o.incidente.id, action_kind: 'under_attack_on', channel: 'whatsapp', recipient: o.telefono, expires_at,
+      nonce_hash: await hashNonce(n[b]), params: { ...params, requested_by: null, etapa: ETAPA_BOTON[b] } })));
+    await insertar(filas);
+    const m: MensajeKapso = cuerpoInteractivo(destino, { header: 'Modo bajo ataque · Cloudflare',
+      body: textoConfirmarBajoAtaque(base.host), footer: `Incidente #${o.incidente.code} · VanGUARD`, botones });
+    const recipient_masked = enmascararTelefono(destino);
+    try {
+      await enviarKapso(env, m);
+    } catch (e) {
+      log('warn', 'bajo_ataque.envio_error', { rid: o.rid,
+        code: e instanceof KapsoError ? e.detalle ?? e.code : 'unavailable' });
+      const { error: eb } = await admin.from('approvals').delete().in('id', filas.map((f) => f.id)).eq('org_id', o.orgId);
+      if (eb) log('warn', 'bajo_ataque.borrado_error', { rid: o.rid, code: eb.code ?? null });
+      return { ok: false, motivo: 'sin_entrega', detalle: 'kapso' };
+    }
+    log('info', 'bajo_ataque.propuesta', { ...registro, delivery: 'whatsapp', boton: true, recipient_masked });
+    return { ok: true, respuesta: respuesta(filas[0]!.id, 'whatsapp', null), recipient_masked };
+  }
+
   // (6) Aprobación in_app (id = group = approval_id) y entrega del código.
   const code = sixDigitCode();
   const keys = await getKeys(env, admin, await activeKid(admin));
-  const expires_at = new Date(ahora + VIDA_BOTON_MS).toISOString();
-  const params = { scope: 'host', target: base.host, zone_id: conexion.zone_id, zone_name: zona, connection_id: conexion.id,
-    incident_id: o.incidente.id, incident_code: o.incidente.code, ttl_s: TTL_BAJO_ATAQUE_S, group: approvalId, kid: keys.kid,
-    requested_by: o.requestedBy, ref, ruleset_id: v.rulesetId, plan: conexion.plan };
-  const { error } = await admin.from('approvals').insert({ id: approvalId, org_id: o.orgId, incident_id: o.incidente.id,
-    action_kind: 'under_attack_on', channel: 'in_app', recipient: o.requestedBy, expires_at,
-    nonce_hash: await otpHashParam(keys, approvalId, code), params });
-  if (error) {
-    log('error', 'bajo_ataque.aprobacion_error', { rid: o.rid, code: error.code ?? null });
-    throw new ApiError('internal', 'No pudimos guardar la aprobación');
-  }
-  const avisos = [...previa.avisos, v.validado ? 'Cloudflare validó la regla sin publicarla'
-    : 'No pudimos validarla con Cloudflare: se comprobará al confirmar'];
-  const respuesta = (delivery: 'whatsapp' | 'in_app', codigo: string | null) => UnderAttackProposal.parse({ approval_id: approvalId,
-    efecto: previa.efecto, avisos, expires_at, delivery, code: codigo, scope: 'host', target: base.host, zone_name: zona,
-    ttl_s: TTL_BAJO_ATAQUE_S, validado: v.validado });
-  const registro = { rid: o.rid, incidente: o.incidente.code, validado: v.validado };
+  await insertar({ id: approvalId, org_id: o.orgId, incident_id: o.incidente.id, action_kind: 'under_attack_on',
+    channel: 'in_app', recipient: o.requestedBy, expires_at, nonce_hash: await otpHashParam(keys, approvalId, code),
+    params: { ...params, kid: keys.kid, requested_by: o.requestedBy } });
 
   if (!sinWa && tel) {
     let enviado = false;
@@ -456,7 +492,7 @@ export async function proponerBajoAtaque(env: CloudflareBindings, o: OpcionesBaj
     const recipient_masked = enmascararTelefono(tel);
     if (enviado) {
       log('info', 'bajo_ataque.propuesta', { ...registro, delivery: 'whatsapp', recipient_masked });
-      return { ok: true, respuesta: respuesta('whatsapp', null), recipient_masked };
+      return { ok: true, respuesta: respuesta(approvalId, 'whatsapp', null), recipient_masked };
     }
     if (!l.demo) {
       const { error: eb } = await admin.from('approvals').delete().eq('id', approvalId).eq('org_id', o.orgId);
@@ -466,7 +502,7 @@ export async function proponerBajoAtaque(env: CloudflareBindings, o: OpcionesBaj
   }
   // Solo la org de demo: sin WhatsApp utilizable, el código viaja en la respuesta (como E20).
   log('info', 'bajo_ataque.propuesta', { ...registro, delivery: 'in_app', motivo: sinWa ?? 'kapso' });
-  return { ok: true, respuesta: respuesta('in_app', code), recipient_masked: null };
+  return { ok: true, respuesta: respuesta(approvalId, 'in_app', code), recipient_masked: null };
 }
 
 // ── E21 · executeUnderAttack ─────────────────────────────────────────────────────────────────────────────────────────
@@ -505,7 +541,7 @@ function desdeFila(f: Obj, host: string): ResultadoBajoAtaque {
   return { tipo: 'rechazado', action_id: id, error: 'Esa activación ya falló: vuelve a proponerla', status: null };
 }
 
-// Las demás aprobaciones vivas del group (hoy ninguna: group = approval_id; mañana, ok/no del botón) quedan usadas.
+// Las demás aprobaciones vivas del group (la in_app sola: group = approval_id; el botón uat: la ok/no hermana) quedan usadas.
 async function marcarHermanas(admin: Cliente, org: string, group: string | null, enIso: string, rid: string) {
   if (!group) return;
   const { error } = await admin.from('approvals').update({ used_at: enIso })

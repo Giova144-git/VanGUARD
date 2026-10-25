@@ -14,11 +14,12 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { RealtimeChange } from '@vanguard/contracts';
 import { supabase } from './supabase';
 
+// evolution (E52): una auditoría escribe en scan_runs; un push, en findings y su aviso en notifications.
 const MAPA: Record<string, string[]> = {
-  scan_runs: ['scan', 'overview'], findings: ['findings', 'finding', 'module', 'overview', 'revision'],
-  incidents: ['incident', 'incidents', 'overview'], notifications: ['incident', 'revision'],   // revision: hallazgo y aviso de un push (E45)
-};
-export const TODO = ['overview', 'module', 'findings', 'finding', 'incidents', 'incident', 'scan', 'revision'];
+  scan_runs: ['scan', 'overview', 'evolution'], findings: ['findings', 'finding', 'module', 'overview', 'revision', 'evolution'],
+  incidents: ['incident', 'incidents', 'overview', 'under-attack'], notifications: ['incident', 'revision', 'evolution'],   // revision: hallazgo y aviso de un push (E45)
+};   // under-attack: la oferta de E55 cuenta los CF_IP_FLOOD del host
+export const TODO = ['overview', 'module', 'findings', 'finding', 'incidents', 'incident', 'scan', 'revision', 'evolution', 'under-attack'];
 export const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];   // solo tras CLOSED; el último se repite
 export const ESTABLE_MS = 30_000;   // el backoff vuelve a 0 solo tras este tiempo seguido en SUBSCRIBED
 

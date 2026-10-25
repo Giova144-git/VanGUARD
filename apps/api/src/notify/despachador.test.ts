@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mensajeIncidente } from '@vanguard/core';
 import { parsearBoton } from '../actions/approvals.ts';
 import { sha256Hex } from '../lib/hmac.ts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
@@ -356,5 +357,110 @@ describe('despachador · botón «Bloquear IP» (§12.6)', () => {
     expect(consultaConexion()).toBeUndefined();
     expect(botones().every((bs) => bs.length === 2)).toBe(true);
     expect(de('approvals', 'insert').flatMap((o) => o.payload as Fila[]).some((a) => a.action_kind === 'block_ip')).toBe(false);
+  });
+});
+
+// 2.º mensaje de bajo ataque (asignaciones/avisos-whatsapp-botones.md y modo-bajo-ataque.md): DESPUÉS del aviso del
+// incidente, que no cambia, y solo si la oferta aplica con la regla de E55. Las pruebas de arriba no se tocan: ninguna
+// trae CF_IP_FLOOD, así que ahí la oferta ni lee nada.
+describe('despachador · 2.º mensaje «Modo bajo ataque»', () => {
+  const CONN = 'c0aa0000-0000-4000-8000-000000000002';
+  const ZONA = '023e105f4ecef8ad9ca31a8372d0c353';
+  const HOST = 'demo.officialvanguard.com';
+  const OFERTA = `Ataque desde 2 IPs en ${HOST}. Puedes poner ese host en modo bajo ataque 30 min.`;
+  const deOferta = () => enviados().filter((m) => m.type === 'interactive' && m.interactive.header.text.startsWith('Modo bajo'));
+
+  beforeEach(() => {
+    incidente = { ...incidente, severity: 'critical', rule_ids: ['CF_IP_FLOOD'],
+      details: { ip: IP, host: HOST, source: 'ingest', n_60s: 900, total_60s: 1000, share_pct: 90 } };
+    for (const c of contactos) c.wa_last_inbound_at = new Date(Date.now() - 3600_000).toISOString();
+    conexionAccion = { data: [{ id: CONN, meta: { zone_id: ZONA, zone_name: 'officialvanguard.com', plan: 'free' },
+      capabilities: { config_rules_edit: true } }] };
+    recientes = [{ rule_ids: ['CF_IP_FLOOD'] }, { rule_ids: ['CF_IP_FLOOD'] }];   // 2 IPs inundan el host (E55)
+    // El doble común no trae .contains (el conteo de CF_IP_FLOOD de E55): se registra como un filtro «in».
+    const from = doble.client.from;
+    doble.client.from = ((t: string) => {
+      const b = from(t) as ReturnType<typeof from> & { contains?: (c: string, v: unknown) => unknown };
+      b.contains = (c: string, v: unknown) => b.in(`${c}@>`, v);
+      return b;
+    }) as typeof from;
+  });
+
+  it('2 IPs y Modo blindaje → el aviso igual que siempre y DESPUÉS «Modo bajo ataque» solo al contacto de prioridad 1',
+    async () => {
+      await avisar();
+      const msgs = enviados();
+      expect(msgs).toHaveLength(3);
+      // El aviso del incidente: el de siempre (mensajeIncidente, sus 3 botones), a los dos contactos, antes que la oferta.
+      const aviso = mensajeIncidente({ code: 'A1F3C9', severity: 'critical', rule_ids: ['CF_IP_FLOOD'], resource: `ip:${IP}`,
+        last_event_at: String(incidente.last_event_at), details: incidente.details as Fila }, 'incident_v1');
+      for (const m of msgs.slice(0, 2)) {
+        expect([m.interactive.header.text, m.interactive.body.text, m.interactive.footer.text])
+          .toEqual([aviso.header, aviso.body, aviso.footer]);
+        expect(m.interactive.action.buttons.map((b) => b.reply.title)).toEqual(['Lo estoy viendo', 'Silenciar 1 h', 'Bloquear IP']);
+      }
+      const [o] = deOferta();
+      expect(msgs[2]).toEqual(o);                          // la oferta va la última, tras el aviso
+      expect(o!.to).toBe(TEL_A.slice(1));
+      expect(o!.interactive.header.text).toBe('Modo bajo ataque · Cloudflare');
+      expect(o!.interactive.body.text).toBe(OFERTA);
+      expect(o!.interactive.footer.text).toBe('Incidente #A1F3C9 · VanGUARD');
+      const [b] = o!.interactive.action.buttons.map((x) => x.reply);
+      expect(o!.interactive.action.buttons).toHaveLength(1);
+      expect(b!.title).toBe('Modo bajo ataque');
+      const uat = parsearBoton(b!.id)!;
+      expect([uat.accion, uat.codigo]).toEqual(['uat', 'A1F3C9']);
+      // Su fila de approvals: la de PEDIR (etapa proponer), solo el sha256, 10 min; y su fila en notifications.
+      const fila = de('approvals', 'insert').map((x) => x.payload as Fila).find((x) => !Array.isArray(x))!;
+      expect(fila).toMatchObject({ org_id: ORG, incident_id: INC, action_kind: 'under_attack_on', channel: 'whatsapp',
+        recipient: TEL_A.slice(1), nonce_hash: `\\x${await sha256Hex(uat.nonce)}`, params: { etapa: 'proponer' } });
+      expect(filasNotif().filter((f) => f.template === 'bajo_ataque_v1')).toEqual([{ org_id: ORG, incident_id: INC,
+        channel: 'whatsapp', template: 'bajo_ataque_v1', recipient_masked: '+58•••4567', status: 'queued' }]);
+      expect(de('notifications', 'update')).toHaveLength(3);
+      // La oferta lee lo mismo que E55: acciones de ese host y el conteo de inundaciones del mismo details.host.
+      const conteo = doble.ops.find((x) => x.table === 'incidents' && x.head)!;
+      expect(conteo.filters).toEqual(expect.arrayContaining([['org_id', 'eq', ORG], ['details->>host', 'eq', HOST]]));
+      const txt = lineas();
+      expect(txt).not.toContain('4141234567');
+      expect(txt).not.toContain(uat.nonce);
+    });
+
+  it('una sola IP, sin Modo blindaje o la ventana de 24 h cerrada → sin 2.º mensaje; el aviso sale igual', async () => {
+    const casos: (() => void)[] = [
+      () => { recientes = [{ rule_ids: ['CF_IP_FLOOD'] }]; },
+      () => { conexionAccion = { data: [] }; },
+      () => { for (const c of contactos) c.wa_last_inbound_at = new Date(Date.now() - 30 * 3600_000).toISOString(); },
+    ];
+    for (const preparar of casos) {
+      recientes = [{ rule_ids: ['CF_IP_FLOOD'] }, { rule_ids: ['CF_IP_FLOOD'] }];
+      conexionAccion = { data: [{ id: CONN, meta: { zone_id: ZONA, zone_name: 'officialvanguard.com', plan: 'free' } }] };
+      for (const c of contactos) c.wa_last_inbound_at = new Date(Date.now() - 3600_000).toISOString();
+      preparar();
+      fetchMock.mockClear();
+      doble.ops.length = 0;
+      await avisar();
+      expect(enviados().filter((m) => m.interactive?.header.text.startsWith('ALERTA'))).toHaveLength(2);
+      expect(deOferta()).toEqual([]);
+      expect(filasNotif().some((f) => f.template === 'bajo_ataque_v1')).toBe(false);
+    }
+  });
+
+  it('fuera de producción, o si el aviso del incidente no salió (Kapso 131047), nada de 2.º mensaje', async () => {
+    await avisar(NUEVO, { VG_ENV: 'local' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(doble.ops.some((x) => x.table === 'actions')).toBe(false);
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { code: 131047 } }), { status: 400 }));
+    doble.ops.length = 0;
+    await avisar();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(filasNotif().some((f) => f.template === 'bajo_ataque_v1')).toBe(false);
+  });
+
+  it('approvals falla → el aviso sale como texto y la oferta NO sale (sin su botón no sirve): failed sin_botones', async () => {
+    errorApprovals = { code: '57014' };
+    await avisar();
+    expect(enviados().map((m) => m.type)).toEqual(['text', 'text']);
+    expect(deOferta()).toEqual([]);
+    expect(de('notifications', 'update').map((u) => u.payload)).toContainEqual({ status: 'failed', error: 'sin_botones' });
   });
 });

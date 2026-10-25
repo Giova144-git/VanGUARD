@@ -13,13 +13,15 @@ export function hitosDe(i: IncidentDetail): Hito[] {
   const primero = (xs: (string | null | undefined)[]) => xs.filter((x): x is string => !!x).sort()[0] ?? null;
   const tl = (...ks: TimelineItem['kind'][]) => i.timeline.find((t) => ks.includes(t.kind)) ?? null;
   const t0 = t0De(i);
+  // La primera acción ejecutada pudo ser el modo bajo ataque (asignaciones/modo-bajo-ataque.md), no un bloqueo de IP.
+  const primera = i.actions.filter((a) => a.status === 'executed' || a.status === 'undone').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))[0];
   const hitos = [
     { clave: 'detected', etiqueta: 'Ataque detectado', en: tl('detected')?.t ?? i.started_at },
     { clave: 'whatsapp', etiqueta: 'WhatsApp enviado', en: tl('whatsapp_sent')?.t ?? primero(i.notifications.filter((n) => n.channel === 'whatsapp').map((n) => n.sent_at ?? n.created_at)) },
     { clave: 'critical', etiqueta: 'Sube a crítica',   en: tl('severity_up')?.t ?? null },
     { clave: 'call',     etiqueta: 'Llamada',          en: tl('call_started')?.t ?? primero(i.notifications.filter((n) => n.channel === 'voice').map((n) => n.sent_at ?? n.created_at)) },
     { clave: 'ack',      etiqueta: 'Lo están viendo',  en: tl('ack')?.t ?? i.acked_at, via: i.acked_via },
-    { clave: 'blocked',  etiqueta: 'IP bloqueada',     en: tl('action_executed', 'mitigated')?.t ?? i.mitigated_at },
+    { clave: 'blocked',  etiqueta: primera?.kind === 'under_attack_on' ? 'Bajo ataque activado' : 'IP bloqueada', en: tl('action_executed', 'mitigated')?.t ?? i.mitigated_at },
   ];
   return hitos
     .filter((h) => h.en || !['critical', 'call'].includes(h.clave))   // «Sube a crítica» y «Llamada» (P1) solo si ocurrieron: nunca un «—» que parezca un fallo

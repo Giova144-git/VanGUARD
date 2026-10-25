@@ -447,8 +447,8 @@ describe('convivencia de las funciones nuevas', () => {
 });
 
 describe('E57 simular ataque', () => {
-  it('kind por defecto path_scan y solo los tres tipos', () => {
-    expect(c.SimulateAttackIn.parse({}).kind).toBe('path_scan');
+  it('kind por defecto ip_flood (la única crítica) y solo los tres tipos', () => {
+    expect(c.SimulateAttackIn.parse({}).kind).toBe('ip_flood');
     expect(c.SimulateAttackIn.safeParse({ kind: 'ddos' }).success).toBe(false);
   });
   it('la respuesta dice qué hizo cada canal', () => {

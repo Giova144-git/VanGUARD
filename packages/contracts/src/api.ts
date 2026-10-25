@@ -504,7 +504,8 @@ export type UnderAttackProposal = z.infer<typeof UnderAttackProposal>;
 // voz, la llamada de Guardia. 429 si ya hubo una simulación en los últimos 2 min.
 export const SimulateAttackKind = z.enum(['path_scan', 'ip_flood', 'attack_tool']);
 export type SimulateAttackKind = z.infer<typeof SimulateAttackKind>;
-export const SimulateAttackIn = z.object({ kind: SimulateAttackKind.default('path_scan') });
+// Por defecto ip_flood: con las reglas reales es la única que sale critical, y solo un critical ofrece «Llamar a Guardia».
+export const SimulateAttackIn = z.object({ kind: SimulateAttackKind.default('ip_flood') });
 export type SimulateAttackIn = z.infer<typeof SimulateAttackIn>;
 // whatsapp/voice: lo que hizo el despachador con cada canal (queued = la fila notifications quedó en cola o enviada;
 // skipped = no aplica o sin contacto; failed = el envío falló al primer intento; el estado final se ve en E8).

@@ -40,6 +40,7 @@ export * from './templates/voz.ts';
 export * from './engine/edge.ts';
 export * from './engine/incidente.ts';
 export * from './engine/notify-plan.ts';
+export * from './engine/simulacion.ts';
 // «Modo bajo ataque» (asignaciones/modo-bajo-ataque.md §7): la regla que lo ofrece, las guardas y la Configuration Rule.
 export * from './bajo-ataque.ts';
 

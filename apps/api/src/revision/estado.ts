@@ -1,11 +1,18 @@
-import { CONTEXTO_BLOQUEO, estadoCommit, nuevosBloqueo, textoCierrePr, type EstadoCommit, type UmbralBloqueo }
-  from '@vanguard/core';
+import {
+  botonesPrCerrado, codigoRevision, CONTEXTO_BLOQUEO, estadoCommit, fueraDeVentanaDemo, nuevosBloqueo, textoCierrePr,
+  textoPrCerrado, TOPES_REVISION, type EstadoCommit, type UmbralBloqueo,
+} from '@vanguard/core';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { filasBotonesRevision, nuevoNonce, peorHallazgo } from '../actions/approvals.ts';
 import type { MsgRevision } from '../jobs.ts';
 import { withSecret } from '../lib/credentials.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
+import { ventanaAbierta } from '../lib/verificacion.ts';
+import {
+  cuerpoInteractivo, cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado, type MensajeKapso,
+} from '../notify/kapso.ts';
 import type { RespuestaCola } from '../wiki/pasos.ts';
 import { cambiarEstadoPr, comentarPr, conexionAccion, escribirGh, motivoGh, TRANSITORIO_GH, type Escrito }
   from './acciones-pr.ts';
@@ -20,13 +27,14 @@ import { cambiarEstadoPr, comentarPr, conexionAccion, escribirGh, motivoGh, TRAN
 // retry, como diff.
 // Subpeticiones: revisión 1 + config 1 + conexiones 1 + secreto 1 + llaves ≤ 2 (en frío) + POST ≤ 4 (saltos) + cierre 1
 // + config 1 (o, con 401, config y conexión 2) ≤ 13; con el cierre del PR, + historial del PR 1 + reclamo 1 + comentario
-// ≤ 4 + PATCH ≤ 4 + resultado 1 ≤ 24 de 40. Bloqueo apagado: revisión 1 + config 1 y ack, sin escribir nada.
+// ≤ 4 + PATCH ≤ 4 + resultado 1 ≤ 24; y el WhatsApp «VanGUARD cerró el PR» (avisoPrCerrado) ≤ 15 → ≤ 39 de 40. Bloqueo
+// apagado: revisión 1 + config 1 y ack, sin escribir nada.
 
 export const REINTENTOS_ESTADO = 2;
 const SHA = /^[0-9a-f]{40}$/;
 const MAX_PR = 2_147_483_647;
 const COLUMNAS = 'id, config_id, event, pr_number, status, partial, error_code, head_sha, counts, gate_blocking, '
-  + 'gate_findings, gate_override_at, gate_pr_action, gate_pr_at';
+  + 'gate_findings, gate_override_at, gate_pr_action, gate_pr_at, branch, new_findings';
 const escalonado = (intento: number) => 10 * 2 ** Math.max(0, intento - 1);
 
 type Obj = Record<string, unknown>;
@@ -92,12 +100,108 @@ async function cerrarConCritico(admin: SupabaseClient, m: MsgRevision, rev: Obj,
   return { tipo: 'fallo', code: motivoGh(r.code), transitorio: TRANSITORIO_GH.has(r.code) };
 }
 
-/** Punto de enganche del aviso «VanGUARD cerró el PR #{n}» con sus botones («Reabrir el PR», «Enviarme el arreglo»,
- *  «Silenciar repo 1 h»; asignaciones/avisos-whatsapp-botones.md). PENDIENTE de la confirmación de Giovanni: hoy solo
- *  deja constancia; el trabajo de los botones encolará aquí su aviso y su «Reabrir el PR» usará reabrirPr
- *  (acciones-pr.ts). El aviso de la revisión (paso 'aviso') sale igual, con o sin cierre. */
-export function avisoPrCerrado(m: MsgRevision, pr: number, comentado: boolean): void {
-  log('info', 'gate.pr_cerrado', { review: m.review_id, pr, comentado });
+// ── WhatsApp «VanGUARD cerró el PR» (asignaciones/avisos-whatsapp-botones.md) ────────────────────────────────────────
+/** Contactos del aviso del PR cerrado: ≤ 5 (como E26), y así el paso entero cabe en 40 subpeticiones. */
+export const MAX_AVISO_PR = 5;
+const E164 = /^\+[1-9][0-9]{7,14}$/;
+export type DatosAvisoPr = {
+  pr: number; comentado: boolean; rama: unknown; k: number; umbral: UmbralBloqueo; nuevos: unknown; silencio: unknown;
+};
+
+/** Aviso «VanGUARD cerró el PR #{n} hacia {rama}: {k} crítico(s) nuevo(s). Corrige, rota las claves y vuelve a
+ *  abrirlo.» (texto FIJO de core: número y rama validados) con «Reabrir el PR» (rpr → confirmación, reabrirPr),
+ *  «Enviarme el arreglo» (fix, si la revisión trae hallazgos nuevos) y «Silenciar repo 1 h» (rvs). Lo llama pasoEstado
+ *  UNA vez por cierre: solo tras ganar el CAS que anota gate_pr_action 'closed' (una reentrega no repite; un fallo aquí
+ *  no se reintenta: el aviso se pierde antes que salir dos veces). A los contactos con WhatsApp VERIFICADO y la ventana de
+ *  24 h abierta (fuera de ella no se manda: queda en la app), ≤ MAX_AVISO_PR. Se calla si el repo está silenciado
+ *  (code_review_configs.muted_until, botón rvs: el ✗ y el cierre ya ocurrieron), fuera de la ventana de avisos de la org
+ *  de demo o con el cupo de avisos de revisión lleno (revisiones avisadas en la última hora sin contar ESTA: el aviso del
+ *  cierre es de la misma revisión que el del paso 'aviso'). Sin fila en notifications: 0013 solo admite code_review_v1
+ *  por revisión y destinatario (la del paso 'aviso'); el log lleva el resultado. Fuera de producción o sin Kapso, nada.
+ *  Subpeticiones: contactos, org y cupo 3 + ventana de demo 1 + approvals 1 (todas en un insert) + envío·2 por contacto
+ *  ≤ 15. Nunca lanza. */
+export async function avisoPrCerrado(env: CloudflareBindings, admin: SupabaseClient, m: MsgRevision, d: DatosAvisoPr):
+  Promise<void> {
+  log('info', 'gate.pr_cerrado', { review: m.review_id, pr: d.pr, comentado: d.comentado });
+  const registro = { review: m.review_id, pr: d.pr };
+  try {
+    if (env.VG_ENV !== 'production' || !kapsoConfigurado(env)) {
+      log('info', 'gate.aviso_pr_omitido', { ...registro, motivo: env.VG_ENV !== 'production' ? 'dry_run' : 'sin_config' });
+      return;
+    }
+    const ahora = Date.now();
+    const silencio = Date.parse(typeof d.silencio === 'string' ? d.silencio : '');
+    if (Number.isFinite(silencio) && silencio > ahora) {
+      log('info', 'gate.aviso_pr_omitido', { ...registro, motivo: 'silenciado' });
+      return;
+    }
+    const texto = textoPrCerrado(d.pr, d.rama, d.k, d.umbral);   // valida el número antes de leer nada más
+    const [c, o, n] = await Promise.all([
+      admin.from('contacts').select('id, phone_e164, whatsapp, priority, verified_at, wa_last_inbound_at')
+        .eq('org_id', m.org_id).eq('whatsapp', true).order('priority').limit(10),
+      admin.from('orgs').select('is_demo').eq('id', m.org_id).maybeSingle(),
+      admin.from('code_reviews').select('id', { count: 'exact', head: true }).eq('org_id', m.org_id)
+        .eq('alert_state', 'sent').neq('id', m.review_id).gte('notified_at', new Date(ahora - 3600_000).toISOString()),
+    ]);
+    if (c.error || o.error || n.error || !o.data) {
+      log('warn', 'gate.aviso_pr_lectura_error', { ...registro,
+        code: c.error?.code ?? o.error?.code ?? n.error?.code ?? null });
+      return;
+    }
+    const demo = (o.data as Obj).is_demo === true;
+    if (demo) {
+      // M10 de §02.5.1: la ventana de alertas de la org de demo; si no se puede leer, cerrada (falla hacia no avisar).
+      const { data: cfg } = await admin.from('app_config').select('value').eq('key', 'demo_alertas_hasta').maybeSingle();
+      const hasta = obj(cfg).value;
+      if (fueraDeVentanaDemo({ is_demo: true }, typeof hasta === 'string' ? hasta : null, new Date(ahora))) {
+        log('info', 'gate.aviso_pr_omitido', { ...registro, motivo: 'fuera_de_ventana_demo' });
+        return;
+      }
+    }
+    if ((n.count ?? 0) >= (demo ? TOPES_REVISION.demo : TOPES_REVISION.normal)) {
+      log('info', 'gate.aviso_pr_omitido', { ...registro, motivo: 'cap' });
+      return;
+    }
+    const destinos = (Array.isArray(c.data) ? c.data : []).map(obj)
+      .filter((x) => x.whatsapp === true && typeof x.verified_at === 'string' && typeof x.phone_e164 === 'string'
+        && E164.test(x.phone_e164) && ventanaAbierta(env, x.wa_last_inbound_at, ahora))
+      .sort((a, b) => Number(a.priority ?? 9) - Number(b.priority ?? 9)).slice(0, MAX_AVISO_PR)
+      .map((x) => String(x.phone_e164));
+    if (!destinos.length) {
+      log('info', 'gate.aviso_pr_omitido', { ...registro, motivo: 'sin_contactos' });
+      return;
+    }
+
+    // Un nonce por botón y contacto, y todas las filas en UN insert (cada fila con solo su sha256, 10 min).
+    const code = codigoRevision(m.review_id);
+    const conFix = peorHallazgo(d.nuevos) !== null;
+    const porContacto = await Promise.all(destinos.map(async (tel) => {
+      const nonces = { rpr: nuevoNonce(), fix: conFix ? nuevoNonce() : null, rvs: nuevoNonce() };
+      const botones = botonesPrCerrado(code, nonces);   // valida código y nonces antes de escribir nada
+      const filas = await filasBotonesRevision({ org_id: m.org_id, code_review_id: m.review_id, recipient: tel.slice(1),
+        nonces, ahora });
+      return { tel, botones, filas };
+    }));
+    const { error: ea } = await admin.from('approvals').insert(porContacto.flatMap((x) => x.filas));
+    if (ea) log('warn', 'gate.aviso_pr_sin_botones', { ...registro, code: ea.code ?? null });
+    // Si approvals falla, el aviso sale igual como texto: el aviso importa más que los botones.
+    const res = await Promise.all(porContacto.map(async ({ tel, botones }) => {
+      const mensaje: MensajeKapso = ea ? cuerpoTexto(tel, texto) : cuerpoInteractivo(tel, { body: texto, botones });
+      const recipient_masked = enmascararTelefono(tel);
+      try {
+        await enviarKapso(env, mensaje);
+        log('info', 'gate.aviso_pr_enviado', { ...registro, recipient_masked });
+        return true;
+      } catch (e) {
+        log('warn', 'gate.aviso_pr_error', { ...registro, recipient_masked,
+          code: e instanceof KapsoError ? e.detalle ?? e.code : 'unavailable' });
+        return false;
+      }
+    }));
+    log('info', 'gate.aviso_pr', { ...registro, enviados: res.filter(Boolean).length, contactos: res.length });
+  } catch (e) {
+    log('error', 'gate.aviso_pr_excepcion', { ...registro, name: e instanceof Error ? e.name : typeof e });
+  }
 }
 
 /** Entrada de la cola para el paso 'estado' (revision/pasos.ts lo enruta). `intento` = m.attempts. */
@@ -112,7 +216,7 @@ export async function pasoEstado(env: CloudflareBindings, m: MsgRevision, intent
   const rev = leida as unknown as Obj;
   if (rev.status === 'queued' || rev.status === 'running') return 'ack';   // P0 sin pending: el diff encola otro al cerrar
   const { data: c, error: ec } = await admin.from('code_review_configs')
-    .select('id, connection_id, enabled, gate_enabled, gate_min, gate_last_error, gate_close_pr')
+    .select('id, connection_id, enabled, gate_enabled, gate_min, gate_last_error, gate_close_pr, muted_until')
     .eq('id', String(rev.config_id)).eq('org_id', m.org_id).maybeSingle();
   if (ec) return reintento();
   const cfg = c as Obj | null;
@@ -242,8 +346,11 @@ export async function pasoEstado(env: CloudflareBindings, m: MsgRevision, intent
     log('info', 'gate.pr_ya_anotado', { review: m.review_id });
     return 'ack';
   }
-  if (k.tipo === 'cerrado') avisoPrCerrado(m, n as number, k.comentado);
-  else log('warn', 'gate.pr_cierre_error', { review: m.review_id, code: k.code });
+  if (k.tipo === 'cerrado') {
+    // Sin nuevos, el número es el de bloqueantes de lo añadido (como el comentario de cerrarConCritico).
+    await avisoPrCerrado(env, admin, m, { pr: n as number, comentado: k.comentado, rama: rev.branch, umbral,
+      k: nuevos > 0 ? nuevos : Number(rev.gate_blocking), nuevos: rev.new_findings, silencio: cfg.muted_until });
+  } else log('warn', 'gate.pr_cierre_error', { review: m.review_id, code: k.code });
   return 'ack';
 }
 

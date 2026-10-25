@@ -8,6 +8,7 @@ import type { MsgRevision } from '../jobs.ts';
 import { db } from '../lib/db.ts';
 import { log } from '../lib/log.ts';
 import { ventanaAbierta } from '../lib/verificacion.ts';
+import { conexionAccion } from '../revision/acciones-pr.ts';
 import type { RespuestaCola } from '../wiki/pasos.ts';
 import {
   cuerpoInteractivo, cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado, type MensajeKapso,
@@ -19,12 +20,14 @@ import {
 // el silencio del repo (code_review_configs.muted_until, botón rvs) y la ventana de la demo; planAvisoRevision de core
 // decide. Por WhatsApp: fila queued ANTES de enviar (el unique por revisión, canal y destinatario da 23505 si ya se avisó
 // y entonces no sale nada), el interactivo con el texto fijo de mensajeRevision y los botones «Enviarme el arreglo» (fix,
-// si hay hallazgos nuevos) y «Silenciar repo 1 h» (rvs), una fila de approvals por botón con sha256(nonce) como el
+// si hay hallazgos nuevos), «Crear issue» (iss, con hallazgos nuevos y el token de escritura del bloqueo del mismo repo
+// con «Issues: Read and write») y «Silenciar repo 1 h» (rvs), una fila de approvals por botón con sha256(nonce) como el
 // despachador (anexo avisos-whatsapp-botones.md), y cierre a sent | failed. Si approvals falla, sale el texto sin botones.
 // Lo que no sale deja su fila failed o skipped_cap con su motivo y no llama a Kapso: tope, ventana de demo, sin
 // verificar, ventana de 24 h cerrada, fuera de producción (dry_run) o sin Kapso. Repo silenciado: ninguna fila y cierre
 // not_sent/silenciado. Cierre CAS de la revisión where alert_state = 'pending': sent si algún envío salió; si no,
-// not_sent con el motivo. Subpeticiones: 7 de lectura + ≤ 5 por contacto (≤ 5) + cierre ≈ 33 de 40.
+// not_sent con el motivo. Subpeticiones: 7 de lectura + conexiones del bloqueo 1 + ≤ 5 por contacto (≤ 5) + cierre ≈ 34
+// de 40.
 
 type Obj = Record<string, unknown>;
 type Contacto = ContactoAviso & { phone: string; wa_last_inbound_at: string | null };
@@ -76,7 +79,10 @@ function leerContactos(x: unknown): Contacto[] {
 const codigoError = (e: unknown) =>
   (e instanceof KapsoError ? e.detalle ?? e.code : e instanceof RangeError ? 'invalid' : 'unavailable');
 
-type Aviso = { env: CloudflareBindings; admin: ReturnType<typeof db>; orgId: string; rev: Revision; texto: string; ahora: number };
+type Aviso = {
+  env: CloudflareBindings; admin: ReturnType<typeof db>; orgId: string; rev: Revision; texto: string; ahora: number;
+  issue: boolean;   // «Crear issue» se puede ofrecer (puedeCrearIssue)
+};
 
 // Fila que ya existía (23505): un intento anterior llegó hasta aquí y cayó antes de cerrar la revisión. Lo que diga esa
 // fila decide el cierre; no se vuelve a enviar. Una queued pudo haber salido: cuenta como ya avisado.
@@ -91,11 +97,30 @@ async function yaRegistrada(d: Aviso, recipient_masked: string): Promise<Resulta
   return { motivo: e && PRIORIDAD_MOTIVO.includes(e) ? e : 'envio' };
 }
 
+// «Crear issue» solo si se puede hacer (anexo: «solo si el token de escritura del bloqueo tiene Issues: Read and write»):
+// la conexión GitHub kind 'action' activa de la org, del MISMO repo que la config de la revisión, con capabilities.issues
+// = true. Ese permiso lo sondea E53 al conectar el token (sondeoEscrituraPr: POST /issues vacío → 422 = puede) y lo guarda;
+// aquí no se llama a GitHub (crearIssue lo vuelve a comprobar al confirmar y, si GitHub lo niega, lo dice). 1
+// subpetición; si la base falla, sin el botón.
+async function puedeCrearIssue(admin: ReturnType<typeof db>, orgId: string, lecturaId: string, review: string):
+  Promise<boolean> {
+  try {
+    const c = await conexionAccion(admin, orgId, lecturaId);
+    return c.ok && c.accion.caps.issues === true;
+  } catch {
+    log('warn', 'revision.conexion_accion_error', { review });
+    return false;
+  }
+}
+
 // El interactivo del aviso: el texto fijo de mensajeRevision y «Enviarme el arreglo» (solo con hallazgos nuevos: no se
-// ofrece lo que no se puede hacer) y «Silenciar repo 1 h», un nonce nuevo por botón y su sha256 en approvals (colgado de
-// la revisión, 0018). Si approvals falla, el aviso sale igual como texto: el aviso importa más que los botones.
+// ofrece lo que no se puede hacer), «Crear issue» (si d.issue) y «Silenciar repo 1 h», un nonce nuevo por botón y su
+// sha256 en approvals (colgado de la revisión, 0018). Si approvals falla, el aviso sale igual como texto: el aviso
+// importa más que los botones.
 async function armarMensaje(d: Aviso, contacto: Contacto, registro: Obj): Promise<MensajeKapso> {
-  const nonces = { fix: d.rev.reglas.length ? nuevoNonce() : null, rvs: nuevoNonce() };
+  const conHallazgos = d.rev.reglas.length > 0;
+  const nonces = { fix: conHallazgos ? nuevoNonce() : null, iss: conHallazgos && d.issue ? nuevoNonce() : null,
+    rvs: nuevoNonce() };
   const botones = botonesRevision(codigoRevision(d.rev.id), nonces);   // valida código y nonces antes de escribir nada
   const filas = await filasBotonesRevision({ org_id: d.orgId, code_review_id: d.rev.id, recipient: contacto.phone.slice(1),
     nonces, ahora: d.ahora });
@@ -203,8 +228,8 @@ export async function avisarRevision(env: CloudflareBindings, m: MsgRevision, in
     admin.from('code_reviews').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('alert_state', 'sent')
       .gte('notified_at', new Date(ahora - 3600_000).toISOString()),
     // «Silenciar repo 1 h» (botón rvs, 0018): la configuración de ESTA revisión, en su org.
-    rev.config_id ? admin.from('code_review_configs').select('muted_until').eq('id', rev.config_id).eq('org_id', orgId)
-      .maybeSingle() : null,
+    rev.config_id ? admin.from('code_review_configs').select('muted_until, connection_id').eq('id', rev.config_id)
+      .eq('org_id', orgId).maybeSingle() : null,
   ]);
   if (p.error || c.error || o.error || n.error || !o.data) {
     // Sin el cupo o los contactos no se decide nada: nada escrito, retry (agotado, la DLQ deja not_sent/dlq).
@@ -250,7 +275,9 @@ export async function avisarRevision(env: CloudflareBindings, m: MsgRevision, in
   const url = origen ? `${origen}/o/${orgId}/codebase?revision=${rev.id}` : '';
   const texto = mensajeRevision({ evento: rev.event, rama: rev.branch, sha: rev.head_sha, pr: rev.pr_number, counts: rev.counts,
     reglas: rev.reglas, parcial: rev.partial, url });
-  const d: Aviso = { env, admin, orgId, rev, texto, ahora };
+  const lectura = str(obj(s?.data).connection_id);
+  const issue = rev.reglas.length > 0 && !!lectura && await puedeCrearIssue(admin, orgId, lectura, rev.id);
+  const d: Aviso = { env, admin, orgId, rev, texto, ahora, issue };
   const porId = new Map(contactos.map((x) => [x.id, x]));
   // ≤ 5 contactos (E26): en paralelo, cada uno con su propia fila y su propio manejo de errores.
   const res = await Promise.all(plan.envios.filter((e) => e.channel === 'whatsapp' && !e.p1).map(async (e) => {

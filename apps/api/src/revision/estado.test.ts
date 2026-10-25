@@ -43,6 +43,12 @@ let gh: Record<string, () => Response>;
 let fetchMock: ReturnType<typeof vi.fn>;
 let doble: ReturnType<typeof dbDoble>;
 let entorno: ReturnType<typeof envDoble>;
+// Aviso «VanGUARD cerró el PR» por WhatsApp: solo con Kapso configurado (las pruebas de arriba no lo tienen).
+let contactos: Fila[];
+let org: Fila;
+let ventanaDemo: Fila | null;
+let avisadas: number;          // revisiones avisadas en la última hora (cupo de avisos de revisión)
+let errorApprovals: { code: string } | null;
 
 const cumple = (f: Fila, op: Op) => op.filters.every(([c, o, v]) =>
   o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : o === 'is' ? (f[c] ?? null) === v : true);
@@ -62,6 +68,11 @@ beforeEach(() => {
       meta: { repo_full_name: 'Acme/Tienda', repo_id: 42, branch: 'main', purpose: 'commit_statuses' } },
   ];
   historial = [fila];
+  contactos = [];
+  org = { is_demo: false };
+  ventanaDemo = null;
+  avisadas = 0;
+  errorApprovals = null;
   estado.sinSecreto = false;
   estado.ctx = null;
   gh = {
@@ -71,7 +82,12 @@ beforeEach(() => {
   };
   doble = dbDoble({
     tabla: (op): Resp | undefined => {
+      if (op.table === 'contacts') return { data: contactos };
+      if (op.table === 'orgs') return { data: org };
+      if (op.table === 'app_config') return { data: ventanaDemo };
+      if (op.table === 'approvals') return errorApprovals ? { error: errorApprovals } : {};
       if (op.table === 'code_reviews') {
+        if (op.action === 'select' && op.head) return { count: avisadas };   // el cupo de avisos de revisión
         if (op.action === 'select' && op.orden) return { data: historial };   // el historial de ese PR
         const hit = cumple(fila, op) ? fila : null;
         if (op.action === 'select') return { data: hit };
@@ -436,6 +452,128 @@ describe('paso estado · cierre del PR con críticos (anexo)', () => {
     gh[`PATCH ${GH}/pulls/7`] = () => new Response('x', { status: 503 });
     expect(await correr(REINTENTOS_ESTADO + 1)).toBe('ack');
     expect(fila).toMatchObject({ gate_pr_action: 'close_failed', gate_pr_error: 'red' });
+  });
+});
+
+// WhatsApp «VanGUARD cerró el PR» (asignaciones/avisos-whatsapp-botones.md): texto fijo y sus 3 botones, UNA vez por
+// cierre (tras el CAS de gate_pr_action), solo a verificados con la ventana de 24 h abierta; silencio, cupo de revisión y
+// ventana de la demo lo callan, pero el ✗ y el cierre siguen.
+describe('paso estado · WhatsApp «VanGUARD cerró el PR»', () => {
+  const KAPSO = 'POST https://api.kapso.ai/meta/whatsapp/v24.0/1234567890/messages';
+  const TEL_A = '+58' + '4141234567';
+  const TEL_B = '+58' + '4241112233';
+  const TEXTO = 'VanGUARD cerró el PR #7 hacia main: 1 crítico nuevo. Corrige, rota las claves y vuelve a abrirlo.';
+  const hace = (ms: number) => new Date(Date.now() - ms).toISOString();
+  type Enviado = { to: string; type: string; text?: { body: string };
+    interactive?: { body: { text: string }; action: { buttons: { reply: { id: string; title: string } }[] } } };
+  const enviados = () => fetchMock.mock.calls.filter(([u]) => String(u).startsWith('https://api.kapso.ai/'))
+    .map(([, i]) => JSON.parse(String((i as RequestInit).body)) as Enviado);
+
+  beforeEach(() => {
+    entorno = envDoble({ ...PROD, KAPSO_API_KEY: ['clave', 'kapso'].join('-'), KAPSO_PHONE_NUMBER_ID: '1234567890' });
+    Object.assign(fila, { branch: 'main', new_findings: [STRIPE] });
+    contactos = [
+      { id: 'c1', phone_e164: TEL_A, whatsapp: true, priority: 1, verified_at: hace(86_400_000),
+        wa_last_inbound_at: hace(3600_000) },
+      { id: 'c2', phone_e164: TEL_B, whatsapp: true, priority: 2, verified_at: hace(86_400_000),
+        wa_last_inbound_at: hace(30 * 3600_000) },                 // ventana de 24 h cerrada
+      { id: 'c3', phone_e164: '+58' + '4129990000', whatsapp: true, priority: 3, verified_at: null,
+        wa_last_inbound_at: hace(60_000) },                        // sin verificar
+    ];
+    let k = 0;
+    gh[KAPSO] = () => new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: `wamid.P${++k}` }] }));
+  });
+
+  it('cierre → texto fijo con «Reabrir el PR», «Enviarme el arreglo» y «Silenciar repo 1 h» al verificado con ventana; una vez',
+    async () => {
+      expect(await correr()).toBe('ack');
+      // Primero GitHub (✗, comentario, cierre); el WhatsApp, después y solo al contacto verificado con la ventana abierta.
+      expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `POST ${GH}/issues/7/comments`, `PATCH ${GH}/pulls/7`, KAPSO]);
+      const [m] = enviados();
+      expect(m!.to).toBe(TEL_A.slice(1));
+      expect(m!.interactive!.body.text).toBe(TEXTO);
+      const botones = m!.interactive!.action.buttons.map((b) => b.reply);
+      expect(botones.map((b) => b.title)).toEqual(['Reabrir el PR', 'Enviarme el arreglo', 'Silenciar repo 1 h']);
+      expect(botones.map((b) => b.id.split(':').slice(0, 2).join(':'))).toEqual(['rpr:C40000', 'fix:C40000', 'rvs:C40000']);
+      // Un insert con las 3 filas: rpr es la de PEDIR (etapa proponer); solo el sha256 de cada nonce.
+      const ins = de('approvals', 'insert');
+      expect(ins).toHaveLength(1);
+      const filasAp = ins[0]!.payload as Fila[];
+      expect(filasAp.map((f) => [f.action_kind, (f.params as Fila).etapa ?? null])).toEqual([['reopen_pr', 'proponer'],
+        ['send_fix', null], ['mute_repo', null]]);
+      for (const f of filasAp) {
+        expect(f).toMatchObject({ org_id: ORG, code_review_id: REV, channel: 'whatsapp', recipient: TEL_A.slice(1) });
+      }
+      expect(JSON.stringify(filasAp)).not.toContain(botones[0]!.id.split(':')[2]);
+      // El cupo cuenta las OTRAS revisiones avisadas en la hora (el aviso del cierre es de esta misma revisión).
+      const cupo = doble.ops.find((o) => o.table === 'code_reviews' && o.head)!;
+      expect(cupo.filters).toEqual(expect.arrayContaining([['org_id', 'eq', ORG], ['alert_state', 'eq', 'sent'],
+        ['id', 'neq', REV]]));
+      expect(lineas()).not.toContain('4141234567');
+
+      // Otra entrega del mismo paso: el PR ya está anotado como cerrado → ni cierre ni WhatsApp otra vez.
+      fetchMock.mockClear();
+      expect(await correr()).toBe('ack');
+      expect(enviados()).toEqual([]);
+    });
+
+  it('repo silenciado (rvs) → el ✗ y el cierre siguen, el WhatsApp no; demo fuera de ventana o cupo lleno → tampoco', async () => {
+    const casos: (() => void)[] = [
+      () => { config!.muted_until = new Date(Date.now() + 30 * 60_000).toISOString(); },
+      () => { org = { is_demo: true }; ventanaDemo = null; },
+      () => { avisadas = 3; },
+    ];
+    for (const preparar of casos) {
+      Object.assign(fila, { gate_pr_action: null, gate_pr_at: null });
+      config!.muted_until = null;
+      org = { is_demo: false };
+      avisadas = 0;
+      preparar();
+      fetchMock.mockClear();
+      expect(await correr()).toBe('ack');
+      expect(llamadas()).toEqual([`POST ${GH}/statuses/${HEAD}`, `POST ${GH}/issues/7/comments`, `PATCH ${GH}/pulls/7`]);
+      expect(fila.gate_pr_action).toBe('closed');
+    }
+    expect(lineas()).toContain('"motivo":"silenciado"');
+    expect(lineas()).toContain('"motivo":"fuera_de_ventana_demo"');
+    expect(lineas()).toContain('"motivo":"cap"');
+    // La org de demo con la ventana abierta sí avisa (tope 10).
+    Object.assign(fila, { gate_pr_action: null, gate_pr_at: null });
+    org = { is_demo: true };
+    ventanaDemo = { value: new Date(Date.now() + 45 * 60_000).toISOString() };
+    avisadas = 5;
+    fetchMock.mockClear();
+    await correr();
+    expect(enviados()).toHaveLength(1);
+  });
+
+  it('rama hostil → «la rama vigilada»; sin hallazgos nuevos → sin «Enviarme el arreglo»; approvals falla → texto sin botones',
+    async () => {
+      Object.assign(fila, { branch: 'pagos.evil.com/login', new_findings: [] });
+      await correr();
+      const [m] = enviados();
+      expect(m!.interactive!.body.text).toBe(TEXTO.replace('hacia main', 'hacia la rama vigilada'));
+      expect(m!.interactive!.action.buttons.map((b) => b.reply.title)).toEqual(['Reabrir el PR', 'Silenciar repo 1 h']);
+
+      Object.assign(fila, { branch: 'main', gate_pr_action: null, gate_pr_at: null });
+      errorApprovals = { code: '57014' };
+      fetchMock.mockClear();
+      await correr();
+      expect(enviados()).toEqual([{ messaging_product: 'whatsapp', to: TEL_A.slice(1), type: 'text', text: { body: TEXTO } }]);
+    });
+
+  it('sin Kapso (el resto de pruebas del paso) o sin contactos con ventana → ni lecturas de contactos ni envío', async () => {
+    entorno = envDoble(PROD);
+    await correr();
+    expect(doble.ops.some((o) => o.table === 'contacts')).toBe(false);
+    expect(lineas()).toContain('"motivo":"sin_config"');
+    entorno = envDoble({ ...PROD, KAPSO_API_KEY: ['clave', 'kapso'].join('-'), KAPSO_PHONE_NUMBER_ID: '1234567890' });
+    Object.assign(fila, { gate_pr_action: null, gate_pr_at: null });
+    contactos = contactos.slice(1);
+    fetchMock.mockClear();
+    await correr();
+    expect(enviados()).toEqual([]);
+    expect(lineas()).toContain('"motivo":"sin_contactos"');
   });
 });
 

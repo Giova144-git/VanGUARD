@@ -5,6 +5,7 @@
 // genera el despachador (aquí solo se validan y se arman los ids que parsea el webhook). Botones de la revisión de
 // código y sus respuestas (asignaciones/avisos-whatsapp-botones.md): al final del archivo.
 import type { Module, Severity } from '@vanguard/contracts';
+import { hostCanonico, MIN_IPS_BAJO_ATAQUE, TTL_BAJO_ATAQUE_S } from '../bajo-ataque.ts';
 import { ipCanonica, ipCorta, recursoCorto, uaParaMensaje } from '../engine/edge.ts';
 import { moduloDeRegla, reglaPrincipal, SERVICIO_MODULO, servicioDeReglas } from '../engine/incidente.ts';
 import { redactString } from '../redact.ts';
@@ -141,7 +142,7 @@ export const TITULOS_BOTON: Readonly<Record<AccionBoton, string>> = {
   fix: 'Enviarme el arreglo', iss: 'Crear issue', rvs: 'Silenciar repo 1 h', rpr: 'Reabrir el PR', uat: 'Modo bajo ataque',
 };
 /** Título del `ok` según la acción que confirma (regla 2 del anexo: toda escritura en sistemas del cliente lleva el 2.º
- *  paso). blk es el de hoy; iss, rpr y uat quedan listos para cuando se conecten crear issue, reabrir PR y bajo ataque. */
+ *  paso): blk «Bloquear IP», iss «Crear issue», rpr «Reabrir el PR» y uat «Modo bajo ataque». */
 export const TITULOS_CONFIRMACION = {
   blk: 'Sí, bloquear', iss: 'Sí, crear', rpr: 'Sí, reabrir', uat: 'Sí, activar',
 } as const;
@@ -202,8 +203,10 @@ export const TEXTO_CODIGO_VENCIDO = 'Código vencido o ya usado. Abre officialva
 
 // ── Revisión de código: botones y respuestas (asignaciones/avisos-whatsapp-botones.md) ──────────────────────────────
 // Cada botón hace una acción real y toda acción contesta «Hecho: …» o «No se pudo: <motivo corto>». Nada de lo que
-// sale aquí lleva texto del autor, rutas, valores ni texto de IA: solo frases nuestras, el rule_id (si casa su regex),
-// la severidad, la hora y la url del panel (dominio propio).
+// sale aquí lleva texto del autor, valores ni texto de IA: solo frases nuestras, el rule_id (si casa su regex), la
+// severidad, la hora, la url del panel (dominio propio) y lo que el anexo fija: número de PR y rama validados, el host
+// canónico del ataque y la url del issue de github.com. El cuerpo del issue (GitHub, no WhatsApp) lleva además el archivo
+// y la línea, solo si casan una lista corta de caracteres.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REGLA = /^(SB|CF|CB|PF)_[A-Z0-9_]{1,60}$/;
 const REGLA_REVISION = /^CB_[A-Z0-9_]{1,60}$/;
@@ -219,12 +222,132 @@ export function codigoRevision(id: string): string {
   return id.slice(0, 6).toUpperCase();
 }
 
-/** «Enviarme el arreglo» (solo si llega su nonce: la revisión trae hallazgos nuevos) y «Silenciar repo 1 h». Un nonce
- *  por botón; repetidos → RangeError (cada uno es una fila de approvals con su sha256). */
-export function botonesRevision(code: string, nonces: { fix?: string | null; rvs: string }): BotonAlerta[] {
-  const xs: [AccionBoton, string][] = nonces.fix ? [['fix', nonces.fix], ['rvs', nonces.rvs]] : [['rvs', nonces.rvs]];
-  if (new Set(xs.map(([, n]) => n)).size !== xs.length) throw new RangeError('BOTON_NONCE_REPETIDO');
-  return xs.map(([a, n]) => ({ id: idBoton(a, code, n), title: TITULOS_BOTON[a] }));
+// Los botones de UN mensaje, en orden (≤ 3: máximo de Meta). Un nonce por botón; repetidos → RangeError (cada uno es una
+// fila de approvals con su sha256).
+function botones(code: string, xs: readonly (readonly [AccionBoton, string | null | undefined])[]): BotonAlerta[] {
+  const ys = xs.filter((x): x is readonly [AccionBoton, string] => x[1] != null);   // '' llega a idBoton y lanza
+  if (ys.length > 3) throw new RangeError('BOTONES_DEMASIADOS');
+  if (new Set(ys.map(([, n]) => n)).size !== ys.length) throw new RangeError('BOTON_NONCE_REPETIDO');
+  return ys.map(([a, n]) => ({ id: idBoton(a, code, n), title: TITULOS_BOTON[a] }));
+}
+
+/** Aviso de revisión: «Enviarme el arreglo» (solo si llega su nonce: la revisión trae hallazgos nuevos), «Crear issue»
+ *  (solo si llega su nonce: hallazgos nuevos y token de escritura del mismo repo con «Issues: Read and write») y
+ *  «Silenciar repo 1 h», en ese orden. */
+export function botonesRevision(code: string, nonces: { fix?: string | null; iss?: string | null; rvs: string }):
+  BotonAlerta[] {
+  return botones(code, [['fix', nonces.fix || null], ['iss', nonces.iss || null], ['rvs', nonces.rvs]]);
+}
+
+/** Aviso «VanGUARD cerró el PR»: «Reabrir el PR», «Enviarme el arreglo» (solo si llega su nonce) y «Silenciar repo 1 h». */
+export function botonesPrCerrado(code: string, nonces: { rpr: string; fix?: string | null; rvs: string }): BotonAlerta[] {
+  return botones(code, [['rpr', nonces.rpr], ['fix', nonces.fix || null], ['rvs', nonces.rvs]]);
+}
+
+/** 2.º mensaje del ataque en el que se puede activar el modo bajo ataque: solo «Modo bajo ataque» (el «Cancelar» va en
+ *  su confirmación). `code` = el del incidente. */
+export const botonOfertaBajoAtaque = (code: string, uat: string): BotonAlerta[] => botones(code, [['uat', uat]]);
+
+const MAX_PR = 2_147_483_647;
+const prValido = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 1 && n <= MAX_PR;
+// Como mensajeRevision: sin puntos ni barras (WhatsApp convertiría `pagos.evil.com/login` en un enlace pulsable).
+const RAMA = /^[A-Za-z0-9_-]{1,40}$/;
+const MIN_BAJO_ATAQUE = Math.max(1, Math.round(TTL_BAJO_ATAQUE_S / 60));
+
+/** Aviso «VanGUARD cerró el PR» (anexo bloqueo-merge-cierre-pr.md), texto FIJO del anexo de botones: «VanGUARD cerró el
+ *  PR #{n} hacia {rama}: {k} crítico(s) nuevo(s). Corrige, rota las claves y vuelve a abrirlo.» La rama solo si casa una
+ *  lista corta de caracteres (si no, «la rama vigilada»); con el umbral del bloqueo en high, «crítico(s) o alto(s)». Un
+ *  número de PR que no es un entero válido → RangeError: no se avisa de algo que no se puede comprobar. */
+export function textoPrCerrado(n: number, rama: unknown, k: number, umbral: 'critical' | 'high' = 'critical'): string {
+  if (!prValido(n)) throw new RangeError('PR_NUMERO');
+  const r = typeof rama === 'string' && RAMA.test(rama) ? rama : 'la rama vigilada';
+  const c = Math.max(1, Number(entero(k)));
+  const que = umbral === 'high' ? (c === 1 ? 'crítico o alto nuevo' : 'críticos o altos nuevos')
+    : c === 1 ? 'crítico nuevo' : 'críticos nuevos';
+  return `VanGUARD cerró el PR #${n} hacia ${r}: ${c} ${que}. Corrige, rota las claves y vuelve a abrirlo.`;
+}
+
+/** 2.º mensaje de bajo ataque (modo-bajo-ataque.md y el anexo de botones): «Ataque desde {n} IPs en {host}. Puedes poner
+ *  ese host en modo bajo ataque 30 min.» host canónico (hostCanonico) y n ≥ 2 (la regla de E55); si no, RangeError: la
+ *  oferta no aplica y no se envía. */
+export function textoOfertaBajoAtaque(ips: number, host: string): string {
+  if (hostCanonico(host) !== host) throw new RangeError('HOST_BAJO_ATAQUE');
+  const n = Number(entero(ips));
+  if (n < MIN_IPS_BAJO_ATAQUE) throw new RangeError('IPS_BAJO_ATAQUE');
+  return `Ataque desde ${n} IPs en ${host}. Puedes poner ese host en modo bajo ataque ${MIN_BAJO_ATAQUE} min.`;
+}
+
+// ── Confirmaciones de lo que escribe en sistemas del cliente (regla 2 del anexo) y sus respuestas ──────────────────
+/** Cuerpo del interactivo «Sí, crear» / «Cancelar». */
+export const TEXTO_CONFIRMAR_ISSUE = '¿Creo un issue en GitHub con lo más grave de esta revisión? Llevará la regla, el '
+  + 'archivo y la línea (sin el valor), los pasos para corregirlo y la etiqueta vanguard. Vence en 10 min.';
+/** Cuerpo del interactivo «Sí, reabrir» / «Cancelar». */
+export function textoConfirmarReabrir(n: number): string {
+  if (!prValido(n)) throw new RangeError('PR_NUMERO');
+  return `¿Reabro el PR #${n}? El ✗ de VanGUARD se queda hasta que lo corrijas. Vence en 10 min.`;
+}
+/** Cuerpo del interactivo «Sí, activar» / «Cancelar» (el host ya pasó hostCanonico; si no, RangeError). */
+export function textoConfirmarBajoAtaque(host: string): string {
+  if (hostCanonico(host) !== host) throw new RangeError('HOST_BAJO_ATAQUE');
+  return `¿Activo el modo bajo ataque en ${host} durante ${MIN_BAJO_ATAQUE} min? Cada visitante pasará un desafío de `
+    + 'Cloudflare y las llamadas de API, webhooks y apps a ese host fallarán mientras dure. Vence en 10 min.';
+}
+
+const URL_ISSUE = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]{0,9}$/;
+/** «Hecho: issue #n <url>». La url solo si es la de un issue de github.com (crearIssue ya exige el repo del token). */
+export function textoIssueCreado(numero: number | null, url?: string | null): string {
+  const n = prValido(numero) ? ` #${numero}` : '';
+  if (n && typeof url === 'string' && URL_ISSUE.test(url)) return `Hecho: issue${n} ${url}`;
+  return `Hecho: issue${n} creado en GitHub con la etiqueta vanguard. Lo ves en el repo.`;
+}
+/** «Hecho: PR #n reabierto.» */
+export const textoPrReabierto = (n: number | null): string =>
+  `Hecho: PR${prValido(n) ? ` #${n}` : ''} reabierto. El ✗ de VanGUARD se queda hasta que lo corrijas.`;
+/** Modo bajo ataque puesto (o ya puesto), con la hora de fin en Caracas y cómo deshacerlo. */
+export function textoBajoAtaqueActivo(host: string, hasta: string | number | Date, yaEstaba = false): string {
+  const h = hostCanonico(host) ?? 'ese host';
+  const que = yaEstaba ? `el modo bajo ataque ya estaba activo en ${h}` : `modo bajo ataque activo en ${h}`;
+  return `Hecho: ${que} hasta las ${horaCaracas(hasta)} (hora de Caracas). Se quita solo a esa hora; para quitarlo `
+    + 'antes, pulsa «Desactivar ahora» en el incidente, en la app.';
+}
+/** El modo de esa aprobación ya se retiró (executeUnderAttack devuelve la fila undone). */
+export const TEXTO_BAJO_ATAQUE_YA_RETIRADO = 'Hecho: ese modo bajo ataque ya se retiró. Si el ataque sigue, vuelve a '
+  + 'activarlo desde la app.';
+/** «Cancelar» de cada confirmación; y si la confirmación ganó antes (el «Sí, …» ya se usó), lo dice. */
+export const TEXTOS_CANCELADO = {
+  iss: 'Cancelado: no creé el issue.', rpr: 'Cancelado: el PR sigue cerrado.',
+  uat: 'Cancelado: no activé el modo bajo ataque.',
+} as const;
+export const TEXTO_YA_CONFIRMADO = 'No cancelé: esa acción ya estaba confirmada. Mira su resultado en la app.';
+
+const RECURSO_ISSUE = /^[A-Za-z0-9_./@+-]{1,200}:[1-9][0-9]{0,6}$/;
+/** «Crear issue»: título y cuerpo FIJOS para GitHub con el hallazgo nuevo más grave. Solo llevan la regla (si casa su
+ *  regex), la severidad, el archivo y la línea (si casan una lista corta de caracteres, sin `..` y redactString no los
+ *  toca; si no, «míralos en el panel»), los pasos de la plantilla (pasosArreglo, los mismos de «Enviarme el arreglo»), el
+ *  número de los demás y el enlace al panel. Nunca el valor, la evidencia, el título del hallazgo ni texto del autor o de
+ *  la IA (crearIssue vuelve a mirar que no lleve nada con forma de secreto ni controles bidi). */
+export function issueDeRevision(h: { rule_id: string; severity: string; resource?: string | null }, url: string,
+  otros = 0): { titulo: string; cuerpo: string } {
+  const r = String(h.rule_id ?? '');
+  const regla = REGLA.test(r) ? r : null;
+  const s = String(h.severity);
+  const sev = Object.hasOwn(SEVERIDAD_ES, s) ? ` de severidad ${SEVERIDAD_ES[s as Severity]}` : '';
+  const x = typeof h.resource === 'string' ? h.resource : '';
+  const recurso = RECURSO_ISSUE.test(x) && !x.includes('..') && redactString(x) === x ? x : null;
+  const mas = Number(entero(otros));
+  const lineas = [
+    `VanGUARD encontró un hallazgo nuevo${sev} en un cambio de este repo.`, '',
+    `- Regla: ${regla ? enCodigo(regla) : 'mírala en el panel de VanGUARD'}`,
+    `- Archivo y línea: ${recurso ? enCodigo(recurso) : 'míralos en el panel de VanGUARD'}`,
+    '- El valor no se copia aquí a propósito.',
+    ...(mas ? [`- La misma revisión trae ${mas} ${mas === 1 ? 'hallazgo nuevo más' : 'hallazgos nuevos más'}: `
+      + 'están en el panel.'] : []),
+    '', 'Cómo corregirlo:', ...pasosArreglo(r).map((p, i) => `${i + 1}. ${p}`),
+    ...(typeof url === 'string' && URL_PANEL.test(url) ? ['', `Detalle en VanGUARD (pide sesión): ${url}`] : []),
+    '', 'Lo creó VanGUARD desde WhatsApp, a petición de un contacto verificado de la organización.',
+  ];
+  return { titulo: unaLinea(`VanGUARD: hallazgo${sev} en un cambio${regla ? ` (${regla})` : ''}`, 200),
+    cuerpo: lineas.join('\n').slice(0, 10_000) };
 }
 
 /** Pasos cuando la regla no tiene plantilla propia: los de la genérica hablan de «la evidencia de abajo», que aquí no va. */
@@ -266,9 +389,9 @@ export const textoRepoSilenciado = (hasta: string | number | Date): string =>
   `Hecho: no te mandaré avisos de revisión de este repo hasta las ${horaCaracas(hasta)} (hora de Caracas). `
   + 'Las revisiones siguen y las ves en la app.';
 
-/** iss, rpr y uat: registradas en el webhook, todavía sin la acción detrás (no se ofrecen en ningún mensaje). */
+/** Ya sin uso en E31 (iss, rpr y uat tienen su acción); se conserva por si un botón futuro se registra antes de tenerla. */
 export const TEXTO_ACCION_PRONTO = 'Esta acción llega pronto. Mientras tanto, la tienes en la app de VanGUARD.';
-/** Canje sin filas de un botón de la revisión (vencido, ya usado o de otro teléfono). */
+/** Canje sin filas de un botón de la revisión o de iss, rpr y uat (vencido, ya usado o de otro teléfono). */
 export const TEXTO_BOTON_VENCIDO = 'No se pudo: el botón venció o ya se usó. Abre officialvanguard.com';
 /** Motivos fijos de «No se pudo: <motivo corto>.» (nunca el texto de un proveedor ni del usuario). */
 export const MOTIVOS_NO_SE_PUDO = {
@@ -277,6 +400,33 @@ export const MOTIVOS_NO_SE_PUDO = {
   sin_hallazgos: 'esta revisión no trae hallazgos nuevos que arreglar',
   sin_config: 'ese repo ya no tiene la revisión de código activa',
   error: 'no pude guardarlo, inténtalo desde la app',
+  // «Crear issue» y «Reabrir el PR» (motivos de crearIssue y reabrirPr, revision/acciones-pr.ts)
+  dry_run: 'fuera de producción VanGUARD no escribe en tus sistemas',
+  sin_token: 'falta el token de escritura de GitHub del bloqueo de merge',
+  otro_repo: 'el token de escritura de GitHub es de otro repo',
+  sin_permiso_issues: 'el token de escritura no tiene «Issues: Read and write»',
+  sin_permiso_pr: 'el token de escritura no tiene «Pull requests: Read and write»',
+  sin_credencial: 'no pude abrir el token; inténtalo de nuevo en un rato',
+  gh_token: 'GitHub rechazó el token; vuelve a conectarlo en la app',
+  gh_permiso: 'GitHub no dio permiso para hacerlo',
+  gh_no_encontrado: 'GitHub no encontró el repo o el PR',
+  gh_rechazo: 'GitHub rechazó la petición',
+  gh_red: 'GitHub no respondió; inténtalo de nuevo en un rato',
+  no_es_pr: 'esa revisión no es de un pull request',
+  ya_abierto: 'ese PR ya está abierto',
+  no_cerrado: 'ese PR no lo cerró VanGUARD',
+  texto_rechazado: 'el texto del issue no pasó los filtros de seguridad',
+  // «Modo bajo ataque» (motivos de proponerBajoAtaque y executeUnderAttack, actions/under-attack.ts)
+  otro_incidente: 'no encontré ese incidente',
+  bajo_ataque_no_aplica: 'ese ataque ya no cumple las condiciones del modo bajo ataque',
+  bajo_ataque_activo: 'el modo bajo ataque ya está activo en ese host',
+  bajo_ataque_en_curso: 'el modo bajo ataque ya se está activando; míralo en la app',
+  sin_conexion_cf: 'falta el token de acciones de Cloudflare (Modo blindaje)',
+  cf_permiso: 'al token de Modo blindaje le falta Zone · Config Rules · Edit',
+  cf_token: 'el token de acciones de Cloudflare ya no es válido',
+  cf_cupo: 'tu plan de Cloudflare ya usa todas sus reglas de configuración',
+  cf_rechazo: 'Cloudflare no aceptó la regla',
+  cf_red: 'Cloudflare no respondió; vuelve a intentarlo desde la app',
 } as const;
 export type MotivoNoSePudo = keyof typeof MOTIVOS_NO_SE_PUDO;
 export const textoNoSePudo = (m: MotivoNoSePudo): string => `No se pudo: ${MOTIVOS_NO_SE_PUDO[m]}.`;

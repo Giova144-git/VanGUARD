@@ -3,7 +3,8 @@
 // approvals con SOLO sha256(nonce) (el nonce viaja en el id del botón y no se guarda), recipient = teléfono sin '+' y
 // 10 min de vida; el código de 6 dígitos de la app se guarda como HMAC con la FPK (otpHash, §06.7). El canje es atómico
 // con vg_redeem_approval (0005). Botones del aviso de revisión (anexo avisos-whatsapp-botones.md, 0018): fix y rvs,
-// con las mismas guardas y la fila colgada de la revisión (approvals.code_review_id) en vez de un incidente.
+// con las mismas guardas y la fila colgada de la revisión (approvals.code_review_id) en vez de un incidente; las de iss y
+// rpr (etapa 'proponer') también nacen aquí, y su canje y el de uat viven en actions/botones-escritura.ts.
 import { ProposeResponse, Severity } from '@vanguard/contracts';
 import {
   botonesAprobacion, codigoRevision, ipCorta, otpHashParam, reglaPrincipal, SEV_RANK, simularBloqueo, sixDigitCode,
@@ -336,8 +337,19 @@ export async function proponerBloqueo(env: CloudflareBindings, o: OpcionesPropue
 export type ResultadoBotonBloqueo = 'ejecutado' | 'ya_estaba' | 'rechazado' | 'caido' | 'en_curso' | 'cancelado' | 'propuesto'
   | 'sin_conexion' | 'ya_bloqueada' | 'ip_no_valida' | 'sin_entrega' | 'sin_canje' | 'tipo_distinto' | 'otro_incidente'
   | 'no_contacto' | 'remitente_invalido' | 'dry_run' | 'error';
+/** Por qué un botón iss/rpr/uat o el ok/no de su confirmación tuvo o no efecto (actions/botones-escritura.ts; al log). */
+export type ResultadoEscritura = 'propuesto' | 'issue_creado' | 'pr_reabierto' | 'bajo_ataque_activo' | 'ya_estaba'
+  | 'cancelado' | 'ya_confirmado' | 'no_se_pudo' | 'rechazado' | 'caido' | 'en_curso' | 'sin_hallazgos' | 'no_es_pr'
+  | 'ya_abierto' | 'no_cerrado' | 'sin_entrega' | 'sin_canje' | 'tipo_distinto' | 'otra_revision' | 'otro_incidente'
+  | 'no_contacto' | 'remitente_invalido' | 'dry_run' | 'error';
 /** `texto`: la respuesta de servicio que E31 debe mandar al remitente (con su responder y su presupuesto), o null. */
-export type CanjeBloqueo = { resultado: ResultadoBotonBloqueo; texto: string | null; action_id?: string };
+export type CanjeBloqueo = { resultado: ResultadoBotonBloqueo | ResultadoEscritura; texto: string | null; action_id?: string };
+/** ok/no de las escrituras de iss, rpr y uat: tras el canje, canjearBotonBloqueo da a esta función la fila canjeada si su
+ *  action_kind es uno de ACCIONES_ESCRITURA. E31 pasa confirmarEscritura (actions/botones-escritura.ts): así el nonce
+ *  de ok/no se canjea en un solo sitio y approvals.ts no importa GitHub ni el modo bajo ataque (que importa de aquí). */
+export type ConfirmarEscritura = (env: CloudflareBindings, fila: Obj, b: Boton, remitente: string, rid: string,
+  ahora: number) => Promise<{ resultado: ResultadoEscritura; texto: string | null }>;
+export const ACCIONES_ESCRITURA: readonly string[] = ['create_issue', 'reopen_pr', 'under_attack_on'];
 /** Peor caso de subpeticiones de canjearBotonBloqueo: canje 1 + lecturas 2 + executeBlock ≤ 10 (con GET de duplicado o
  *  de reconciliación y traspaso de la regla; la propuesta de blk ≤ 6, la cancelación 3), más 1 de margen. E31 lo reserva
  *  antes de llamar y suma aparte el envío de `texto`. */
@@ -348,10 +360,11 @@ export const COSTE_BOTON_BLOQUEO = 14;
  *  remitente un contacto verificado de esa org. Entonces: ok → executeBlock (el mismo de E21; la hermana in_app queda
  *  usada) · no → las aprobaciones vivas y sin usar del group quedan usadas con result {canceled:true} (si la confirmación
  *  ganó antes, se contesta el estado real de su action) · blk → proponerBloqueo
- *  con entrega por WhatsApp al remitente (nunca un bloqueo directo; sin own_ip). Fuera de producción no canjea nada
- *  (dry_run). Nunca lanza; E31 manda `texto` si no es null. */
+ *  con entrega por WhatsApp al remitente (nunca un bloqueo directo; sin own_ip). Un ok/no cuya fila es de iss, rpr o uat
+ *  va a `confirmar` (si no llega, tipo_distinto). Fuera de producción no canjea nada (dry_run). Nunca lanza; E31 manda
+ *  `texto` si no es null. */
 export async function canjearBotonBloqueo(env: CloudflareBindings, b: Boton, remitente: string, rid: string,
-  ahora = Date.now()): Promise<CanjeBloqueo> {
+  ahora = Date.now(), confirmar?: ConfirmarEscritura): Promise<CanjeBloqueo> {
   const r = (resultado: ResultadoBotonBloqueo, texto: string | null = null, action_id?: string | null): CanjeBloqueo =>
     (action_id ? { resultado, texto, action_id } : { resultado, texto });
   if (b.accion !== 'ok' && b.accion !== 'no' && b.accion !== 'blk') return r('tipo_distinto');
@@ -368,6 +381,9 @@ export async function canjearBotonBloqueo(env: CloudflareBindings, b: Boton, rem
     const fila = obj(Array.isArray(data) ? data[0] : data);
     const org = str(fila.org_id), incidente = str(fila.incident_id), id = str(fila.id);
     if (!org || !id) return r('sin_canje', TEXTO_CODIGO_VENCIDO);
+    if (b.accion !== 'blk' && confirmar && ACCIONES_ESCRITURA.includes(String(fila.action_kind))) {
+      return await confirmar(env, fila, b, remitente, rid, ahora);
+    }
     const params = obj(fila.params);
     if (fila.channel !== 'whatsapp' || fila.action_kind !== 'block_ip' || params.etapa !== ETAPA_BOTON[b.accion] || !incidente) {
       return r('tipo_distinto');
@@ -441,21 +457,30 @@ export const ACCION_APROBACION_REVISION = { fix: 'send_fix', rvs: 'mute_repo' } 
 /** «Silenciar repo 1 h» (regla 3 del anexo). */
 export const SILENCIO_REPO_MS = 60 * 60_000;
 
+/** approvals.action_kind de los botones que piden escribir en sistemas del cliente (check de 0018; uat ya estaba en 0005). */
+export const ACCION_APROBACION_ESCRITURA = { iss: 'create_issue', rpr: 'reopen_pr', uat: 'under_attack_on' } as const;
+
 export type FilaBotonRevision = {
-  org_id: string; code_review_id: string; action_kind: 'send_fix' | 'mute_repo'; channel: 'whatsapp'; recipient: string;
-  nonce_hash: string; expires_at: string; params: Record<string, unknown>;
+  org_id: string; code_review_id: string; action_kind: 'send_fix' | 'mute_repo' | 'create_issue' | 'reopen_pr';
+  channel: 'whatsapp'; recipient: string; nonce_hash: string; expires_at: string; params: Record<string, unknown>;
 };
 
-/** Las filas de approvals de los botones de UN aviso de revisión: rvs siempre y fix si llega su nonce. Las mismas
- *  guardas que las del incidente: solo sha256(nonce), recipient = E.164 sin '+' y 10 min de vida. */
+/** Las filas de approvals de los botones de UN aviso de revisión (o del aviso «VanGUARD cerró el PR»): rvs siempre y fix,
+ *  iss y rpr si llega su nonce. Las mismas guardas que las del incidente: solo sha256(nonce), recipient = E.164 sin '+' y
+ *  10 min de vida. iss y rpr escriben en el GitHub del cliente: su fila es la de pedir (params.etapa 'proponer') y su
+ *  canje crea la confirmación ok/no (actions/botones-escritura.ts). */
 export async function filasBotonesRevision(o: { org_id: string; code_review_id: string; recipient: string;
-  nonces: { fix?: string | null; rvs: string }; ahora?: number }): Promise<FilaBotonRevision[]> {
+  nonces: { fix?: string | null; iss?: string | null; rpr?: string | null; rvs: string }; ahora?: number }):
+  Promise<FilaBotonRevision[]> {
   const expires_at = new Date((o.ahora ?? Date.now()) + VIDA_BOTON_MS).toISOString();
-  const xs: ['fix' | 'rvs', string][] = o.nonces.fix ? [['fix', o.nonces.fix], ['rvs', o.nonces.rvs]]
-    : [['rvs', o.nonces.rvs]];
+  const kind = { ...ACCION_APROBACION_REVISION, iss: ACCION_APROBACION_ESCRITURA.iss, rpr: ACCION_APROBACION_ESCRITURA.rpr };
+  const xs = (['rpr', 'fix', 'iss', 'rvs'] as const).flatMap((b) => {
+    const n = o.nonces[b];
+    return n ? [[b, n] as const] : [];
+  });
   return Promise.all(xs.map(async ([b, n]) => ({ org_id: o.org_id, code_review_id: o.code_review_id,
-    action_kind: ACCION_APROBACION_REVISION[b], channel: 'whatsapp' as const, recipient: o.recipient,
-    nonce_hash: await hashNonce(n), expires_at, params: {} })));
+    action_kind: kind[b], channel: 'whatsapp' as const, recipient: o.recipient, nonce_hash: await hashNonce(n), expires_at,
+    params: b === 'iss' || b === 'rpr' ? { etapa: ETAPA_BOTON.blk } : {} })));
 }
 
 /** El hallazgo nuevo más grave de new_findings (a igualdad, el primero: vg_review_findings ya los ordena). */

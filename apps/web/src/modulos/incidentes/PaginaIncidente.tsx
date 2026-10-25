@@ -1,8 +1,8 @@
 // /o/:orgId/incidents/:incidentId (S14 §14.16), el corazón de la demo: ataque → WhatsApp (< 30 s) → aprobación (botón
 // del WhatsApp o código en el sitio) → bloqueo → «Deshacer». Dos columnas 60/40 desde 1280 px; apiladas por debajo.
 import type { ReactNode } from 'react';
-import { useParams, Link } from 'react-router';
-import { ArrowLeft, Bell, BellOff, Eye, MessageCircle, Phone, Send } from 'lucide-react';
+import { useLocation, useParams, Link } from 'react-router';
+import { ArrowLeft, Bell, BellOff, Eye, FlaskConical, MessageCircle, Phone, Send } from 'lucide-react';
 import type { ActionKind, ActionStatus, Channel, IncidentDetail, NotificationPublic } from '@vanguard/contracts';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { Cronometro } from '@/componentes/vg/Cronometro';
@@ -26,7 +26,7 @@ import { BajoAtaque } from './BajoAtaque';
 import { BloquearIp } from './BloquearIp';
 import { finDe, hitosDe, restoDe, t0De } from './hitos';
 import { estadoInc } from './PaginaIncidentes';
-import { BotonSimularWhatsApp } from './Simulacion';
+import { BotonSimularWhatsApp, type EstadoSimulacion } from './Simulacion';
 
 // Un canal, tipo o estado fuera de contrato (api() en producción no corta el cuerpo), «__proto__» incluido, sale con icono
 // genérico o su texto crudo y neutro (L3), no como TypeError: siempre deMapa, nunca `MAPA[k] ?? respaldo`.
@@ -157,6 +157,8 @@ function Esqueleto({ org }: { org: string }) {
 function Detalle({ incidentId }: { incidentId: string }) {
   const org = useOrg();
   const q = useIncidente(org.id, incidentId);
+  // «Simular ataque» llega aquí con lo que hizo cada canal (E57): se dice arriba, solo en este incidente.
+  const simulacion = (useLocation().state as Partial<EstadoSimulacion> | null)?.simulacion;
   if (!esId(incidentId) || (q.isError && esApiError(q.error) && q.error.status === 404)) return <NoEncontrada texto="Este incidente no existe o no es de esta organización" />;
   if (q.isError && !q.data) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
   const i = q.data;
@@ -174,7 +176,10 @@ function Detalle({ incidentId }: { incidentId: string }) {
               <ChapaSeveridad severity={i.severity} grande />
               <span className="font-mono text-[13px] text-muted-foreground">{sinBidi(i.code)}</span>
               <Etiqueta texto={est.texto} rol={est.rol} />
+              {i.details?.simulated === true ? <Etiqueta texto="Simulado" rol="info" icono={FlaskConical} /> : null}
             </div>
+            {simulacion?.id === i.id && typeof simulacion.canales === 'string'
+              ? <p role="status" className="w-fit rounded-lg border bg-info-relleno px-3 py-2 text-sm">Ataque simulado · {simulacion.canales}</p> : null}
             <h2 className="text-[22px] font-semibold wrap-anywhere">{sinBidi(i.title)}</h2>
             {/* dir="ltr": un <bdi> sin dir vale dir=auto y una primera letra árabe o hebrea reordenaría la ruta o la IP. */}
             {ip ? <p className="font-mono text-[15px]"><bdi dir="ltr">{sinBidi(ip)}</bdi></p>

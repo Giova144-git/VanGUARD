@@ -740,3 +740,22 @@ describe('evolución (E51 y E52)', () => {
     expect(conFoto(await delta(DEMO, fx.scanDone.id)).scan_run_id).toBe(fx.scanDone.id);
   });
 });
+
+// E57 «Simular ataque» (llamada-ataque.md F1), al final: deja un incidente simulado en la demo.
+describe('E57 · simular ataque', () => {
+  it('fuera de la demo o con el anónimo de «Ver demo»: 403', async () => {
+    expect(await fallo(`/api/orgs/${nueva}/incidents/simulate`, 'POST', { kind: 'path_scan' })).toMatchObject({ status: 403 });
+    sesion.tipo = 'anonima';
+    expect(await fallo(`/api/orgs/${DEMO}/incidents/simulate`, 'POST', { kind: 'path_scan' })).toMatchObject({ status: 403 });
+  });
+
+  it('en la demo crea un incidente marcado como simulado; el segundo dentro de 2 min da 429', async () => {
+    const r = await pedir<{ incident_id: string; code: string; whatsapp: string; voice: string }>(`/api/orgs/${DEMO}/incidents/simulate`, 'POST', { kind: 'ip_flood' });
+    expect(r).toMatchObject({ whatsapp: 'queued' });
+    expect(['queued', 'skipped']).toContain(r.voice);
+    const i = await pedir<IncidentDetail>(`/api/orgs/${DEMO}/incidents/${r.incident_id}`);
+    expect(i).toMatchObject({ code: r.code, rule_ids: ['CF_IP_FLOOD'], resource: 'ip:203.0.113.7' });
+    expect(i.details).toMatchObject({ simulated: true });
+    expect(await fallo(`/api/orgs/${DEMO}/incidents/simulate`, 'POST', {})).toMatchObject({ status: 429 });
+  });
+});

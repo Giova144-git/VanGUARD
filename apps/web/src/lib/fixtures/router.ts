@@ -5,7 +5,7 @@ import {
   type AuditDelta, type CodeReview, type CodeReviewConfig, type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type DeltaLista, type EstadoModulo, type Evolution, type PerfRunExt,
   type MergeGateConfig, type MergeGateSaved, type Overview, type RespuestaEscritura,
   type Finding, type Incident, type IncidentDetail, type MatrizHallazgos, type Me, type Module, type Org, type PermCheck, type ScanKind,
-  type ScanRun, type TimelineItem, type WikiRun, type ZipFinding,
+  type ScanRun, type TimelineItem, type WikiRun, type ZipFinding, type SimulateAttackKind, type SimulateAttackOut,
   type UnderAttackActivo, type UnderAttackMotivo, type UnderAttackOffer, type UnderAttackProposal,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -726,15 +726,23 @@ function ejecutarBajoAtaque(org: string, incident_id: string, target: string, ap
   return accion;
 }
 
-// Botones que solo existen en modo fixtures (S14 §14.19): ensayar el tramo de incidentes del guion sin BACK.
-export function simularAtaque(org: string): string {
+// Ensayar el tramo de incidentes del guion sin BACK (S14 §14.19): lo crea E57 «Simular ataque» (llamada-ataque.md F1).
+const SIMULADO: Record<SimulateAttackKind, { rule_ids: string[]; title: string }> = {
+  path_scan: { rule_ids: ['CF_UA_TOOL', 'CF_PATH_SCAN'], title: 'Escaneo con herramienta y /admin abierto desde 203.0.x.x' },
+  ip_flood: { rule_ids: ['CF_IP_FLOOD'], title: 'Inundación de peticiones desde 203.0.x.x' },
+  attack_tool: { rule_ids: ['CF_UA_TOOL'], title: 'Herramienta de ataque contra tu sitio desde 203.0.x.x' },
+};
+const SIMULADO_KIND = z.enum(['path_scan', 'ip_flood', 'attack_tool']);
+export function simularAtaque(org: string, kind: SimulateAttackKind = 'path_scan'): string {
   const inicio = Date.now();
   const id = crypto.randomUUID();
   const code = Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, 'X');
+  const t = SIMULADO[kind];
   const i: IncidentDetail = {
-    id, code, module: 'cloudflare', rule_ids: ['CF_UA_TOOL', 'CF_PATH_SCAN'], severity: 'high',
-    title: 'Escaneo con herramienta y /admin abierto desde 203.0.x.x', resource: 'ip:203.0.113.7', status: 'open', event_count: 0,
-    details: { ua: 'sqlmap/1.8#stable (https://sqlmap.org)', paths: ['/admin', '/.env', '/wp-login.php'] }, started_at: iso(inicio),
+    id, code, module: 'cloudflare', rule_ids: t.rule_ids, severity: 'high',
+    title: t.title, resource: 'ip:203.0.113.7', status: 'open', event_count: 0,
+    details: { ua: 'sqlmap/1.8#stable (https://sqlmap.org)', paths: ['/admin', '/.env', '/wp-login.php'], simulated: true,
+      host: 'vanguard-demo-victima.pages.dev' }, started_at: iso(inicio),
     last_event_at: iso(inicio), notified_at: null, acked_at: null, acked_via: null, muted_until: null, mitigated_at: null, resolved_at: null,
     suspected_injection: false, notifications: [], actions: [],
     timeline: [{ t: iso(inicio), ms: 0, kind: 'attack_start', label: 'Primera petición del atacante' }],
@@ -742,6 +750,17 @@ export function simularAtaque(org: string): string {
   incidentesDe(org).unshift(i);
   simulados.set(id, { inicio });
   return id;
+}
+// E57: solo en la org de demo y con permiso de escritura; una simulación cada 2 min por org.
+function simularFalso(org: string, body: unknown): SimulateAttackOut {
+  if (!esDemo(org) || tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Solo los administradores de la org de demo pueden simular un ataque');
+  const reciente = incidentesDe(org).some((i) => simulados.has(i.id) && Date.now() - simulados.get(i.id)!.inicio < 120_000);
+  if (reciente) falla(429, 'rate_limited', 'Espera 2 minutos entre simulaciones');
+  const kind = SIMULADO_KIND.safeParse((body as { kind?: unknown } | null)?.kind ?? 'path_scan');
+  if (!kind.success) falla(400, 'validation', 'Tipo de ataque desconocido');
+  const id = simularAtaque(org, kind.data!);
+  const voz = contactosDe(org).some((c) => c.voice && c.verified_at);
+  return { incident_id: id, code: incidente(org, id).code, whatsapp: 'queued', voice: voz ? 'queued' : 'skipped' };
 }
 export function simularAprobacionWhatsApp(org: string, incidentId: string) {
   const i = incidente(org, incidentId);
@@ -1265,6 +1284,7 @@ const rutas: [string, RegExp, H][] = [
   ['PATCH', r(`${ORG}\\/findings\\/([^/]+)`),     (m, b) => patchHallazgo(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/findings\\/([^/]+)\\/fix-prompt`), (m) => promptFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/incidents`),               (m, _b, q) => listarIncidentes(m[1]!, q)],
+  ['POST', r(`${ORG}\\/incidents\\/simulate`),    (m, b) => simularFalso(m[1]!, b)],
   ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     (m) => structuredClone(incidente(m[1]!, m[2]!))],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/ack`),  (m) => ackFalso(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/mute`), (m) => muteFalso(m[1]!, m[2]!)],

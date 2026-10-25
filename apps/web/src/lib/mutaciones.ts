@@ -4,6 +4,7 @@ import {
   AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, McpTokenCreated, type McpTokenCreate, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
   MergeGateConfig, MergeGateSaved, type MergeGateAction, type MergeGatePut,
   UnderAttackProposal, type UnderAttackPropose,
+  SimulateAttackOut, type SimulateAttackIn,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -180,7 +181,8 @@ export function useGuardarRevision(org: string) {
 // caché de consultas (una por QueryClient) para que todas las filas lo vean a la vez; queryFn no pide nada a nadie, solo
 // devuelve lo que ya hay (así una invalidación por prefijo no la borra).
 // 'E54-republish': «Publicar de nuevo» es P1; un BACK con E54 en P0 responde 409 {reason: 'p1'} y el botón se retira.
-export type RutaNueva = 'E53' | 'E54' | 'E54-republish';
+// 'E57': «Simular ataque»; además del 404, un 403 (no es admin u otra org, decide el servidor) también lo retira.
+export type RutaNueva = 'E53' | 'E54' | 'E54-republish' | 'E57';
 const claveAusente = (org: string, ruta: RutaNueva) => ['org', org, 'ruta-ausente', ruta];
 export function useRutaAusente(org: string, ruta: RutaNueva): boolean {
   const qc = useQueryClient();
@@ -188,7 +190,7 @@ export function useRutaAusente(org: string, ruta: RutaNueva): boolean {
   return useQuery({ queryKey: clave, queryFn: () => qc.getQueryData<boolean>(clave) ?? false, initialData: false, staleTime: Infinity, gcTime: Infinity }).data;
 }
 const marcarSi404 = (qc: QueryClient, org: string, ruta: RutaNueva) => (e: unknown) => {
-  if (esApiError(e) && e.status === 404) qc.setQueryData(claveAusente(org, ruta), true);
+  if (esApiError(e) && (e.status === 404 || (ruta === 'E57' && e.status === 403))) qc.setQueryData(claveAusente(org, ruta), true);
   if (ruta === 'E54' && esApiError(e) && e.status === 409 && e.details?.reason === 'p1') qc.setQueryData(claveAusente(org, 'E54-republish'), true);
 };
 
@@ -282,5 +284,17 @@ export function useGenerarWiki(org: string) {
   return useMutation({
     mutationFn: (body: WikiRunCreate) => api(`/api/orgs/${org}/wiki/runs`, { method: 'POST', body, esquema: WikiRunAccepted }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['org', org, 'wiki', 'runs'] }),
+  });
+}
+
+// E57 «Simular ataque» (asignaciones/llamada-ataque.md F1): un incidente crítico de prueba por el motor de siempre que
+// avisa por WhatsApp y, si el contacto tiene la llamada activada, por la llamada de Guardia. Bandera por 404/403.
+export function useSimularAtaque(org: string) {
+  const qc = useQueryClient();
+  const invalidar = useInvalidar(org);
+  return useMutation({
+    mutationFn: (body: SimulateAttackIn) => api(`/api/orgs/${org}/incidents/simulate`, { method: 'POST', body, esquema: SimulateAttackOut }),
+    onError: marcarSi404(qc, org, 'E57'),
+    onSettled: () => invalidar('incidents', 'overview'),
   });
 }

@@ -15,7 +15,7 @@ import { entradaNav } from '@/lib/nav';
 import { SEVERIDAD, deMapa, type Rol } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { sinBidi } from '@/lib/bidi';
-import { BotonSimularAtaque } from './Simulacion';
+import { SimularAtaque } from './Simulacion';
 
 export const ESTADO_INC: Record<IncidentStatus, { texto: string; rol: Rol }> = {
   open: { texto: 'Abierto', rol: 'mal' }, ack: { texto: 'Lo están viendo', rol: 'aviso' },
@@ -60,7 +60,8 @@ export default function PaginaIncidentes() {
 
   return (
     <div className="flex flex-col gap-6">
-      <BarraModulo titulo={e.nombre} descripcion={e.descripcion} extra={<BotonSimularAtaque org={org.id} />} />
+      <BarraModulo titulo={e.nombre} descripcion={e.descripcion} />
+      <SimularAtaque org={org} />
       <div className="inline-flex w-fit rounded-lg bg-muted p-1" role="group" aria-label="Qué incidentes ver">
         {(['open', 'all'] as const).map((v) => (
           <button key={v} type="button" aria-pressed={estado === v} onClick={() => cambiar(v)}

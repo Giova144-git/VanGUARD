@@ -149,6 +149,19 @@ function conectarFalso(org: string, body: unknown): ConnectionCreated {
       checks = CHECKS.supabase;
       break;
     case 'cloudflare':
+      // Modo sitio (cloudflare-por-url.md): sin zona, token de cuenta opcional (con él, config_read) y nunca blindaje.
+      if (b.mode === 'url') {
+        if (b.action_token) falla(400, 'invalid_body', 'action_token solo en modo zona', { field_errors: { action_token: ['action_token solo en modo zona'] } });
+        if (b.read_token) guardaFalsa(b.read_token);
+        const host = new URL(String(b.url)).hostname;
+        const kind = host.endsWith('.pages.dev') ? 'pages' : host.endsWith('.workers.dev') ? 'workers' : 'custom';
+        connection = { ...base, provider: 'cloudflare', label: `Cloudflare · ${host}`, last4: b.read_token ? b.read_token.slice(-4) : null,
+          scopes: b.read_token ? ['pages_read', 'workers_scripts_read'] : [],
+          meta: { mode: 'url', site_url: `https://${host}`, site_kind: kind, project: kind === 'custom' ? null : host.split('.')[0]!,
+            account_id: null, config_read: !!b.read_token } };
+        checks = b.read_token ? CHECKS.cloudflare : [];
+        break;
+      }
       guardaFalsa(b.read_token ?? ''); if (b.action_token) guardaFalsa(b.action_token);
       connection = { ...base, provider: 'cloudflare', label: 'Cloudflare · officialvanguard.com', last4: (b.read_token ?? '').slice(-4),
         scopes: ['zone_read', 'analytics_read'], meta: { zone_id: b.zone_id, zone_name: 'officialvanguard.com', plan: 'free' } };

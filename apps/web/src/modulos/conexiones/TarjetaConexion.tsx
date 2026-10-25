@@ -19,13 +19,21 @@ import { lecturasGithub, nombreRepo, reposGithub } from '@/lib/repos';
 import { useProbarConexion, useQuitarConexion } from '@/lib/mutaciones';
 import { ActivarBlindaje } from './ActivarBlindaje';
 import { FRASE_ERROR, nombrePermiso } from '@/lib/permisos';
-import type { Rol } from '@/lib/severidad';
+import { deMapa, type Rol } from '@/lib/severidad';
 
 const HOSTS_REVOCAR = new Set(['supabase.com', 'dash.cloudflare.com', 'github.com']);
-const META_VISIBLE = ['project_ref', 'project_name', 'zone_name', 'plan', 'repo_full_name', 'default_branch', 'hostname'];
+const META_VISIBLE = ['project_ref', 'project_name', 'zone_name', 'plan', 'repo_full_name', 'default_branch', 'hostname', 'site_url', 'project'];
 const ROTULO_META: Record<string, string> = {
   project_ref: 'Proyecto', project_name: 'Nombre', zone_name: 'Zona', plan: 'Plan', repo_full_name: 'Repo', default_branch: 'Rama', hostname: 'Host',
+  site_url: 'Sitio', project: 'Proyecto',
 };
+// Cloudflare en modo sitio (cloudflare-por-url.md): meta.mode 'url', sin zona. site_kind fuera de contrato → texto genérico.
+const esSitioCf = (c: ConnectionPublic) => c.provider === 'cloudflare' && c.meta.mode === 'url';
+const TIPO_SITIO: Record<string, string> = { pages: 'Sitio de Pages', workers: 'Sitio de Workers', custom: 'Sitio con dominio propio' };
+// Un dominio propio que resultó ser de un proyecto de Pages o de un Worker trae meta.project_kind.
+const DOMINIO_DE: Record<string, string> = { pages: 'Dominio propio de Pages', workers: 'Dominio propio de Workers' };
+const tituloSitio = (c: ConnectionPublic) => (c.meta.site_kind === 'custom' ? deMapa(DOMINIO_DE, c.meta.project_kind, '') : '')
+  || deMapa(TIPO_SITIO, c.meta.site_kind, 'Sitio de Pages/Workers');
 
 // `last_error` llega como código (unauthorized, excess_scope, http_NNN…): aquí va la frase y qué hacer.
 function fraseError(c: ConnectionPublic): string {
@@ -188,8 +196,14 @@ export function TarjetaConexion({ proveedor, conexiones, descripcion, icono }: {
             : <span className="text-[12.5px] text-texto-3">{SOLO_LECTURA}</span>}
         </div>
       </> : lectura ? <>
-        <LineaConexion c={lectura} titulo={proveedor === 'cloudflare' ? 'Lectura' : undefined} alQuitar={setQuitada} />
-        {proveedor === 'cloudflare' ? (accion
+        <LineaConexion c={lectura} titulo={esSitioCf(lectura) ? tituloSitio(lectura) : proveedor === 'cloudflare' ? 'Lectura' : undefined} alQuitar={setQuitada} />
+        {esSitioCf(lectura) ? <>
+          <p className="text-sm text-muted-foreground">
+            {lectura.meta.config_read === true ? 'Revisamos el sitio por HTTP y la configuración del proyecto.'
+              : 'Revisamos el sitio por HTTP. Con un token de cuenta (Pages · Read y Workers Scripts · Read) revisaríamos también la configuración del proyecto.'}
+          </p>
+          <p className="text-sm text-muted-foreground">Bloquear IPs y el modo bajo ataque necesitan una zona propia de Cloudflare (conexión en modo «Zona»).</p>
+        </> : proveedor === 'cloudflare' ? (accion
           ? <LineaConexion c={accion} titulo="Modo blindaje (acciones)" alQuitar={setQuitada} />
           : <div className="flex flex-col gap-3 rounded-lg border border-dashed px-4 py-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">

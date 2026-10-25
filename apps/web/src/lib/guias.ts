@@ -117,5 +117,14 @@ export const GUIAS: Record<IdNav, Guia> = {
   ] },
 };
 
+// Asistente de Cloudflare en modo «Sitio» (asignaciones/cloudflare-por-url.md): un sitio de Pages o Workers sin zona.
+export const GUIA_CLOUDFLARE_SITIO: { titulo: string; pasos: PasoConexion[] } = { titulo: 'Conecta tu sitio de Cloudflare', pasos: [
+  { texto: 'Copia la URL de tu sitio: la de Pages (https://mi-app.pages.dev), la de tu Worker (https://mi-worker.mi-cuenta.workers.dev) o tu dominio propio.' },
+  { texto: 'Sin token revisamos el sitio por HTTP: cabeceras de seguridad (HSTS, CSP, marcos), archivos expuestos como /.env o /.git y que http redirija a https.' },
+  { texto: 'Opcional: un token de cuenta con Account · Cloudflare Pages · Read y Account · Workers Scripts · Read. Con él revisamos también la configuración del proyecto, como variables en texto plano y vistas previas públicas.',
+    enlace: { href: 'https://dash.cloudflare.com/profile/api-tokens', texto: 'Abrir API Tokens de Cloudflare' } },
+  { texto: 'Bloquear IPs y el modo bajo ataque necesitan una zona propia: para eso, elige «Zona».' },
+] };
+
 // Texto para unirse al sandbox de Kapso (S12). Lo rellena el ORQUESTADOR con los datos de la cuenta de Gabriel.
 export const SANDBOX_KAPSO: string | null = null;

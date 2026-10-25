@@ -760,6 +760,17 @@ describe('E57 · simular ataque', () => {
   });
 });
 
+describe('E8 · Cloudflare en modo sitio (cloudflare-por-url.md)', () => {
+  it('sin token: activa, meta en modo url y sin config; con token de acciones: 400', async () => {
+    const r = await pedir<{ connection: ConnectionPublic; checks: unknown[] }>(`/api/orgs/${nueva}/connections`, 'POST',
+      { provider: 'cloudflare', mode: 'url', url: 'https://mi-app.pages.dev' });
+    expect(r.connection).toMatchObject({ provider: 'cloudflare', label: 'Cloudflare · mi-app.pages.dev', last4: null,
+      meta: { mode: 'url', site_url: 'https://mi-app.pages.dev', site_kind: 'pages', project: 'mi-app', config_read: false } });
+    expect(await fallo(`/api/orgs/${nueva}/connections`, 'POST', { provider: 'cloudflare', mode: 'url', url: 'https://x.workers.dev', action_token: 'a'.repeat(40) }))
+      .toMatchObject({ status: 400 });
+  });
+});
+
 describe('E57 · tipo por defecto', () => {
   it('sin kind simula la inundación (la única crítica con el motor real); pasados 2 min se puede repetir', async () => {
     await vi.advanceTimersByTimeAsync(121_000);

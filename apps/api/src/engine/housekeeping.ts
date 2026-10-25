@@ -1,6 +1,6 @@
 import { ORDEN_REGLAS_EDGE, RESOLVER_SIN_EVENTOS_MS } from '@vanguard/core';
 import { deshacerBloqueos, PERMANENTES } from '../actions/block-ip.ts';
-import { deshacerBajoAtaque, retirarHuerfanaBajoAtaque } from '../actions/under-attack.ts';
+import { deshacerBajoAtaque, MAX_BARRIDO, retirarHuerfanaBajoAtaque } from '../actions/under-attack.ts';
 import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { log } from '../lib/log.ts';
@@ -18,12 +18,15 @@ import { SIN_AVANCE_MS } from '../wiki/corridas.ts';
 // reintentarla). Uno pasajero (red, 5xx, 429) la deja executed con previous.intentos y previous.reintento_en (espera de
 // 1, 2, 4… min): mientras espera se salta, así unas filas atascadas no tapan las de otras orgs; al MAX_REINTENTOS pasa a
 // failed. Solo con VG_ENV=production (cron sin petición, S15 15.3): en local y previews no se toca Cloudflare.
-// Modo bajo ataque (modo-bajo-ataque.md §8): la misma caducidad lee también under_attack_on y la retira con
-// deshacerBajoAtaque (DELETE de la regla de configuración); de las ≤ 5 filas por minuto, ≤ 2 son de bajo ataque (con la
-// caducidad dentro de la regla no corre prisa). Después, solo si la caducidad de este minuto gastó ≤ 15 subpeticiones
-// (una función de deshacer que lanza cuenta su tope: lo gastado en Cloudflare no vuelve en su resultado),
-// una propuesta huérfana (proposed de bajo ataque de > 2 min: el Worker murió entre el POST y el UPDATE) se reconcilia
-// por su ref y queda failed (retirarHuerfanaBajoAtaque, ≤ 6).
+// Modo bajo ataque (modo-bajo-ataque.md §8): la misma caducidad lee también under_attack_on (con su target) y la retira
+// con deshacerBajoAtaque (DELETE de la regla de configuración y barrido de las demás reglas de VanGUARD de ese host, ≤
+// MAX_BARRIDO); de las ≤ 5 filas por minuto, ≤ 2 son de bajo ataque (con la caducidad dentro de la regla no corre prisa).
+// Después, solo si la caducidad de este minuto gastó ≤ 15 subpeticiones (una función de deshacer que lanza cuenta su
+// tope: lo gastado en Cloudflare no vuelve en su resultado), se trata UNA proposed de bajo ataque de > 2 min
+// (retirarHuerfanaBajoAtaque, ≤ 6): la huérfana (el Worker murió entre el POST y el UPDATE) se busca por su ref, se borra
+// y queda failed; la sin confirmar (previous.reconciliar: Cloudflare no respondió claro a E21) se busca igual y pasa a
+// executed si está o a failed si no. Con Cloudflare caído, espera 1, 2, 4… min (previous.reintento_en) sin tapar a las
+// demás.
 // SB_DB_DOWN se cierra en su monitor (2 lecturas sanas seguidas), no aquí.
 // Vigilante (0011, vg_vigilar_corridas): una corrida cuyo mensaje de vg-jobs se perdió (dev-node --watch reiniciado con
 // la cola en memoria, un mensaje que no llegó ni a la DLQ) se quedaría queued/running para siempre. Una sola RPC acotada
@@ -34,9 +37,10 @@ import { SIN_AVANCE_MS } from '../wiki/corridas.ts';
 // misma sentencia que escribe: un paso que avanza a la vez gana. Corre en todos los entornos (solo toca la base). Mientras
 // la 0011 no esté aplicada (PGRST202), respaldo en un solo UPDATE acotado (orden por id + limit), una tabla por minuto
 // (wiki en los pares, auditorías en los impares) para no pasar de 2 subpeticiones; sin arreglar steps.
-// Presupuesto del minuto (por subpeticiones contadas, no por filas): incidentes ≤ 2 + vigilante ≤ 2 + caducidad ≤ 22
-// (1 lectura + por cada función de deshacer 2 por conexión, 1 por regla y ≤ 2 escrituras + 1 por fila no retirada; 5
-// filas en 5 conexiones) + huérfana ≤ 6 solo si la caducidad gastó ≤ 15 → peor caso ≤ 26 (tope del equipo: 40).
+// Presupuesto del minuto (por subpeticiones contadas, no por filas): incidentes ≤ 2 + vigilante ≤ 2 + caducidad ≤ 28
+// (1 lectura + por cada función de deshacer 2 por conexión, 1 por regla y ≤ 2 escrituras, + en bajo ataque 1 GET por
+// conexión y ≤ MAX_BARRIDO, + 1 por fila no retirada; 5 filas en 5 conexiones) + huérfana ≤ 6 solo si la caducidad
+// gastó ≤ 15 → peor caso ≤ 32 (tope del equipo: 40).
 
 export const LIMITE_CIERRE = 200;
 export const LIMITE_CADUCIDAD = 5;           // ≤ 5 reglas por minuto (§08.8), de los dos tipos
@@ -54,12 +58,15 @@ const SIN_RPC = new Set(['PGRST202', '42883']);
 const esperaMs = (intentos: number) => Math.min(2 ** (intentos - 1), 60) * 60_000;
 type Obj = Record<string, unknown>;
 const obj = (x: unknown): Obj => (x && typeof x === 'object' && !Array.isArray(x) ? x as Obj : {});
-type Fila = { id: string; org_id: string; kind?: string; provider_ref: string | null; previous: unknown };
-// Lo más que gasta una función de deshacer con estas filas: 2 por conexión (el sobre), 1 por regla (2 si va por su ref,
-// sin provider_ref) y ≤ 2 escrituras. Solo se usa cuando lanza, para no contar de menos.
-const topeDeshacer = (xs: readonly Fila[]) => {
+type Fila = { id: string; org_id: string; kind?: string; target?: string | null; provider_ref: string | null; previous: unknown };
+// Lo más que gasta una función de deshacer con estas filas: 2 por conexión (el sobre), 1 por regla, 1 más por fila que
+// busca (sin provider_ref, o de bajo ataque con target: el GET del barrido), MAX_BARRIDO si alguna barre y ≤ 2
+// escrituras. Solo se usa cuando lanza, para no contar de menos.
+const topeDeshacer = (xs: readonly Fila[], modo: boolean) => {
   const conexiones = new Set(xs.map((f) => `${f.org_id}|${String(obj(f.previous).connection_id)}`)).size;
-  return 2 * conexiones + xs.length + xs.filter((f) => !f.provider_ref).length + 2;
+  const barre = (f: Fila) => modo && !!f.target;
+  return 2 * conexiones + xs.length + xs.filter((f) => !f.provider_ref || barre(f)).length
+    + (xs.some(barre) ? MAX_BARRIDO : 0) + 2;
 };
 
 export type ResultadoHousekeeping = {
@@ -170,7 +177,7 @@ async function caducar(env: CloudflareBindings, now: Date, r: ResultadoHousekeep
   try {
     const admin = db(env);
     const t = now.getTime();
-    const { data, error } = await admin.from('actions').select('id, org_id, kind, provider_ref, previous')
+    const { data, error } = await admin.from('actions').select('id, org_id, kind, target, provider_ref, previous')
       .eq('status', 'executed').in('kind', ['block_ip', 'under_attack_on']).lt('expires_at', now.toISOString())
       .order('expires_at').limit(CANDIDATOS_CADUCIDAD);
     r.subpeticiones++;
@@ -198,7 +205,7 @@ async function caducar(env: CloudflareBindings, now: Date, r: ResultadoHousekeep
         r.subpeticiones += x.subpeticiones;
         return x;
       } catch (e) {
-        r.subpeticiones += topeDeshacer(xs);
+        r.subpeticiones += topeDeshacer(xs, xs.some(modo));
         throw e;
       }
     };

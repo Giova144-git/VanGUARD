@@ -5,7 +5,9 @@ import {
   COLUMNAS_INCIDENTE_BLOQUEO, leerIncidenteBloqueo, MAX_INTENTOS, proponerBloqueo, type SinEntrega,
 } from '../actions/approvals.ts';
 import { deshacerBloqueos, executeBlock, MENSAJE_DESHACER, type AprobacionCanjeada } from '../actions/block-ip.ts';
-import { deshacerBajoAtaque, executeUnderAttack, MENSAJE_DESHACER_BAJO_ATAQUE } from '../actions/under-attack.ts';
+import {
+  deshacerBajoAtaque, executeUnderAttack, MENSAJE_DESHACER_BAJO_ATAQUE, MENSAJE_SIN_CONFIRMAR,
+} from '../actions/under-attack.ts';
 import type { AppEnv } from '../env.ts';
 import { cuerpo } from '../lib/body.ts';
 import { db } from '../lib/db.ts';
@@ -161,7 +163,7 @@ actions.post('/orgs/:org/actions/:actionId/undo', requireAdmin, requireProdHost,
   const id = idDe(c.req.param('actionId'), 'Acción no encontrada');
   const orgId = c.get('orgId');
   const rid = c.get('rid');
-  const { data, error } = await db(c.env).from('actions').select('id, org_id, kind, status, provider_ref, previous')
+  const { data, error } = await db(c.env).from('actions').select('id, org_id, kind, target, status, provider_ref, previous')
     .eq('id', id).eq('org_id', orgId).maybeSingle();
   if (error) {
     log('error', 'accion.lectura_error', { rid, code: error.code ?? null });
@@ -213,7 +215,10 @@ async function confirmarBajoAtaque(c: Context<AppEnv>, id: string, code: string,
   if (x.tipo === 'rechazado') {
     return c.json(RespuestaEscritura.parse({ ok: false, error: x.error, ...(x.action_id ? { action_id: x.action_id } : {}) }));
   }
-  if (x.tipo === 'caido') throw new ApiError('provider_unavailable', 'Cloudflare no respondió. Vuelve a proponerlo.');
+  // comprobando: la regla pudo quedar puesta; la fila sigue en curso y housekeeping la confirma o la descarta.
+  if (x.tipo === 'caido') {
+    throw new ApiError('provider_unavailable', x.comprobando ? MENSAJE_SIN_CONFIRMAR : 'Cloudflare no respondió. Vuelve a proponerlo.');
+  }
   if (x.tipo === 'en_curso') {
     throw new ApiError('conflict', 'El modo bajo ataque se está activando ahora mismo', { reason: 'in_progress', action_id: x.action_id });
   }
@@ -223,7 +228,9 @@ async function confirmarBajoAtaque(c: Context<AppEnv>, id: string, code: string,
 
 // E22 · under_attack_on: DELETE de la regla de configuración (deshacerBajoAtaque). Admite la failed que la caducidad no
 // pudo retirar (provider_ref y previous), como el bloqueo, y la retirada fallida de una huérfana (sin provider_ref, con
-// previous.deshacer_error: E55 la enseña con «Reintentar»), que se busca por previous.ref. 5–6 subpeticiones.
+// previous.deshacer_error: E55 la enseña con «Reintentar»), que se busca por previous.ref. Sobre la executed barre además
+// las demás reglas de VanGUARD de su host (target), ≤ MAX_BARRIDO; una failed no barre (con otra executed viva en el
+// host borraría la de esa). ≤ 13 subpeticiones.
 async function deshacerModoBajoAtaque(c: Context<AppEnv>, id: string, accion: Fila) {
   const rid = c.get('rid');
   if (accion.status === 'undone') throw new ApiError('conflict', 'El modo bajo ataque ya estaba desactivado', { reason: 'undone' });
@@ -234,7 +241,7 @@ async function deshacerModoBajoAtaque(c: Context<AppEnv>, id: string, accion: Fi
     throw new ApiError('conflict', 'No hay ningún modo bajo ataque activo que retirar', { reason: 'not_executed' });
   }
   const { resultados } = await deshacerBajoAtaque(c.env, [{ id, org_id: c.get('orgId'), provider_ref: str(accion.provider_ref),
-    previous: accion.previous }], { rid });
+    previous: accion.previous, target: str(accion.target), barrer: accion.status === 'executed' }], { rid });
   const r = resultados.get(id) ?? 'invalido';
   log('info', 'accion.bajo_ataque_deshacer', { rid, user: c.get('userId'), action_id: id, resultado: r });
   if (r === 'deshecho') {

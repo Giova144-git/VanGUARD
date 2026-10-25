@@ -20,7 +20,7 @@ export const incidents = new Hono<AppEnv>();
 
 export const COLUMNAS_INCIDENTE = 'id, code, rule_ids, severity, title, resource, status, event_count, details, started_at, '
   + 'last_event_at, notified_at, acked_at, acked_via, muted_until, mitigated_at, resolved_at, suspected_injection';
-const COLUMNAS_NOTIFICACION = 'id, channel, recipient_masked, template, status, error, created_at, sent_at, delivered_at, read_at';
+const COLUMNAS_NOTIFICACION = 'id, channel, recipient_masked, template, status, error, preview, created_at, sent_at, delivered_at, read_at';
 const COLUMNAS_ACCION = 'id, kind, target, status, created_at, undone_at, expires_at, approval_id';
 const VENTANA_LISTA_MS = 24 * 3600_000;
 const MAX_LISTA = 100;

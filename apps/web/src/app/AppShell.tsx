@@ -24,6 +24,7 @@ import { deMapa } from '@/lib/severidad';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { sinBidi } from '@/lib/bidi';
+import { BotonSalirDemo, EtiquetaSandbox, useAvisoSandbox } from './DemoSandbox';
 import { useOrg } from './guardas';
 import { Marca } from './Marca';
 
@@ -74,7 +75,7 @@ function SelectorOrg({ compacto }: { compacto: boolean }) {
           className={cn('flex h-12 w-full items-center gap-2 rounded-lg border bg-card px-3 text-left text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring', compacto && 'justify-center px-0')}>
           {compacto ? <span className="text-[15px] font-semibold">{sinBidi(org.name).slice(0, 1).toUpperCase()}</span> : <>
             <span className="flex-1 truncate">{sinBidi(org.name)}</span>
-            {org.is_demo ? <Etiqueta texto="Demo" rol="info" /> : null}
+            {org.sandbox ? <Etiqueta texto="Copia" rol="info" /> : org.is_demo ? <Etiqueta texto="Demo" rol="info" /> : null}
             <ChevronsUpDown className="size-4 text-texto-3" />
           </>}
         </button>
@@ -84,7 +85,7 @@ function SelectorOrg({ compacto }: { compacto: boolean }) {
         {org.me.orgs.map((o) => (
           <DropdownMenuItem key={o.id} onSelect={() => navegar(`/o/${o.id}`)}>
             <span className="flex-1 truncate">{sinBidi(o.name)}</span>
-            {o.is_demo ? <Etiqueta texto="Demo" rol="info" /> : null}
+            {o.sandbox ? <Etiqueta texto="Copia" rol="info" /> : o.is_demo ? <Etiqueta texto="Demo" rol="info" /> : null}
             {o.id === org.id ? <Check className="size-4 text-foreground" /> : null}
           </DropdownMenuItem>
         ))}
@@ -133,9 +134,12 @@ function Riel({ compacto, overview, alNavegar }: { compacto: boolean; overview: 
           <span className="flex-1 truncate text-sm">{org.me.user.email ? <bdi dir="ltr">{sinBidi(org.me.user.email)}</bdi> : 'Invitado · demo'}</span>
           <Etiqueta texto={deMapa(ROL_TEXTO, org.role, '—')} rol={org.role === 'owner' || org.role === 'admin' ? 'info' : 'neutra'} />
         </div>}
-        <Button variant="fantasma" size="fila" onClick={salir} className={cn('justify-start text-muted-foreground', compacto && 'size-11 justify-center px-0')} aria-label="Cerrar sesión">
-          <LogOut />{compacto ? null : 'Cerrar sesión'}
-        </Button>
+        {/* En la copia, «Salir de la demo» la borra ya. El invitado no tiene más sesión que esa: no ve «Cerrar sesión». */}
+        {org.sandbox ? <BotonSalirDemo org={org} compacto={compacto} className="justify-start" /> : null}
+        {org.sandbox && org.me.user.is_anonymous ? null
+          : <Button variant="fantasma" size="fila" onClick={salir} className={cn('justify-start text-muted-foreground', compacto && 'size-11 justify-center px-0')} aria-label="Cerrar sesión">
+              <LogOut />{compacto ? null : 'Cerrar sesión'}
+            </Button>}
       </div>
     </div>
   );
@@ -230,8 +234,9 @@ export default function AppShell() {
   }, [paleta, irA]);
 
   const usoIA = useUsoIA(org.id, org.puedeEscribir);   // misma consulta que ChipGastoIA (se comparte por clave)
+  const aviso = useAvisoSandbox(org);                  // la primera vez en la sandbox, Vigía explica que es una copia
   return (
-    <GuiaProvider org={org.id} soloLectura={!org.puedeEscribir}>
+    <GuiaProvider org={org.id} soloLectura={!org.puedeEscribir} aviso={aviso}>
       <div className="flex min-h-svh bg-background">
         {/* Con 13 entradas el riel mide ~860 px (~1010 en modo presentación): a 1280×720 se desplaza él solo, no se corta. */}
         <aside className={cn('sticky top-0 hidden h-svh shrink-0 overflow-x-hidden overflow-y-auto border-r bg-sidebar transition-[width] md:block', compacto ? 'w-[4.5rem]' : 'w-60')}>
@@ -251,7 +256,8 @@ export default function AppShell() {
             <Button variant="fantasma" size="icono" onClick={() => setPaleta(true)} data-guia="buscar" aria-label="Ir a una pantalla (Ctrl+K)" title="Ir a… (Ctrl+K)">
               <Search className="size-5" />
             </Button>
-            {org.puedeEscribir ? null : <Etiqueta texto="Demo · solo lectura" rol="info" data-info="demo-solo-lectura" />}
+            {org.sandbox ? <><span className="sm:hidden"><EtiquetaSandbox corta /></span><span className="hidden sm:inline-flex"><EtiquetaSandbox /></span><BotonSalirDemo org={org} className="hidden md:inline-flex" /></>
+              : org.puedeEscribir ? null : <Etiqueta texto="Demo · solo lectura" rol="info" data-info="demo-solo-lectura" />}
             {/* «IA en pausa» no trae acción al lado: neutra (L3). La dice E5 (overview.ai) o, para admin, E28. */}
             {overview.data?.ai?.enabled === false || usoIA.data?.enabled === false ? <Etiqueta texto="IA en pausa" rol="neutra" data-info="ia-en-pausa" /> : null}
             <ChipGastoIA org={org.id} puedeEscribir={org.puedeEscribir} />

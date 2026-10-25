@@ -151,13 +151,18 @@ export async function avisoPrCerrado(env: CloudflareBindings, admin: SupabaseCli
     const [c, o, n] = await Promise.all([
       admin.from('contacts').select('id, phone_e164, whatsapp, priority, verified_at, wa_last_inbound_at')
         .eq('org_id', m.org_id).eq('whatsapp', true).order('priority').limit(10),
-      admin.from('orgs').select('is_demo').eq('id', m.org_id).maybeSingle(),
+      admin.from('orgs').select('is_demo, sandbox_of').eq('id', m.org_id).maybeSingle(),
       admin.from('code_reviews').select('id', { count: 'exact', head: true }).eq('org_id', m.org_id)
         .eq('alert_state', 'sent').neq('id', m.review_id).gte('notified_at', new Date(ahora - 3600_000).toISOString()),
     ]);
     if (c.error || o.error || n.error || !o.data) {
       log('warn', 'gate.aviso_pr_lectura_error', { ...registro,
         code: c.error?.code ?? o.error?.code ?? n.error?.code ?? null });
+      return;
+    }
+    // Sandbox de «Ver demo» (0026): nunca sale un WhatsApp real (tampoco puede tener el token que cierra PR).
+    if (typeof (o.data as Obj).sandbox_of === 'string') {
+      log('info', 'gate.aviso_pr_omitido', { ...registro, motivo: 'sandbox' });
       return;
     }
     const demo = (o.data as Obj).is_demo === true;

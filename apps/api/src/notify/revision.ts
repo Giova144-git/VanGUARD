@@ -82,6 +82,7 @@ const codigoError = (e: unknown) =>
 type Aviso = {
   env: CloudflareBindings; admin: ReturnType<typeof db>; orgId: string; rev: Revision; texto: string; ahora: number;
   issue: boolean;   // «Crear issue» se puede ofrecer (puedeCrearIssue)
+  sandbox: boolean; // org sandbox de «Ver demo» (0026): fila skipped con el texto (preview), nunca Kapso
 };
 
 // Fila que ya existía (23505): un intento anterior llegó hasta aquí y cayó antes de cerrar la revisión. Lo que diga esa
@@ -141,6 +142,7 @@ async function enviarUno(d: Aviso, p: Planned, contacto: Contacto): Promise<Resu
     // Ventana de 24 h de Meta: fuera de ella el texto no llega (131047) y no hay plantillas aprobadas → no se llama a
     // Kapso. Fuera de producción nunca se envía nada real (S15 15.3).
     const omitida = p.status !== 'queued' ? { status: p.status, error: p.error ?? 'cap' }
+      : d.sandbox ? { status: 'skipped', error: 'sandbox', preview: d.texto.slice(0, 2000) }
       : !ventanaAbierta(env, contacto.wa_last_inbound_at, d.ahora) ? { status: 'failed', error: 'window_closed' }
       : env.VG_ENV !== 'production' ? { status: 'failed', error: 'dry_run' }
       : !kapsoConfigurado(env) ? { status: 'failed', error: 'sin_config' }
@@ -223,7 +225,7 @@ export async function avisarRevision(env: CloudflareBindings, m: MsgRevision, in
     admin.from('alert_prefs').select('review_whatsapp_min, review_voice_min').eq('org_id', orgId).maybeSingle(),
     admin.from('contacts').select('id, phone_e164, whatsapp, voice, priority, verified_at, wa_last_inbound_at')
       .eq('org_id', orgId).order('priority').limit(10),
-    admin.from('orgs').select('is_demo').eq('id', orgId).maybeSingle(),
+    admin.from('orgs').select('is_demo, sandbox_of').eq('id', orgId).maybeSingle(),
     // Cupo propio (§5): revisiones de la org avisadas en la última hora (cuenta revisiones, no filas).
     admin.from('code_reviews').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('alert_state', 'sent')
       .gte('notified_at', new Date(ahora - 3600_000).toISOString()),
@@ -249,7 +251,9 @@ export async function avisarRevision(env: CloudflareBindings, m: MsgRevision, in
     hasta = str(obj(cfg).value);
   }
   const prefs = { whatsapp: umbral(obj(p.data).review_whatsapp_min, 'high'), voice: umbral(obj(p.data).review_voice_min, 'critical') };
-  const contactos = leerContactos(c.data);
+  // Sandbox de «Ver demo» (0026): no se envía nada real, así que sus contactos cuentan como verificados.
+  const sandbox = typeof obj(o.data).sandbox_of === 'string';
+  const contactos = leerContactos(c.data).map((x) => (sandbox && !x.verified_at ? { ...x, verified_at: new Date(ahora).toISOString() } : x));
   const plan = planAvisoRevision({ max: rev.max, parcial: rev.partial }, prefs, contactos, n.count ?? 0,
     org.is_demo ? TOPES_REVISION.demo : TOPES_REVISION.normal,
     { fueraDeVentanaDemo: fueraDeVentanaDemo(org, hasta, new Date(ahora)), vozDisponible: false });
@@ -277,7 +281,7 @@ export async function avisarRevision(env: CloudflareBindings, m: MsgRevision, in
     reglas: rev.reglas, parcial: rev.partial, url });
   const lectura = str(obj(s?.data).connection_id);
   const issue = rev.reglas.length > 0 && !!lectura && await puedeCrearIssue(admin, orgId, lectura, rev.id);
-  const d: Aviso = { env, admin, orgId, rev, texto, ahora, issue };
+  const d: Aviso = { env, admin, orgId, rev, texto, ahora, issue, sandbox };
   const porId = new Map(contactos.map((x) => [x.id, x]));
   // ≤ 5 contactos (E26): en paralelo, cada uno con su propia fila y su propio manejo de errores.
   const res = await Promise.all(plan.envios.filter((e) => e.channel === 'whatsapp' && !e.p1).map(async (e) => {

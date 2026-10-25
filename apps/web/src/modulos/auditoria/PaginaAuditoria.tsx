@@ -3,7 +3,7 @@
 // de los pasos: así no los empuja a mitad de la corrida (L7). Una medición de «Medir ahora» (kind 'lighthouse', F-17) usa
 // esta misma pantalla con sus textos: sin puntaje de blindaje ni resumen de IA, y al terminar relee Rendimiento.
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Gauge, KeyRound, ShieldCheck } from 'lucide-react';
 import type { Finding, Module, ScanRun, Severity } from '@vanguard/contracts';
@@ -25,15 +25,15 @@ import { useEspera } from '@/componentes/vigia/useEspera';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { invalidarPerf } from '@/modulos/rendimiento/medir';
 import { useDeltaAuditoria, useHallazgos, useOverview, useScan } from '@/lib/consultas';
-import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
+import { ApiError, esApiError } from '@/lib/errores';
 import { cronometro, cuando } from '@/lib/formato';
 import { esId } from '@/lib/ids';
-import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
 import { useRepoDeConexion } from '@/lib/repos';
 import { Cambios } from './Cambios';
+import { AvisoSinFuentes, useAuditarTodo } from './useAuditarTodo';
 import { PINTA_PASO, esMedicion, faseEspera, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
@@ -41,28 +41,10 @@ const ORDEN_SEV: Record<Severity, number> = { critical: 0, high: 1, medium: 2, l
 const orden = (s: unknown) => deMapa(ORDEN_SEV, s, 5);
 const PROVEEDOR: Partial<Record<Module, string>> = { supabase: 'supabase', cloudflare: 'cloudflare', codebase: 'github' };
 
-function useLanzarYNavegar() {
-  const org = useOrg();
-  const navegar = useNavigate();
-  const lanzar = useLanzarScan(org.id);
-  const [error, setError] = useState<string | null>(null);
-  const auditar = () => {
-    setError(null);
-    lanzar.mutate({ kind: 'full_audit' }, {
-      onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),
-      onError: (e) => {
-        const enCurso = esApiError(e) && e.code === 'conflict' && typeof e.details?.scan_run_id === 'string' ? e.details.scan_run_id : null;
-        if (enCurso) navegar(`/o/${org.id}/audit/${encodeURIComponent(enCurso)}`); else setError(mensajeDe(e));
-      },
-    });
-  };
-  return { auditar, ocupado: lanzar.isPending, error };
-}
-
 function Lanzar() {
   const org = useOrg();
   const overview = useOverview(org.id);
-  const { auditar, ocupado, error } = useLanzarYNavegar();
+  const { auditar, ocupado, error, sinFuentes } = useAuditarTodo();
   const ultima = overview.data?.last_scan;
   const aUltima = ultima ? `/o/${org.id}/audit/${encodeURIComponent(ultima.id)}` : '';
   return (
@@ -70,8 +52,9 @@ function Lanzar() {
       <BarraModulo titulo="Auditoría" descripcion="Revisa todo el ecosistema con un botón." />
       <section className="flex flex-col items-start gap-3 rounded-xl border bg-card p-5">
         <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={ocupado}
-          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
+          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
         <p className="text-[15px] text-muted-foreground">Revisamos Supabase, Cloudflare y tu repo, y Claude resume lo más urgente. Tarda unos minutos.</p>
+        {sinFuentes && org.puedeEscribir ? <AvisoSinFuentes className="text-sm text-muted-foreground" /> : null}
         {error ? <p role="alert" className="text-sm text-mal">{error}{ultima ? <> · <Link className="underline" to={aUltima}>Mira la última</Link></> : null}</p> : null}
         {ultima ? <Link to={aUltima} className="text-sm font-medium text-foreground underline underline-offset-4">Ver la última auditoría ({cuando(ultima.finished_at)})</Link> : null}
       </section>
@@ -190,7 +173,7 @@ function Corrida({ id }: { id: string }) {
   const overview = useOverview(org.id);
   const hallazgos = useHallazgos(org.id, { status: 'open' });
   const repoDe = useRepoDeConexion(org.id);   // chip del repo con 2 o más (varias-codebases §6.4)
-  const { auditar, ocupado, error } = useLanzarYNavegar();
+  const { auditar, ocupado, error, sinFuentes } = useAuditarTodo();
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   // «Nuevo» en «Hallazgos abiertos»: nuevo frente a la auditoría anterior (E51; sin foto o con 404, sin etiqueta).
   const deltaQ = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded' && !esMedicion(q.data.kind));
@@ -250,6 +233,7 @@ function Corrida({ id }: { id: string }) {
           {/* Una medición se repite desde Rendimiento (URL y estrategia); «Reintentar auditoría» lanzaría un full_audit. */}
           {medicion ? <Button asChild variant="principal" size="grande" className="w-fit"><Link to={aRendimiento}><Gauge />Volver a Rendimiento</Link></Button>
             : <BotonAccion variante="principal" tam="grande" onClick={auditar} ocupado={ocupado} disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Reintentar auditoría</BotonAccion>}
+          {!medicion && sinFuentes && org.puedeEscribir ? <AvisoSinFuentes className="text-sm text-muted-foreground" /> : null}
           {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
         </div>
       ) : null}

@@ -6,8 +6,12 @@
 //   2. Si la regla no está (hallazgos de la IA, avisos del advisor sin traducir), uno por módulo (MODULO).
 //   3. Los datos que ya enseña la fila: el recurso afectado y la gravedad. El recurso llega del servidor: va recortado,
 //      en una sola línea y con los controles bidi a la vista (sinBidi), y Vigía lo pinta como texto React, nunca HTML.
+//   4. Sus fechas (historial de fallas, 0025): cuándo se detectó, se corrigió, se verificó, se ignoró o reapareció. La
+//      misma regla que el recurso: Vigía solo cita lo saneado. De una fecha del servidor solo se usa el instante que
+//      sale de Date.parse, escrito otra vez con Intl (elDia de lib/formato.ts): una cadena que no es fecha no se cita.
 // Las filas anotan aquí lo que pintan (marcaHallazgo) para que el menú no tenga que volver a pedir el hallazgo.
 import { sinBidi } from '@/lib/bidi';
+import { elDia } from '@/lib/formato';
 import { esId } from '@/lib/ids';
 import type { TextoInfo } from './info';
 
@@ -22,6 +26,12 @@ export type DatosHallazgo = {
   connection_id?: string | null;
   /** open, fixed, verified, ignored: solo uno abierto se puede enviar a la IA. */
   status?: string | null;
+  /** Fechas ISO del servidor (E13, E13h, E13t). Solo se citan pasadas por elDia. */
+  first_seen_at?: string | null;
+  fixed_at?: string | null;
+  verified_at?: string | null;
+  ignored_at?: string | null;
+  reopened_at?: string | null;
 };
 
 // ── 1. Por regla ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -130,19 +140,55 @@ export function recursoCorto(s: unknown): string {
   return sinBidi(cp.length > MAX_RECURSO ? cp.slice(0, MAX_RECURSO - 1).join('') + '…' : l);
 }
 
-/** Título y texto de «Info» para un hallazgo: la regla (o su módulo), dónde está y cuánto corre prisa. */
-export function infoDeHallazgo(h: Partial<DatosHallazgo> | null | undefined): TextoInfo {
+// ── 4. Fechas ────────────────────────────────────────────────────────────────────────────────────────────────────
+/** Una frase con las fechas del problema según su estado, o null si no hay ninguna fecha válida. Sin la gravedad: un
+ *  problema que ya no está abierto no corre prisa. */
+export function fechasDeHallazgo(h: Partial<DatosHallazgo> | null | undefined, ahora = new Date()): string | null {
+  const d = (t: unknown) => (typeof t === 'string' ? elDia(t, ahora) : null);
+  const [visto, corregido, verificado, ignorado, reaparecio] = [d(h?.first_seen_at), d(h?.fixed_at), d(h?.verified_at),
+    d(h?.ignored_at), d(h?.reopened_at)];
+  const detectado = visto ? `Se detectó ${visto}` : null;
+  const unir = (...p: (string | null)[]) => { const t = p.filter(Boolean).join(' y '); return t ? `${t[0]!.toUpperCase()}${t.slice(1)}` : null; };
+  switch (h?.status) {
+    case 'open': {
+      const base = unir(detectado, 'sigue abierto');
+      return reaparecio ? `${base}: reapareció ${reaparecio}, después de corregirse.` : visto ? `${base}.` : null;
+    }
+    case 'fixed': {
+      const t = unir(detectado, corregido ? `se marcó corregido ${corregido}` : 'se marcó corregido');
+      return `${t}; falta que una auditoría lo compruebe.`;
+    }
+    case 'verified': {
+      const t = unir(detectado, corregido ? `se corrigió ${corregido}` : null);
+      const v = verificado ? `una auditoría lo verificó ${verificado}` : 'una auditoría verificó que ya no está';
+      return t ? `${t}; ${v}.` : `${v[0]!.toUpperCase()}${v.slice(1)}.`;
+    }
+    case 'ignored': {
+      const t = unir(detectado, ignorado ? `se ignoró ${ignorado}` : 'se ignoró');
+      return `${t}: ya no cuenta en tu puntaje.`;
+    }
+    default:
+      return detectado ? `${detectado}.` : null;
+  }
+}
+
+/** Título y texto de «Info» para un hallazgo: la regla (o su módulo), dónde está, sus fechas y cuánto corre prisa (esto
+ *  último solo si sigue abierto o no se sabe su estado). */
+export function infoDeHallazgo(h: Partial<DatosHallazgo> | null | undefined, ahora = new Date()): TextoInfo {
   const base = textoRegla(h?.rule_id)
     ?? (typeof h?.module === 'string' && Object.hasOwn(MODULO, h.module) ? MODULO[h.module as keyof typeof MODULO] : GENERICO);
   const recurso = recursoCorto(h?.resource);
-  const prisa = typeof h?.severity === 'string' && Object.hasOwn(GRAVEDAD, h.severity) ? GRAVEDAD[h.severity]
+  const cerrado = h?.status === 'fixed' || h?.status === 'verified' || h?.status === 'ignored';
+  const prisa = cerrado ? null : typeof h?.severity === 'string' && Object.hasOwn(GRAVEDAD, h.severity) ? GRAVEDAD[h.severity]
     : typeof h?.rol === 'string' && Object.hasOwn(POR_ROL, h.rol) ? POR_ROL[h.rol] : null;
-  return { titulo: base.titulo, texto: [base.texto, recurso ? `Afecta a «${recurso}».` : null, prisa].filter(Boolean).join(' ') };
+  return { titulo: base.titulo,
+    texto: [base.texto, recurso ? `Afecta a «${recurso}».` : null, fechasDeHallazgo(h, ahora), prisa].filter(Boolean).join(' ') };
 }
 
 // ── Registro de lo que pintan las filas ───────────────────────────────────────────────────────────────────────────
 const MAX_VISTOS = 500;
-const CAMPOS = ['module', 'rule_id', 'severity', 'rol', 'resource', 'connection_id', 'status'] as const;
+const CAMPOS = ['module', 'rule_id', 'severity', 'rol', 'resource', 'connection_id', 'status', 'first_seen_at', 'fixed_at',
+  'verified_at', 'ignored_at', 'reopened_at'] as const;
 const vistos = new Map<string, DatosHallazgo>();
 
 /** La fila anota lo que enseña y recibe su atributo: `<li {...marcaHallazgo(d)}>`. Sin un UUID, nada (ni atributo). */

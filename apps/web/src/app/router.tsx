@@ -32,6 +32,7 @@ const rutas: RouteObject[] = [
           { path: 'audit', lazy: pagina(() => import('@/modulos/auditoria/PaginaAuditoria')), errorElement: <ErrorRuta /> },
           { path: 'audit/:scanId', lazy: pagina(() => import('@/modulos/auditoria/PaginaAuditoria')), errorElement: <ErrorRuta /> },
           { path: 'evolution', lazy: pagina(() => import('@/modulos/evolucion/PaginaEvolucion')), errorElement: <ErrorRuta /> },
+          { path: 'evolution/history', lazy: pagina(() => import('@/modulos/evolucion/PaginaHistorial')), errorElement: <ErrorRuta /> },
           { path: 'incidents', lazy: pagina(() => import('@/modulos/incidentes/PaginaIncidentes')), errorElement: <ErrorRuta /> },
           { path: 'incidents/:incidentId', lazy: pagina(() => import('@/modulos/incidentes/PaginaIncidente')), errorElement: <ErrorRuta /> },
           { path: 'wiki', lazy: pagina(() => import('@/modulos/wiki/PaginaWiki')), errorElement: <ErrorRuta /> },

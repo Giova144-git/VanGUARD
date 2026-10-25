@@ -22,6 +22,7 @@ const ANA = '7b1e0000-0000-4000-8000-000000000001';
 const ANON = '7b1e0000-0000-4000-8000-0000000000aa';
 const ORG = '0f6c0000-0000-4000-8000-000000000001';
 const DEMO = '0f6c0000-0000-4000-8000-0000000000de';
+const SBX = '0f6c0000-0000-4000-8000-0000000005b1';      // sandbox de «Ver demo» de alguien (0026)
 const TOKENS: Record<string, Record<string, unknown>> = {
   ana: { sub: ANA, email: 'ana@acme.dev', is_anonymous: false, role: 'authenticated' },
   anon: { sub: ANON, email: '', is_anonymous: true, role: 'authenticated' },
@@ -72,13 +73,16 @@ describe('auth (getClaims)', () => {
 describe('E2 · GET /api/me', () => {
   it('devuelve el usuario del JWT y sus orgs con rol', async () => {
     tabla = (op) => op.table === 'org_members' && eqDe(op, 'user_id') === ANA
-      ? { data: [{ role: 'owner', orgs: { id: ORG, name: 'Acme', is_demo: false } }] } : undefined;
+      ? { data: [{ role: 'owner', orgs: { id: ORG, name: 'Acme', is_demo: false, sandbox_of: null } },
+        { role: 'owner', orgs: { id: SBX, name: 'Tienda Demo', is_demo: false, sandbox_of: DEMO } }] } : undefined;
     const r = await pedir('/api/me', { tok: 'ana' });
     expect(r.status).toBe(200);
     expect(Me.parse(await r.json())).toEqual({
       user: { id: ANA, email: 'ana@acme.dev', is_anonymous: false },
-      orgs: [{ id: ORG, name: 'Acme', role: 'owner', is_demo: false }],
+      orgs: [{ id: ORG, name: 'Acme', role: 'owner', is_demo: false, sandbox: false },
+        { id: SBX, name: 'Tienda Demo', role: 'owner', is_demo: false, sandbox: true }],
     });
+    expect(doble.ops[0]?.columns).toBe('role, orgs(id, name, is_demo, sandbox_of)');
   });
 
   it('anónimo: email null e is_anonymous true', async () => {
@@ -106,11 +110,14 @@ describe('E3 · POST /api/orgs', () => {
     expect(b.error.details?.field_errors).toHaveProperty('name');
   });
 
-  it('dueño de 3 orgs → 409 conflict', async () => {
+  it('dueño de 3 orgs → 409 conflict; su sandbox de «Ver demo» no cuenta', async () => {
     tabla = (op) => (op.table === 'org_members' ? { count: 3 } : undefined);
     const r = await post({ name: 'Acme' });
     expect(r.status).toBe(409);
     expect(doble.rpcs).toHaveLength(0);
+    const conteo = doble.ops.find((o) => o.table === 'org_members')!;
+    expect(conteo.columns).toBe('org_id, orgs!inner(sandbox_of)');
+    expect(conteo.filters).toContainEqual(['orgs.sandbox_of', 'is', null]);
   });
 
   it('crea con vg_create_org (owner = sub del JWT), reintenta un slug repetido y responde 201 Org', async () => {
@@ -146,21 +153,104 @@ describe('E3 · POST /api/orgs', () => {
   });
 });
 
-describe('E4 · POST /api/demo/join', () => {
+describe('E4 · POST /api/demo/join (sandbox por visitante, 0026)', () => {
+  const join = (tok: string, headers: Record<string, string> = {}) => pedir('/api/demo/join', { method: 'POST', tok, headers });
+
   it('sin org de demo → 404', async () => {
-    tabla = () => ({ data: null });
-    expect((await pedir('/api/demo/join', { method: 'POST', tok: 'anon' })).status).toBe(404);
+    rpc = (n) => (n === 'vg_sandbox_join' ? { error: { code: 'P0002', message: 'demo_org_missing' } } : undefined);
+    expect((await join('anon')).status).toBe(404);
   });
 
-  it('anónimo entra como viewer con upsert que no rebaja roles', async () => {
-    tabla = (op) => (op.table === 'orgs' && eqDe(op, 'is_demo') === true ? { data: { id: DEMO } } : undefined);
-    const r = await pedir('/api/demo/join', { method: 'POST', tok: 'anon' });
+  it('anónimo: crea (o recupera) SU sandbox con vg_sandbox_join y ya no se une como viewer a la demo', async () => {
+    rpc = (n) => (n === 'vg_sandbox_join' ? { data: SBX } : undefined);
+    const r = await join('anon');
     expect(r.status).toBe(200);
-    expect(DemoJoin.parse(await r.json())).toEqual({ org_id: DEMO });
-    const up = doble.ops.find((o) => o.action === 'upsert');
-    expect(up?.table).toBe('org_members');
-    expect(up?.payload).toEqual({ org_id: DEMO, user_id: ANON, role: 'viewer' });
-    expect(up?.options).toEqual({ onConflict: 'org_id,user_id', ignoreDuplicates: true });
+    expect(DemoJoin.parse(await r.json())).toEqual({ org_id: SBX, sandbox: true });
+    expect(doble.rpcs).toEqual([{ name: 'vg_sandbox_join', args: { p_user: ANON, p_ip_hash: null } }]);
+    expect(doble.ops.filter((o) => o.table === 'org_members')).toHaveLength(0);
+  });
+
+  it('una cuenta real también obtiene su sandbox (owner) y no queda unida a la demo', async () => {
+    rpc = (n) => (n === 'vg_sandbox_join' ? { data: SBX } : undefined);
+    const r = await join('ana');
+    expect(DemoJoin.parse(await r.json())).toEqual({ org_id: SBX, sandbox: true });
+    expect(doble.rpcs[0]?.args.p_user).toBe(ANA);
+    expect(doble.ops.some((o) => o.action === 'upsert' || o.action === 'insert')).toBe(false);
+  });
+
+  it('la IP viaja como HMAC (64 hex), nunca en claro; el mismo cliente da el mismo hash', async () => {
+    rpc = (n) => (n === 'vg_sandbox_join' ? { data: SBX } : undefined);
+    const ip = ['198', '51', '100', '23'].join('.');
+    await join('anon', { 'cf-connecting-ip': ip });
+    await join('anon', { 'cf-connecting-ip': ip });
+    const [a, b] = doble.rpcs.map((x) => String(x.args.p_ip_hash));
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).toBe(b);
+    expect(a).not.toContain(ip);
+  });
+
+  it('cupo por IP → 429 con Retry-After 3600; cupo global → 429; usuario purgado → 401', async () => {
+    rpc = () => ({ error: { code: 'P0001', message: 'sandbox_cupo_ip' } });
+    let r = await join('anon');
+    expect(r.status).toBe(429);
+    expect(r.headers.get('retry-after')).toBe('3600');
+    expect(ApiErrorBody.parse(await r.json()).error.details?.reason).toBe('sandbox_ip');
+    rpc = () => ({ error: { code: 'P0001', message: 'sandbox_cupo_global' } });
+    r = await join('anon');
+    expect(r.status).toBe(429);
+    expect(ApiErrorBody.parse(await r.json()).error.details?.reason).toBe('sandbox_global');
+    rpc = () => ({ error: { code: '23503', message: 'fk' } });
+    expect((await join('anon')).status).toBe(401);
+  });
+});
+
+describe('E4b latido, E4c salir y E4d cerrando (sandbox de «Ver demo»)', () => {
+  const post = (ruta: string, body: unknown, tok = 'anon') => pedir(ruta, { method: 'POST', tok, body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json' } });
+
+  it('latido de su sandbox → 204; de otra (o ya purgada) → 404; cuerpo malo → 422', async () => {
+    rpc = (n, a) => (n === 'vg_sandbox_latido' ? { data: a.p_org === SBX && a.p_user === ANON ? true : null } : undefined);
+    expect((await post('/api/demo/latido', { org_id: SBX })).status).toBe(204);
+    expect((await post('/api/demo/latido', { org_id: ORG })).status).toBe(404);
+    expect((await post('/api/demo/latido', { org_id: 'x' })).status).toBe(422);
+    expect(doble.rpcs[0]).toEqual({ name: 'vg_sandbox_latido', args: { p_org: SBX, p_user: ANON } });
+  });
+
+  it('cerrando (pagehide, keepalive con Authorization) → 204 sin borrar; 404 si no es su sandbox; latido después la mantiene', async () => {
+    // Doble de la base: cerrando marca cierra_en, latido lo anula (vg_sandbox_cerrando / vg_sandbox_latido de 0026).
+    let cierra: boolean | null = null;
+    rpc = (n, a) => {
+      const suya = a.p_org === SBX && a.p_user === ANA;
+      if (n === 'vg_sandbox_cerrando') { if (suya) cierra = true; return { data: suya ? true : null }; }
+      if (n === 'vg_sandbox_latido') { if (suya) cierra = null; return { data: suya ? true : null }; }
+      return undefined;
+    };
+    const r = await pedir('/api/demo/cerrando', { method: 'POST', tok: 'ana', body: JSON.stringify({ org_id: SBX }) });
+    expect(r.status).toBe(204);
+    expect(cierra).toBe(true);
+    expect((await post('/api/demo/cerrando', { org_id: SBX }, 'ana')).status).toBe(204);   // idempotente
+    expect((await post('/api/demo/cerrando', { org_id: ORG }, 'ana')).status).toBe(404);
+    expect((await post('/api/demo/cerrando', { org_id: SBX }, 'anon')).status).toBe(404);  // la de otro
+    expect((await post('/api/demo/latido', { org_id: SBX }, 'ana')).status).toBe(204);     // la recarga late
+    expect(cierra).toBeNull();
+    expect(doble.rpcs.some((x) => x.name === 'vg_sandbox_salir')).toBe(false);             // cerrar no borra
+  });
+
+  it('salir → 204 e idempotente (la base borra la sandbox y al anónimo sin orgs; la segunda vez no hay nada)', async () => {
+    let vez = 0;
+    rpc = (n) => (n === 'vg_sandbox_salir'
+      ? { data: ++vez === 1 ? { borrada: true, usuario_borrado: true } : { borrada: false, usuario_borrado: false } } : undefined);
+    expect((await post('/api/demo/salir', { org_id: SBX })).status).toBe(204);
+    expect((await post('/api/demo/salir', { org_id: SBX })).status).toBe(204);
+    expect(doble.rpcs).toEqual([{ name: 'vg_sandbox_salir', args: { p_org: SBX, p_user: ANON } },
+      { name: 'vg_sandbox_salir', args: { p_org: SBX, p_user: ANON } }]);
+  });
+
+  it('salir acepta el fetch keepalive de pagehide: Authorization normal y text/plain también vale como JSON', async () => {
+    rpc = () => ({ data: { borrada: true, usuario_borrado: false } });
+    const r = await pedir('/api/demo/salir', { method: 'POST', tok: 'ana', body: JSON.stringify({ org_id: SBX }) });
+    expect(r.status).toBe(204);
+    expect(doble.rpcs[0]?.args.p_user).toBe(ANA);
   });
 });
 
@@ -172,7 +262,7 @@ describe('originGuard y rateLimit', () => {
   });
 
   it('Vite local solo con VG_ENV=local', async () => {
-    tabla = (op) => (op.table === 'orgs' ? { data: { id: DEMO } } : undefined);
+    rpc = (n) => (n === 'vg_sandbox_join' ? { data: SBX } : undefined);
     const init = { method: 'POST', tok: 'ana', headers: { origin: 'http://localhost:5173' } };
     expect((await pedir('/api/demo/join', init, { VG_ENV: 'local' })).status).toBe(200);
     expect((await pedir('/api/demo/join', init, { VG_ENV: 'production' })).status).toBe(403);
@@ -202,6 +292,14 @@ describe('orgMember, anonReadOnly y requireAdmin', () => {
     t.request(ruta, { method, headers: { authorization: `Bearer ${tok}` } }, envDoble().env);
   const miembro = (role: string | null) => {
     tabla = (op) => (op.table === 'org_members' && eqDe(op, 'org_id') === ORG ? { data: role ? { role } : null } : undefined);
+  };
+  // Membresías por org: ORG normal, DEMO compartida (viewer) y SBX, la sandbox del anónimo (owner, orgs.sandbox_of = DEMO).
+  const enOrgs = (filas: Record<string, { role: string; sandbox_of: string | null } | null>) => {
+    tabla = (op) => {
+      if (op.table !== 'org_members') return undefined;
+      const f = filas[String(eqDe(op, 'org_id'))];
+      return { data: f ? { role: f.role, orgs: { sandbox_of: f.sandbox_of } } : null };
+    };
   };
 
   it('no miembro → 404 (no confirma que la org exista); id que no es uuid → 404 sin consultar', async () => {
@@ -247,5 +345,26 @@ describe('orgMember, anonReadOnly y requireAdmin', () => {
   it('anónimo con rol owner tampoco pasa requireAdmin', async () => {
     miembro('owner');
     expect((await ir(`/api/orgs/${ORG}/escribir`, 'anon', 'POST')).status).toBe(403);
+  });
+
+  it('sandbox (0026): el anónimo escribe en SU sandbox; en la demo sigue en solo lectura; en la de otro → 404', async () => {
+    enOrgs({ [SBX]: { role: 'owner', sandbox_of: DEMO }, [DEMO]: { role: 'viewer', sandbox_of: null } });
+    expect((await ir(`/api/orgs/${SBX}/escribir`, 'anon', 'POST')).status).toBe(200);
+    expect((await ir(`/api/orgs/${SBX}/leer`, 'anon')).status).toBe(200);
+    const demo = await ir(`/api/orgs/${DEMO}/escribir`, 'anon', 'POST');
+    expect(demo.status).toBe(403);
+    expect(ApiErrorBody.parse(await demo.json()).error.message).toMatch(/Crea una cuenta/);
+    // La sandbox de otro: no es miembro → 404 (orgMember no confirma que exista, S15 15.3).
+    enOrgs({ [SBX]: null });
+    expect((await ir(`/api/orgs/${SBX}/escribir`, 'anon', 'POST')).status).toBe(404);
+    expect((await ir(`/api/orgs/${SBX}/leer`, 'anon')).status).toBe(404);
+  });
+
+  it('sandbox: lo decide la fila de la org, no el cliente (un anónimo owner de una org normal sigue sin escribir)', async () => {
+    enOrgs({ [ORG]: { role: 'owner', sandbox_of: null } });
+    const r = await t.request(`/api/orgs/${ORG}/escribir`, { method: 'POST',
+      headers: { authorization: 'Bearer anon', 'x-sandbox': '1', 'content-type': 'application/json' }, body: '{"sandbox":true}' },
+      envDoble().env);
+    expect(r.status).toBe(403);
   });
 });

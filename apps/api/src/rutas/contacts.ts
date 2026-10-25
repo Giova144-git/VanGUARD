@@ -27,6 +27,9 @@ export function aContacto(fila: unknown, verificacion: VerificacionContacto | nu
 // necesita. Si las claves fallan, la lista sale igual sin verificacion y queda el log: Ajustes no se cae por esto.
 async function aContactos(c: Context<AppEnv>, filas: unknown[]): Promise<Contact[]> {
   const lista = filas.map((f) => aContacto(f));
+  // Sandbox de «Ver demo» (0026): sin código ni enlace de verificación. Nada de la sandbox se envía por WhatsApp (el
+  // despachador registra cada aviso como skipped), así que no hay nada que verificar ni un opt-in real que pedir.
+  if (c.get('sandbox')) return lista;
   const pendiente = (x: Contact) => x.whatsapp && x.verified_at === null;
   const numero = numeroVisible(c.env);
   if (!numero || !lista.some(pendiente)) return lista;

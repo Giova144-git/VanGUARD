@@ -20,12 +20,13 @@ export const INFO = {
 
   // Cabecera.
   'demo-solo-lectura': { titulo: 'Demo · solo lectura', texto: 'Estás viendo una organización de ejemplo. Puedes mirarlo todo, pero los botones que cambian algo están apagados.' },
+  'demo-sandbox': { titulo: 'Demo · tu copia temporal', texto: 'Es una copia de la demo solo para ti: puedes probarlo todo. Las acciones sobre Cloudflare y los WhatsApp se simulan, y la copia se borra al cerrar el navegador.' },
   'ia-en-pausa': { titulo: 'IA en pausa', texto: 'La IA está apagada por ahora, por ajuste o porque se llegó al tope de gasto del día. Las revisiones siguen; solo faltan los textos que escribe la IA.' },
   'gasto-ia': { titulo: 'Gasto de IA hoy', texto: 'Lo que lleva gastado hoy la IA frente al tope diario que pusiste. Si se acerca al tope, uso modelos más baratos; al llegar, la pauso.' },
 
   // Resumen.
   'puntaje-blindaje': { titulo: 'Puntaje de blindaje', texto: 'Una nota de 0 a 100 sobre lo protegido que está tu ecosistema: más alto es mejor. Al lado ves cuántas fuentes miramos; con fuentes sin conectar, la nota no cuenta toda la historia.' },
-  'auditar-todo': { titulo: 'Auditar todo', texto: 'Revisa a la vez Supabase, Cloudflare y tu repo. Tarda unos minutos y al acabar actualiza tu puntaje; el rendimiento se mide aparte, en Rendimiento.' },
+  'auditar-todo': { titulo: 'Auditar todo', texto: 'Revisa a la vez Supabase, Cloudflare y tu repo, así que necesita al menos uno conectado; un ZIP de tu código se analiza aparte, en Codebase. Tarda unos minutos y al acabar actualiza tu puntaje; el rendimiento se mide aparte, en Rendimiento.' },
   'barra-severidad': { titulo: 'Problemas por gravedad', texto: 'Cada color es una gravedad: cuanto más ancho el tramo, más problemas de ese tipo. Lo ideal es que el rojo desaparezca.' },
   'cifra-criticos': { titulo: 'Críticos abiertos', texto: 'Problemas tan graves que alguien podría aprovecharlos ya, por ejemplo para leer tus datos. Son lo primero que conviene arreglar.' },
   'cifra-altos': { titulo: 'Altos', texto: 'Problemas serios que no son una puerta abierta inmediata, pero que conviene arreglar esta semana.' },
@@ -89,6 +90,16 @@ export const INFO = {
   'evo-marca-version': { titulo: 'Punto de partida e historial', texto: 'La primera foto del historial: no tiene otra anterior, así que no muestra nuevos ni corregidos. Una auditoría anterior al historial es de antes de guardar fotos y solo trae el puntaje.' },
   'evo-incidentes': { titulo: 'Incidentes por día', texto: 'Los ataques en vivo del periodo, por gravedad, contados el día en que empezó cada uno (hora de Caracas). Un día sin barra fue un día tranquilo.' },
   'evo-revisiones': { titulo: 'Revisiones de código', texto: 'Cada vez que alguien sube cambios a GitHub, con un push o un PR, reviso solo lo nuevo. Aquí ves cuántos problemas trajo cada uno; Limpio es que ninguno.' },
+  'evo-fallas-periodo': { titulo: 'Cuáles fallas', texto: 'Despliega las fallas nuevas o corregidas del periodo, una a una y con su estado de ahora. Haz clic derecho en una para que te diga sus fechas.' },
+
+  // Historial de fallas (Evolución → Historial).
+  'historial-fallas': { titulo: 'Historial de fallas', texto: 'Cada falla que encontré, esté abierta, corregida, verificada o ignorada, con la fecha de cada cambio. Despliega una para ver su línea de tiempo.' },
+  'historial-filtro-estado': { titulo: 'Estado', texto: 'Corregida es que alguien la marcó como arreglada; verificada, que una auditoría comprobó que ya no está. Ignorada deja de contar en tu puntaje.' },
+  'historial-filtro-modulo': { titulo: 'Módulo', texto: 'Muestra solo las fallas de Supabase, Cloudflare, tu código o el rendimiento.' },
+  'historial-filtro-gravedad': { titulo: 'Gravedad', texto: 'Muestra solo las fallas de una gravedad, de crítica a solo un aviso.' },
+  'historial-filtro-periodo': { titulo: 'Último cambio', texto: 'Solo las fallas que cambiaron en esos días: que aparecieron, se corrigieron, se verificaron, se ignoraron o reaparecieron.' },
+  'historial-orden': { titulo: 'Orden', texto: 'Por la fecha del último cambio de cada falla: primero lo más reciente o primero lo más antiguo.' },
+  'historial-linea-tiempo': { titulo: 'Línea de tiempo', texto: 'Lo que le pasó a esta falla, en orden: cuándo apareció, si la mandaste a tu IA, cuándo se corrigió o se verificó y si volvió a aparecer.' },
 
   // Rendimiento y hallazgos.
   lighthouse: { titulo: 'Lighthouse', texto: 'La prueba de velocidad de Google. Da una nota de 0 a 100 y mide, por ejemplo, cuánto tarda en verse lo principal de tu página.' },

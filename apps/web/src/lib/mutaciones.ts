@@ -51,7 +51,7 @@ export function usePatchHallazgo(org: string) {
   return useMutation({
     mutationFn: ({ id, ...body }: FindingPatch & { id: string }) =>
       api(`/api/orgs/${org}/findings/${id}`, { method: 'PATCH', body, esquema: Finding }),
-    onSuccess: () => invalidar('findings', 'finding', 'overview', 'module'),
+    onSuccess: () => invalidar('findings', 'finding', 'overview', 'module', 'history'),
   });
 }
 
@@ -61,14 +61,14 @@ export function useEnviarAIA(org: string) {
   return useMutation({
     mutationFn: ({ id, client }: { id: string; client: FixRequestClient }) =>
       api(`/api/orgs/${org}/findings/${id}/fix-requests`, { method: 'POST', body: { client }, esquema: FixRequest }),
-    onSettled: () => invalidar('fix-requests'),
+    onSettled: () => invalidar('fix-requests', 'history'),
   });
 }
 export function useCancelarEnvioIA(org: string) {
   const invalidar = useInvalidar(org);
   return useMutation({
     mutationFn: (id: string) => api(`/api/orgs/${org}/findings/${id}/fix-requests`, { method: 'DELETE' }),
-    onSettled: () => invalidar('fix-requests'),
+    onSettled: () => invalidar('fix-requests', 'history'),
   });
 }
 

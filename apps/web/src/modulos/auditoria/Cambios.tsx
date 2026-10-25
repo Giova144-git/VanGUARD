@@ -1,7 +1,7 @@
 // «Cambios desde la auditoría anterior» (asignaciones/evolucion-entre-revisiones.md §1.2 y §6.3): en la auditoría
 // terminada, entre el puntaje y el Resumen. Si E51 da 404 (aún sin desplegar) o falla sin datos, no se pinta nada y el
 // resto de la página sigue igual. Viewer y anónimo ven lo mismo: no hay acciones de escritura.
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ChevronRight } from 'lucide-react';
 import type { AuditDelta, DeltaItem, DeltaLista } from '@vanguard/contracts';
@@ -27,6 +27,7 @@ const SIN_COMPARAR: Record<string, string> = {
 const PRIMERA = 'Es la primera auditoría con historial. Desde la próxima verás qué es nuevo, qué se mantiene y qué se corrigió.';
 const VISIBLES = 10;
 const ID_NUEVOS = 'cambios-nuevos';
+const ID_CORREGIDOS = 'cambios-corregidos';
 
 const plural = (n: number, uno: string, varios: string) => (n === 1 ? uno : varios);
 const puntaje = (s: number | null | undefined) => (s == null ? '—' : String(s));
@@ -101,6 +102,11 @@ function ConCambios({ d }: { d: ConFoto }) {
     siguen: totalFila(d.counts.kept[m]), corregidos: totalFila(d.counts.fixed[m]), ignorados: totalFila(d.counts.ignored[m]) }))
     .filter((x) => x.nuevos + x.siguen + x.corregidos + x.ignorados > 0);
   const irANuevos = () => document.getElementById(ID_NUEVOS)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // «Ver» de Corregidos: despliega su lista (se vuelve a montar abierta) y baja hasta ella.
+  const [verCorregidos, setVerCorregidos] = useState(0);
+  useEffect(() => {
+    if (verCorregidos) document.getElementById(ID_CORREGIDOS)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [verCorregidos]);
   return (
     <div className="flex flex-col gap-3" aria-labelledby="t-cambios" role="region">
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-5">
@@ -113,7 +119,9 @@ function ConCambios({ d }: { d: ConFoto }) {
             accion={grave ? <button type="button" onClick={irANuevos} className="w-fit text-[12.5px] font-medium text-foreground underline underline-offset-4">Ver</button> : undefined} />
           <Cifra etiqueta="Se mantienen" n={siguen} />
           <Cifra etiqueta="Corregidos" n={corregidos}
-            sub={corregidos > 0 ? `${d.fixed_checked} ${plural(d.fixed_checked, 'comprobado', 'comprobados')} por la auditoría` : undefined} />
+            sub={corregidos > 0 ? `${d.fixed_checked} ${plural(d.fixed_checked, 'comprobado', 'comprobados')} por la auditoría` : undefined}
+            accion={corregidos > 0 ? <button type="button" onClick={() => setVerCorregidos((n) => n + 1)} aria-controls={ID_CORREGIDOS}
+              className="w-fit text-[12.5px] font-medium text-foreground underline underline-offset-4">Ver</button> : undefined} />
         </FilaCifras>
         <div className="flex flex-col gap-1 text-sm text-muted-foreground">
           <p>Ignorados: {ignorados}</p>
@@ -133,7 +141,9 @@ function ConCambios({ d }: { d: ConFoto }) {
         ) : null}
       </section>
       <div id={ID_NUEVOS} className="scroll-mt-4"><Lista titulo="Nuevos" datos={d.new} lista="new" abierta /></div>
-      <Lista titulo="Corregidos" datos={d.fixed} lista="fixed" />
+      <div id={ID_CORREGIDOS} className="scroll-mt-4">
+        <Lista key={verCorregidos ? `abierta-${verCorregidos}` : 'plegada'} titulo="Corregidos" datos={d.fixed} lista="fixed" abierta={verCorregidos > 0} />
+      </div>
       <Lista titulo="Se mantienen" datos={d.kept} lista="kept" />
       {d.ignored.total > 0 ? <Lista titulo="Ignorados" datos={d.ignored} lista="ignored" /> : null}
     </div>

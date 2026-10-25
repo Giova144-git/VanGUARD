@@ -28,8 +28,9 @@ orgs.post('/orgs', async (c) => {
   const admin = db(c.env);
   const uid = c.get('userId');
 
-  const { count, error: ec } = await admin.from('org_members').select('org_id', { count: 'exact', head: true })
-    .eq('user_id', uid).eq('role', 'owner');
+  // Su sandbox de «Ver demo» (0026) no cuenta: es volátil y la crea E4, no el usuario.
+  const { count, error: ec } = await admin.from('org_members').select('org_id, orgs!inner(sandbox_of)', { count: 'exact', head: true })
+    .eq('user_id', uid).eq('role', 'owner').is('orgs.sandbox_of', null);
   if (ec) {
     log('error', 'orgs.conteo_error', { rid: c.get('rid'), code: ec.code });
     throw new ApiError('internal', 'No pudimos crear la organización');

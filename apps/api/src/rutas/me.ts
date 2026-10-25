@@ -8,17 +8,18 @@ import { log } from '../lib/log.ts';
 // E2 · GET /api/me · user · P0. El usuario sale del JWT ya validado por auth; las orgs, de sus membresías.
 export const me = new Hono<AppEnv>();
 
-type Fila = { role: string; orgs: { id: string; name: string; is_demo: boolean } | null };
+type Fila = { role: string; orgs: { id: string; name: string; is_demo: boolean; sandbox_of?: string | null } | null };
 
 me.get('/me', async (c) => {
   const uid = c.get('userId');
-  const { data, error } = await db(c.env).from('org_members').select('role, orgs(id, name, is_demo)')
+  const { data, error } = await db(c.env).from('org_members').select('role, orgs(id, name, is_demo, sandbox_of)')
     .eq('user_id', uid).order('created_at');
   if (error) {
     log('error', 'me.error', { rid: c.get('rid'), code: error.code });
     throw new ApiError('internal', 'No pudimos cargar tus organizaciones');
   }
   const orgs = ((data ?? []) as unknown as Fila[]).flatMap((f) =>
-    f.orgs ? [{ id: f.orgs.id, name: f.orgs.name, role: f.role, is_demo: f.orgs.is_demo }] : []);
+    f.orgs ? [{ id: f.orgs.id, name: f.orgs.name, role: f.role, is_demo: f.orgs.is_demo,
+      sandbox: typeof f.orgs.sandbox_of === 'string' }] : []);   // sandbox: su copia de «Ver demo» (0026)
   return c.json(Me.parse({ user: { id: uid, email: c.get('email'), is_anonymous: c.get('isAnon') }, orgs }));
 });

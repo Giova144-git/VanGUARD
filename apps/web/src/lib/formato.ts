@@ -34,6 +34,14 @@ export function cuando(t?: string | Date | number | null, ahora = new Date()) { 
   if (Number.isNaN(d.getTime())) return SIN_DATO;
   return ddmm.format(d) === ddmm.format(ahora) ? hhmm.format(d) : `${ddmm.format(d).replace('/', '-')} ${hhmm.format(d)}`;
 }
+// Para frases (Vigía, la línea de tiempo de una falla): «hoy a las 14:04» · «el 24-10 a las 14:04». null si no es una
+// fecha: solo salen dígitos de Intl, nunca el texto que mandó el servidor.
+export function elDia(t?: string | Date | number | null, ahora = new Date()): string | null {
+  if (t == null || t === '' || t === 0) return null; const d = t instanceof Date ? t : new Date(t);
+  if (Number.isNaN(d.getTime())) return null;
+  const dia = ddmm.format(d);
+  return dia === ddmm.format(ahora) ? `hoy a las ${hhmm.format(d)}` : `el ${dia.replace('/', '-')} a las ${hhmm.format(d)}`;
+}
 // «hace un momento» · «hace 5 min» · «hace 3 h» · «hace 2 d».
 export function hace(t?: string | Date | number | null, ahora = new Date()) {
   if (t == null) return SIN_DATO;

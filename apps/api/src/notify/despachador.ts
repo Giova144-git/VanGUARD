@@ -15,7 +15,7 @@ import { log } from '../lib/log.ts';
 import { ventanaAbierta } from '../lib/verificacion.ts';
 import {
   cuerpoBotonLlamada, cuerpoInteractivo, cuerpoTexto, enmascararTelefono, enviarKapso, KapsoError, kapsoConfigurado,
-  type MensajeKapso,
+  TEXTO_BOTON_LLAMADA, type MensajeKapso,
 } from './kapso.ts';
 import { esperarLlamada, vozConfigurada } from './voz.ts';
 
@@ -130,7 +130,7 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
   const [c, o, u, t, accion, vo, vg] = await Promise.all([
     admin.from('contacts').select('id, phone_e164, whatsapp, voice, priority, verified_at, wa_last_inbound_at')
       .eq('org_id', orgId).order('priority').limit(10),
-    admin.from('orgs').select('is_demo').eq('id', orgId).maybeSingle(),
+    admin.from('orgs').select('is_demo, sandbox_of').eq('id', orgId).maybeSingle(),
     // used1h de 15.9: un aviso failed o skipped_cap no gasta tope. Los de la revisión de código tampoco (tienen su cupo,
     // TOPES_REVISION): unos pocos pushes no pueden dejar sin aviso un ataque real (revision-codigo.md §5).
     admin.from('notifications').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('channel', 'whatsapp')
@@ -157,6 +157,9 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     log('warn', 'despacho.uso_voz_error', { rid, incidente: inc.code, code: vo?.error?.code ?? vg?.error?.code ?? null });
   }
   const org = { is_demo: obj(o.data).is_demo === true };
+  // Sandbox de «Ver demo» (0026): nada sale por Kapso. Cada aviso queda como fila skipped con el texto que habría
+  // llegado (preview), y sus contactos cuentan como verificados porque no se les envía nada real.
+  const sandbox = typeof obj(o.data).sandbox_of === 'string';
   // M10 de §02.5.1: la ventana de alertas de la org de demo; si no se puede leer, cerrada (falla hacia no avisar).
   let hasta: string | null = null;
   if (org.is_demo) {
@@ -172,7 +175,7 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     storm = estadoTormenta(k, s.error ? true : (s.count ?? 0) > 0);   // sin saber, suprimida: nada de ráfagas
   }
 
-  const contactos = leerContactos(c.data);
+  const contactos = leerContactos(c.data).map((x) => (sandbox && !x.verified_at ? { ...x, verified_at: new Date(ahora).toISOString() } : x));
   const plan = planAvisos(aviso, contactos, { whatsapp: u.count ?? 0, voice: vozLeida ? vo?.count ?? 0 : 0 }, topesDeOrg(org),
     storm, new Date(ahora), { fueraDeVentanaDemo: fueraDeVentanaDemo(org, hasta, new Date(ahora)),
       ...(vozLeida ? { usoGlobal: { voice: vg?.count ?? 0 } } : {}) });
@@ -187,7 +190,7 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
     const m = moduloDeRegla(Array.isArray(ids) && typeof ids[0] === 'string' ? ids[0] : undefined);
     if (m) porModulo[m] = (porModulo[m] ?? 0) + 1;
   }
-  const ctx: Despacho = { env, admin, orgId, incidentId, inc, rid, ahora, k, porModulo, notificado: inc.notified_at !== null,
+  const ctx: Despacho = { env, admin, orgId, incidentId, inc, rid, ahora, k, porModulo, notificado: inc.notified_at !== null, sandbox,
     ipBloqueo: accion ? ipBloqueo : null,
     // Lo que queda del tope de WhatsApp de la hora tras los avisos que el plan deja salir (el 2.º mensaje también gasta).
     cupoWhatsapp: topesDeOrg(org).whatsapp - (u.count ?? 0)
@@ -216,6 +219,7 @@ async function despachar(env: CloudflareBindings, orgId: string, incidentId: str
 type Despacho = {
   env: CloudflareBindings; admin: Cliente; orgId: string; incidentId: string; inc: Incidente; rid: string; ahora: number;
   k: number; porModulo: Partial<Record<Module, number>>; notificado: boolean;
+  sandbox: boolean;           // org sandbox de «Ver demo» (0026): filas skipped con preview, nunca Kapso
   ipBloqueo: string | null;   // IP del botón blk, o null si no se ofrece
   cupoWhatsapp: number;       // WhatsApp que aún caben en el tope de la hora de la org
 };
@@ -239,6 +243,7 @@ async function enviarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<S
     // Fuera de producción (local, previews, *.workers.dev) nunca se envía nada real (S15 15.3): fila failed dry_run.
     const real = d.env.VG_ENV === 'production';
     const fila = p.status !== 'queued' ? { status: p.status, error: p.error ?? 'cap' }
+      : d.sandbox ? { status: 'skipped', error: 'sandbox', preview: textoPrevio(d, p) }
       : !real ? { status: 'failed', error: 'dry_run' }
       : !kapsoConfigurado(d.env) ? { status: 'failed', error: 'sin_config' }
       : null;
@@ -308,6 +313,7 @@ async function llamarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<S
   const registro = { rid: d.rid, incidente: d.inc.code, recipient_masked };
   try {
     const fila = p.status !== 'queued' ? { status: p.status, error: p.error ?? 'cap' }
+      : d.sandbox ? { status: 'skipped', error: 'sandbox', preview: TEXTO_BOTON_LLAMADA }
       : d.env.VG_ENV !== 'production' ? { status: 'failed', error: 'dry_run' }
       : !kapsoConfigurado(d.env) ? { status: 'failed', error: 'sin_config' }
       : !ventanaAbierta(d.env, contacto.wa_last_inbound_at, d.ahora) ? { status: 'failed', error: 'window_closed' } : null;
@@ -360,6 +366,18 @@ async function llamarUno(d: Despacho, p: Planned, contacto: Contacto): Promise<S
 // storm_v1: un texto sin botones. incident_v1 / incident_up_v1 / reopened_v1: el interactivo de §12.6 con ack, snz y, si
 // aplica, blk, un nonce nuevo por botón y su sha256 en approvals. Si approvals falla, la alerta sale igual como texto (la
 // alerta importa más que los botones; el ack queda en la app).
+// El texto que habría llegado (sin botones ni filas de approvals): lo guarda la fila skipped de una sandbox.
+function textoPrevio(d: Despacho, p: Planned): string {
+  try {
+    if (p.template === 'storm_v1') return textoTormenta(d.k, d.porModulo).slice(0, 2000);
+    if (p.template !== 'incident_v1' && p.template !== 'incident_up_v1' && p.template !== 'reopened_v1') return '';
+    const m = mensajeIncidente(d.inc, p.template);
+    return `${m.header}\n\n${m.body}\n\n${m.footer}`.slice(0, 2000);
+  } catch {
+    return '';
+  }
+}
+
 async function armarMensaje(d: Despacho, p: Planned, contacto: Contacto): Promise<MensajeKapso> {
   if (p.template === 'storm_v1') return cuerpoTexto(contacto.phone, textoTormenta(d.k, d.porModulo));
   if (p.template !== 'incident_v1' && p.template !== 'incident_up_v1' && p.template !== 'reopened_v1') throw new RangeError('PLANTILLA');
@@ -394,7 +412,7 @@ async function ofrecerBajoAtaque(d: Despacho, conAviso: readonly Contacto[]) {
   const registro = { rid: d.rid, incidente: d.inc.code };
   try {
     // Corte puro antes de leer nada: sin CF_IP_FLOOD, resuelto o sin host canónico no se ofrece nunca.
-    if (!ofreceBajoAtaque(d.inc, MIN_IPS_BAJO_ATAQUE).ofrece) return;
+    if (d.sandbox || !ofreceBajoAtaque(d.inc, MIN_IPS_BAJO_ATAQUE).ofrece) return;
     if (d.env.VG_ENV !== 'production' || !kapsoConfigurado(d.env)) return;
     // El 2.º mensaje gasta del mismo tope por hora que los avisos (TOPES_AVISOS.whatsapp): sin cupo, no sale.
     if (d.cupoWhatsapp <= 0) {

@@ -20,8 +20,9 @@ export async function conexionActiva(env: CloudflareBindings, m: MsgScan, provid
   const admin = db(env);
   const { data: scan } = await admin.from('scan_runs').select('params').eq('id', m.scan_run_id).eq('org_id', m.org_id).maybeSingle();
   const pedida = (scan?.params as { connection_id?: string } | undefined)?.connection_id;
+  // meta.demostracion: copia de la demo en una sandbox de «Ver demo» (0026), sin secreto: nunca se audita.
   let q = admin.from('connections').select('id, meta, capabilities').eq('org_id', m.org_id).eq('provider', provider)
-    .eq('kind', 'read').eq('status', 'active');
+    .eq('kind', 'read').eq('status', 'active').is('meta->>demostracion', null);
   if (pedida) q = q.eq('id', pedida);
   const asc = provider === 'github';
   const { data, error } = await q.order('created_at', { ascending: asc }).order('id', { ascending: asc }).limit(1).maybeSingle();

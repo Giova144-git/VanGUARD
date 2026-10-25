@@ -21,6 +21,7 @@ import { repoParaArreglar } from '@/lib/mcp';
 import { cuando } from '@/lib/formato';
 import { usePatchHallazgo } from '@/lib/mutaciones';
 import { porQueImporta, referencias } from '@/lib/reglas-texto';
+import { LineaTiempoFalla } from '@/modulos/evolucion/LineaTiempoFalla';
 import { useRepoDeConexion } from '@/lib/repos';
 import { deMapa, type Rol } from '@/lib/severidad';
 import { PromptCorreccion } from './PromptCorreccion';
@@ -116,6 +117,12 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
           <p className="text-[15px] leading-relaxed">{texto}</p>
         </section>
       ) : null}
+
+      {/* Fuera de la cabecera (data-hallazgo): aquí el clic derecho explica la línea de tiempo. */}
+      <section className="flex flex-col gap-2" aria-label="Historial">
+        <h3 className="text-[15px] font-semibold">Historial</h3>
+        <LineaTiempoFalla org={org} id={f.id} />
+      </section>
 
       <Acciones org={org} f={f} puedeEscribir={puedeEscribir} />
 

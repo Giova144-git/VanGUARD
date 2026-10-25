@@ -10,7 +10,8 @@ import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
 import { aFila } from './ingest.ts';
 
-// E57 · POST /api/orgs/:org/incidents/simulate · admin · solo la org de demo (asignaciones/llamada-ataque.md §B2).
+// E57 · POST /api/orgs/:org/incidents/simulate · admin · solo la org de demo y las sandboxes de «Ver demo» (0026)
+// (asignaciones/llamada-ataque.md §B2).
 // «Simular ataque» por el MOTOR REAL: eventos de borde sintéticos con la forma de EdgeEvent (eventosSimulados de core,
 // desde una IP de TEST-NET-3 contra la víctima de la demo), validados con IngestBatch en lotes de ≤ 100 como /ingest y
 // normalizados con su aFila, a edge_hits por la conexión ingest del simulador (connections.meta.simulador, sin secreto:
@@ -29,7 +30,10 @@ export const simular = new Hono<AppEnv>();
 simular.post('/orgs/:org/incidents/simulate', requireAdmin, async (c) => {
   const orgId = c.get('orgId');
   const rid = c.get('rid');
-  if (orgId !== ORG_DEMO) throw new ApiError('forbidden', 'Solo se puede simular un ataque en la organización de demo');
+  // La org de demo y las sandboxes de «Ver demo» (0026: copias suyas, con su conexión del simulador y sin WhatsApp real).
+  if (orgId !== ORG_DEMO && !c.get('sandbox')) {
+    throw new ApiError('forbidden', 'Solo se puede simular un ataque en la organización de demo');
+  }
   const { kind } = await cuerpo(c, SimulateAttackIn);
   const admin = db(c.env);
 

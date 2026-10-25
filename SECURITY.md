@@ -34,7 +34,7 @@ afirmación cita el archivo que la respalda. Lo que aún no está hecho va en la
 | Principio | Cómo se cumple | Dónde |
 |---|---|---|
 | **Solo lectura por defecto** | Supabase: PAT con alcance a un proyecto; a la base del cliente solo van tres consultas SQL fijas de la auditoría (más un `select 1` en el sondeo) por `/database/query/read-only`; el endpoint de escritura `POST /database/query` no aparece en el código. Cloudflare: token de lectura. GitHub: token fine-grained (`github_pat_`) de solo lectura; la guía pide marcar un solo repo. La única escritura es «Bloquear IP» (sección 5), con otro token y confirmación humana. | `packages/core/src/rules/supabase.ts` (`SQL_SUPABASE`), `apps/api/src/scans/supabase.ts` (`sqlRead`, `probarSupabase`), `apps/api/src/rutas/connections.ts`, `apps/web/src/lib/guias.ts` |
-| **Mínimo privilegio** | Rechazamos tokens con más poder del necesario (3.1). El navegador no tiene ningún permiso sobre las tablas (4). La clave `service_role` solo vive en el Worker. Las funciones `security definer` de `public` solo las ejecuta `service_role`; `authenticated` solo ejecuta tres auxiliares de `private` que devuelven ids de orgs para las políticas RLS (`user_org_ids`, `user_admin_org_ids`, `demo_org_ids`). Una sesión anónima solo lee la org de demo. | `supabase/migrations/0008h_revoke_public_authenticated.sql`, `supabase/migrations/0008d_revoke_join_demo_org.sql`, `supabase/tests/rls.sql` |
+| **Mínimo privilegio** | Rechazamos tokens con más poder del necesario (3.1). El navegador no tiene ningún permiso sobre las tablas (4). La clave `service_role` solo vive en el Worker. Las funciones `security definer` de `public` solo las ejecuta `service_role`; `authenticated` solo ejecuta tres auxiliares de `private` que devuelven ids de orgs para las políticas RLS (`user_org_ids`, `user_admin_org_ids`, `demo_org_ids`). Una sesión anónima solo lee la org de demo y, con el modelo de sandbox de «Ver demo» (`0026_sandbox_demo.sql`, en `develop` y sin aplicar), escribe solo en SU copia volátil: `demo_org_ids()` pasa a devolver la demo y las sandboxes, siempre cruzado con `user_org_ids()`. | `supabase/migrations/0008h_revoke_public_authenticated.sql`, `supabase/migrations/0008d_revoke_join_demo_org.sql`, `supabase/migrations/0026_sandbox_demo.sql`, `supabase/tests/rls.sql`, `supabase/tests/sandbox.sql` |
 | **La IA nunca decide** | Detectar, puntuar, alertar y bloquear lo hacen reglas deterministas y personas. El modelo solo redacta texto y no tiene herramientas (7). | `apps/api/src/ia/claude.ts` |
 | **Fallo cerrado** | Webhook sin secreto o con firma ilegible → 401. Sin libro de gasto → sin IA. Sondeo negativo incompleto → el token no se guarda. Respuesta con forma inesperada → la fuente cuenta como no mirada, nunca como sana. | `apps/api/src/lib/hmac.ts`, `apps/api/src/ia/budget.ts`, `apps/api/src/scans/supabase.ts` |
 | **Nada sensible en logs ni errores** | `log()` pasa todo por `redact()`. Los errores nunca incluyen `err.message` ni el cuerpo del proveedor (pueden llevar un token). | `apps/api/src/lib/log.ts`, `apps/api/src/mw/error.ts`, `apps/api/src/lib/http.ts` |
@@ -154,7 +154,20 @@ En el Worker (orden de middlewares en `apps/api/src/app.ts`):
    `org_id`: un id de otra org da el mismo 404 que uno inexistente. En la ingesta, la org sale de la fila de la
    conexión, no de una cabecera.
 4. Escrituras: `requireAdmin` (owner o admin) y `anonReadOnly` (la sesión anónima no escribe). Un anónimo no crea orgs
-   (`apps/api/src/rutas/orgs.ts`) y entra como `viewer` de la org de demo (`apps/api/src/rutas/demo.ts`).
+   (`apps/api/src/rutas/orgs.ts`). **Sandbox de «Ver demo»** (`0026_sandbox_demo.sql`, en `develop` y sin aplicar):
+   E4 `POST /api/demo/join` ya no une a nadie como viewer a la demo compartida; da a cada usuario, anónimo o con cuenta,
+   SU copia de la demo como `owner` (una viva por usuario, que no cuenta para el máximo de 3 orgs). `orgMember` lee
+   `orgs.sandbox_of` y fija `c.get('sandbox')` desde la base: el anónimo escribe en su sandbox y en nada más (en la demo
+   sigue en solo lectura; la de otro da 404). La copia vive mientras la web late (E4b `POST /api/demo/latido`). Al cerrar la
+   pestaña, E4d `POST /api/demo/cerrando` (pagehide, fetch `keepalive` con `Authorization`) no borra: pone `cierra_en`
+   a 20 s, y el latido de una recarga lo anula. `pg_cron` borra en cascada cada minuto (`private.vg_purgar_sandboxes`)
+   las sandboxes sin latido desde hace 10 min o con `cierra_en` vencido, junto con su dueño anónimo si se queda sin orgs;
+   E4c `POST /api/demo/salir` la borra ya. Topes: 10 sandboxes por IP y hora (IP como HMAC con
+   `VG_FP_PEPPER`), 200 vivas, IA 0,20 USD/día. En una sandbox nada toca lo real: Cloudflare en seco (`provider_ref`
+   `simulado:…`, sin conexiones `kind = 'action'`, trigger en la base), WhatsApp registrado como `skipped` con el texto
+   que habría llegado y nunca por Kapso, contactos sin verificación, auditoría en «replay» si no hay conexiones propias.
+   Detalle y límites: `THREAT_MODEL.md`, T22 (sección 6.6). Código: `apps/api/src/rutas/demo.ts`,
+   `apps/api/src/actions/sandbox.ts`, `apps/api/src/mw/{org,anon,admin}.ts`.
 
 Se prueba con `test:idor`, `supabase/tests/rls.sql` y el arnés del FRONT (sección 12).
 
@@ -434,8 +447,8 @@ con esa tolerancia: por eso se bajó la carga por paso y se puso tope al tamaño
 | `style-src 'unsafe-inline'` | Los diálogos de Radix (`react-remove-scroll-bar`) inyectan un `<style>` | `script-src 'self'` sin inline; `lint-seguridad` y arnés XSS |
 | Sesión de Supabase en `localStorage` | Comportamiento por defecto de supabase-js (`apps/web/src/lib/supabase.ts`) | CSP sin scripts externos ni inline; `lint-seguridad`; arnés XSS |
 | Registro con correo abierto, sin confirmación y sin CAPTCHA | Fricción mínima para el jurado; las cuentas no reciben correo | Cada cuenta solo ve sus propias orgs; CAPTCHA en la hoja de ruta |
-| Inicio de sesión anónimo activo («Ver demo») | El jurado ve el producto sin crear cuenta | Solo `viewer` de la org de demo, sin escritura (`apps/api/src/mw/anon.ts`); se borran a los 7 días |
-| En la org de demo, el código de bloqueo puede volver en la respuesta | La demo no debe depender de que WhatsApp entregue | Solo en la org `is_demo`; en las demás, 502 sin crear nada (`proponerBloqueo` en `apps/api/src/actions/approvals.ts`). El bloqueo dura 1 h y tiene «Deshacer» |
+| Inicio de sesión anónimo activo («Ver demo») | El jurado ve el producto sin crear cuenta | Hoy: solo `viewer` de la org de demo, sin escritura (`apps/api/src/mw/anon.ts`); se borran a los 7 días. Con la sandbox (`0026`, en `develop` y sin aplicar): owner de SU copia volátil y de nada más; la copia y el anónimo se borran a los 10 min sin latido, ~20 s después de cerrar la pestaña (si no recarga) o al salir; 10 por IP y hora, 200 vivas; nada sale a Cloudflare ni a Kapso (`THREAT_MODEL.md`, T22) |
+| En la org de demo, el código de bloqueo puede volver en la respuesta | La demo no debe depender de que WhatsApp entregue | Solo en la org `is_demo` y en las sandboxes de «Ver demo» (donde la acción es en seco y no toca Cloudflare: `apps/api/src/actions/sandbox.ts`); en las demás, 502 sin crear nada (`proponerBloqueo` en `apps/api/src/actions/approvals.ts`). El bloqueo dura 1 h y tiene «Deshacer» |
 | Los botones de WhatsApp no comprueban la IP propia | El webhook no trae la IP de quien pulsa | El remitente debe ser un contacto verificado de la org; nonce de un solo uso que vence en 10 min |
 | Bot Fight Mode apagado | En Free no admite excepciones y desafiaría a los webhooks, que no ejecutan JavaScript | Límites del Worker y la regla de rate limit de la zona en `/api/` (sección 10) |
 | La regla de rate limit de la zona no filtra por host (limitación de Free) y no está versionada (sección 10) | Contaría también `/api/*` de `demo.officialvanguard.com` cuando exista | Umbral de 400/10 s, por encima del ataque simulado de la demo (~20 req/s). Aun así, una sola IP insistente podría agotar la cuota diaria de 100.000 peticiones del Worker |

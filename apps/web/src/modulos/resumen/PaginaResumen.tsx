@@ -1,6 +1,5 @@
 // /o/:orgId/overview (S14 §14.11). Orden fijo: barra → puntaje + «Auditar todo» → barra por severidad → cifras →
 // «Ahora» → tarjetas por vertical. La API decide (L1): aquí no se recuenta nada, solo se pinta `overview`.
-import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ChevronRight, Cloud, Database, GitBranch, ShieldCheck, type LucideIcon } from 'lucide-react';
 import type { AhoraItem, ConnectionPublic, Module } from '@vanguard/contracts';
@@ -20,12 +19,11 @@ import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { BotonEnviarAMiIA, EstadoEnvioIA } from '@/modulos/hallazgos/EnviarAMiIA';
+import { AvisoSinFuentes, useAuditarTodo } from '@/modulos/auditoria/useAuditarTodo';
 import { DesdeAnterior } from '@/modulos/evolucion/DesdeAnterior';
 import { useConexiones, useEnvioIA, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { repoParaArreglar } from '@/lib/mcp';
-import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
-import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
@@ -99,28 +97,14 @@ function TarjetaVertical({ org, modulo, proveedor, icono: Icono, conexiones, pue
 
 export default function PaginaResumen() {
   const org = useOrg();
-  const navegar = useNavigate();
   const q = useOverview(org.id);
   const conexiones = useConexiones(org.id);
   const repoDe = useRepoDeConexion(org.id);
-  const lanzar = useLanzarScan(org.id);
-  const [errorAuditar, setErrorAuditar] = useState<string | null>(null);
+  const { auditar, ocupado, error: errorAuditar, sinFuentes } = useAuditarTodo();
   const o = q.data;
   const e = entradaNav('overview')!;
   // «24-10 22:35» no cabe en la cifra: la hora va de valor y la fecha, si no es de hoy, de sub.
   const [diaAud, horaAud] = o?.last_scan ? cuando(o.last_scan.finished_at).split(' ') : [];
-
-  const auditar = () => {
-    setErrorAuditar(null);
-    lanzar.mutate({ kind: 'full_audit' }, {
-      onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),
-      onError: (err) => {
-        const enCurso = esApiError(err) && err.code === 'conflict' && typeof err.details?.scan_run_id === 'string' ? err.details.scan_run_id : null;
-        if (enCurso) navegar(`/o/${org.id}/audit/${encodeURIComponent(enCurso)}`);   // ya hay una del mismo tipo corriendo
-        else setErrorAuditar(mensajeDe(err));                               // 429 budget_exceeded: el mensaje del servidor
-      },
-    });
-  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -132,8 +116,9 @@ export default function PaginaResumen() {
         {/* Sin `o` pinta la misma estructura con «—»: la sección no crece al llegar el dato (L7). */}
         <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} />
         <div className="flex flex-col items-start gap-2">
-          <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
+          <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={ocupado}
             disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
+          {sinFuentes && org.puedeEscribir ? <AvisoSinFuentes /> : null}
           {errorAuditar ? <span role="alert" className="max-w-xs text-sm text-mal">{errorAuditar}</span> : null}
           {o?.last_scan ? (
             <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}

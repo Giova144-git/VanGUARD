@@ -8,7 +8,7 @@ import { db } from '../lib/db.ts';
 import { ApiError } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
-import { requireAdmin } from '../mw/admin.ts';
+import { administra, requireAdmin } from '../mw/admin.ts';
 
 // E13 · GET findings, E13b · GET findings/:id y E14 · PATCH findings/:id (S15 15.4). El texto de fix_prompt lo da E15.
 export const findings = new Hono<AppEnv>();
@@ -124,8 +124,7 @@ findings.post('/orgs/:org/findings/:id/fix-prompt', async (c) => {
   if (typeof f.fix_prompt === 'string' && f.fix_prompt) {
     return c.json(FixPromptResponse.parse({ ...promptSinIA(f, flavor), injection_flags: [] }));
   }
-  const rol = c.get('role');
-  if (c.get('isAnon') || (rol !== 'owner' && rol !== 'admin')) {
+  if (!administra(c)) {
     throw new ApiError('forbidden', 'Este prompt todavía no está generado. Pídeselo a un administrador de la organización.');
   }
   const r = await pedirFixPrompt(c.env, { org_id: orgId, hallazgo: { rule_id: f.rule_id, severity: f.severity,

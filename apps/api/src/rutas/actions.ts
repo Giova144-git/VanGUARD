@@ -15,7 +15,8 @@ import { ApiError, fail } from '../lib/errors.ts';
 import { activeKid, getKeys } from '../lib/keyring.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
-import { requireProdHost } from '../mw/prod-host.ts';
+import { requireProdHostOSandbox } from '../mw/prod-host.ts';
+import { deshacerEnSeco, ejecutarEnSeco, proponerBloqueoSandbox } from '../actions/sandbox.ts';
 
 // E20 · POST actions/propose, E21 · POST actions/:approvalId/confirm y E22 · POST actions/:actionId/undo · admin · solo
 // officialvanguard.com · P0 (S15 15.4, §08.8, §12.9). propose nunca toca Cloudflare: simula y crea las aprobaciones de
@@ -23,6 +24,8 @@ import { requireProdHost } from '../mw/prod-host.ts';
 // usa el botón ok de WhatsApp; undo borra la regla. Anti-IDOR: aprobación y acción se leen por id Y org_id (otra org → 404).
 // E21 y E22 despachan por tipo en la primera línea (modo-bajo-ataque.md §5): under_attack_on va a confirmarBajoAtaque y a
 // deshacerModoBajoAtaque (abajo); la rama block_ip no cambia. Proponer el modo bajo ataque es E56 (rutas/bajo-ataque.ts).
+// En una sandbox de «Ver demo» (0026, c.get('sandbox') sale de la base) las tres van en seco (actions/sandbox.ts): el
+// mismo código de 6 dígitos y el mismo canje, pero ninguna llamada a Cloudflare; por eso no exigen el host de producción.
 export const actions = new Hono<AppEnv>();
 
 type Fila = Record<string, unknown>;
@@ -63,7 +66,7 @@ const idDe = (raw: string | undefined, mensaje: string) => {
   return r.data;
 };
 
-actions.post('/orgs/:org/actions/propose', requireAdmin, requireProdHost, async (c) => {
+actions.post('/orgs/:org/actions/propose', requireAdmin, requireProdHostOSandbox, async (c) => {
   const limitado = await limitar(c, `u:${c.get('userId')}`);
   if (limitado) return limitado;
   const body = await cuerpo(c, ProposeAction);
@@ -85,6 +88,13 @@ actions.post('/orgs/:org/actions/propose', requireAdmin, requireProdHost, async 
   const incidente = leerIncidenteBloqueo(data);
   if (!incidente) throw new ApiError('not_found', 'Incidente no encontrado');
 
+  if (c.get('sandbox')) {
+    const s = await proponerBloqueoSandbox(c.env, { orgId, incidente, target: body.target, requestedBy: c.get('userId'), rid,
+      ipOperador: c.req.header('cf-connecting-ip') ?? null });
+    if (s.ok) return c.json(s.respuesta);
+    if (s.motivo === 'ip') throw new ApiError('invalid_body', MENSAJE_IP[s.reason] ?? 'No se puede bloquear esa IP', { reason: s.reason });
+    throw new ApiError('conflict', 'Esa IP ya está bloqueada', { reason: 'already_blocked', action_id: s.action_id });
+  }
   const r = await proponerBloqueo(c.env, { orgId, incidente, target: body.target, connectionId: body.connection_id, rid,
     entrega: 'app', requestedBy: c.get('userId'), ipOperador: c.req.header('cf-connecting-ip') ?? null });
   if (!r.ok) {
@@ -116,7 +126,7 @@ async function motivoSinCanje(c: Context<AppEnv>, id: string): Promise<never> {
   throw new ApiError('invalid_body', 'Código incorrecto', { reason: 'wrong_code', attempts_left: MAX_INTENTOS - intentos });
 }
 
-actions.post('/orgs/:org/actions/:approvalId/confirm', requireAdmin, requireProdHost, async (c) => {
+actions.post('/orgs/:org/actions/:approvalId/confirm', requireAdmin, requireProdHostOSandbox, async (c) => {
   const id = idDe(c.req.param('approvalId'), 'Aprobación no encontrada');
   const { code } = await cuerpo(c, ConfirmBody);
   const limitado = await limitar(c, `otp:${id}`);
@@ -147,6 +157,7 @@ actions.post('/orgs/:org/actions/:approvalId/confirm', requireAdmin, requireProd
   const fila = (Array.isArray(data) ? data[0] : data) as Fila | null | undefined;
   if (!fila || fila.id !== id) return motivoSinCanje(c, id);
 
+  if (c.get('sandbox')) return respuestaEnSeco(c, fila);
   const x = await executeBlock(c.env, fila as unknown as AprobacionCanjeada, { rid });
   log('info', 'accion.confirmada', { rid, user: userId, resultado: x.tipo, action_id: 'action_id' in x ? x.action_id : null });
   if (x.tipo === 'ejecutado') return c.json(RespuestaEscritura.parse({ ok: true, resultado: x.resultado, en: x.en, action_id: x.action_id }));
@@ -159,7 +170,7 @@ actions.post('/orgs/:org/actions/:approvalId/confirm', requireAdmin, requireProd
   throw new ApiError('internal', 'La aprobación está incompleta. Vuelve a proponer el bloqueo.');
 });
 
-actions.post('/orgs/:org/actions/:actionId/undo', requireAdmin, requireProdHost, async (c) => {
+actions.post('/orgs/:org/actions/:actionId/undo', requireAdmin, requireProdHostOSandbox, async (c) => {
   const id = idDe(c.req.param('actionId'), 'Acción no encontrada');
   const orgId = c.get('orgId');
   const rid = c.get('rid');
@@ -170,6 +181,7 @@ actions.post('/orgs/:org/actions/:actionId/undo', requireAdmin, requireProdHost,
     throw new ApiError('internal', 'No pudimos leer la acción');
   }
   const accion = data as Fila | null;
+  if (c.get('sandbox') && (accion?.kind === 'block_ip' || accion?.kind === 'under_attack_on')) return deshacerSandbox(c, id, accion);
   if (accion?.kind === 'under_attack_on') return deshacerModoBajoAtaque(c, id, accion);
   if (!accion || accion.kind !== 'block_ip') throw new ApiError('not_found', 'Acción no encontrada');
   if (accion.status === 'undone') throw new ApiError('conflict', 'Ese bloqueo ya estaba retirado', { reason: 'undone' });
@@ -206,6 +218,7 @@ async function confirmarBajoAtaque(c: Context<AppEnv>, id: string, code: string,
   const fila = (Array.isArray(data) ? data[0] : data) as Fila | null | undefined;
   if (!fila || fila.id !== id) return motivoSinCanje(c, id);
 
+  if (c.get('sandbox')) return respuestaEnSeco(c, fila);
   const x = await executeUnderAttack(c.env, fila as unknown as AprobacionCanjeada, { rid });
   log('info', 'accion.bajo_ataque_confirmado', { rid, user: userId, resultado: x.tipo,
     action_id: 'action_id' in x ? x.action_id : null });
@@ -249,4 +262,29 @@ async function deshacerModoBajoAtaque(c: Context<AppEnv>, id: string, accion: Fi
   }
   if (r === 'caido') throw new ApiError('provider_unavailable', MENSAJE_DESHACER_BAJO_ATAQUE.caido);
   return c.json(RespuestaEscritura.parse({ ok: false, error: MENSAJE_DESHACER_BAJO_ATAQUE[r] }));
+}
+
+// ── Sandbox de «Ver demo» (0026): E21 y E22 en seco ─────────────────────────────────────────────────────────────────────
+async function respuestaEnSeco(c: Context<AppEnv>, fila: Fila) {
+  const x = await ejecutarEnSeco(c.env, fila, c.get('rid'));
+  log('info', 'accion.confirmada_en_seco', { rid: c.get('rid'), user: c.get('userId'), resultado: x.tipo,
+    action_id: x.tipo === 'ejecutado' ? x.action_id : null });
+  if (x.tipo === 'ejecutado') return c.json(RespuestaEscritura.parse({ ok: true, resultado: x.resultado, en: x.en, action_id: x.action_id }));
+  throw new ApiError('internal', 'La aprobación está incompleta. Vuelve a proponerlo.');
+}
+
+async function deshacerSandbox(c: Context<AppEnv>, id: string, accion: Fila) {
+  const bloqueo = accion.kind === 'block_ip';
+  if (accion.status === 'undone') {
+    throw new ApiError('conflict', bloqueo ? 'Ese bloqueo ya estaba retirado' : 'El modo bajo ataque ya estaba desactivado', { reason: 'undone' });
+  }
+  if (accion.status !== 'executed') {
+    throw new ApiError('conflict', bloqueo ? 'No hay ningún bloqueo activo que retirar' : 'No hay ningún modo bajo ataque activo que retirar',
+      { reason: 'not_executed' });
+  }
+  const hechas = await deshacerEnSeco(c.env, [{ id, org_id: c.get('orgId') }], c.get('rid'));
+  if (!hechas.has(id)) throw new ApiError('internal', 'No pudimos retirar la acción');
+  log('info', 'accion.deshacer_en_seco', { rid: c.get('rid'), user: c.get('userId'), action_id: id });
+  return c.json(RespuestaEscritura.parse({ ok: true, resultado: bloqueo ? 'Bloqueo retirado' : 'Modo bajo ataque desactivado',
+    en: new Date().toISOString() }));
 }

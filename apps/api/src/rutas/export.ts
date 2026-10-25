@@ -58,8 +58,9 @@ type FilaPerf = { url: string; strategy: string; scores: unknown; metrics: unkno
 exportRuta.get('/orgs/:org/export', async (c) => {
   const p = parametros(c.req.query());
   const rol = c.get('role');
-  if (p.ips === 'full' && (c.get('isAnon') || (rol !== 'owner' && rol !== 'admin'))) {
-    // En la demo la IP atacante es la del hotspot de un integrante (S13 13.2): completa solo para quien administra.
+  if (p.ips === 'full' && (c.get('isAnon') || c.get('sandbox') || (rol !== 'owner' && rol !== 'admin'))) {
+    // En la demo la IP atacante es la del hotspot de un integrante (S13 13.2): completa solo para quien administra, y
+    // nunca desde una sandbox (0026), cuyos incidentes son copia de los de la demo.
     throw new ApiError('forbidden', 'Solo un administrador puede exportar las IPs completas');
   }
   const { success } = await c.env.RL_COSTLY.limit({ key: `u:${c.get('userId')}` });

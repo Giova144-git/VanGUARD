@@ -47,7 +47,7 @@ describe('Cambios', () => {
   it('con anterior: cabecera, cifras, módulos y la lista de nuevos abierta (el viewer ve lo mismo)', () => {
     const html = pintar(DELTA);
     const t = texto(html);
-    expect(t).toMatch(/Frente a la auditoría del vie\.? 23 · 14:04 · puntaje 57 → 20/);
+    expect(t).toMatch(/Frente a la auditoría anterior \(23-10 14:04\) · puntaje 57 → 20/);
     expect(t).toContain('Nuevos7');
     expect(t).toContain('Se mantienen5');
     expect(t).toContain('Corregidos2');

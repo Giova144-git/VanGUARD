@@ -135,7 +135,9 @@ export default function PaginaResumen() {
 
       <section className="flex flex-wrap items-end justify-between gap-6 rounded-xl border bg-card p-5" aria-label="Puntaje">
         {/* Sin `o` pinta la misma estructura con «—»: la sección no crece al llegar el dato (L7). */}
-        <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} />
+        <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined}
+          conectados={conexiones.data?.filter((c) => c.kind === 'read' && c.status === 'active')
+            .map((c) => (c.provider === 'github' ? 'codebase' : c.provider))} />
         <div className="flex flex-col items-start gap-2">
           <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
             disabled={!org.puedeEscribir || previa} ayuda={!org.puedeEscribir ? SOLO_LECTURA : SIN_COLA} data-info="auditar-todo">Auditar todo</BotonAccion>

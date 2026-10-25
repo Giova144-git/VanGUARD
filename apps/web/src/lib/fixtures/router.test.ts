@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixtures as fx, AlertPrefs, CodeReviewSaved, CodeReviewState, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
+import { fixtures as fx, AlertPrefs, CodeReviewSaved, CodeReviewState, Finding, ScanRun, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type IncidentDetail, type WikiRun } from '@vanguard/contracts';
 import type { ApiError } from '../errores';
 import { fixtureFetch, simularAtaque } from './router';
 
@@ -378,5 +378,57 @@ describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo
     expect(despues).toMatchObject({ review_whatsapp_min: 'medium', review_voice_min: 'off' });
     expect(despues.updated_at).not.toBeNull();
     expect(await fallo(`/api/orgs/${DEMO}/alert-prefs`, 'PUT', { review_whatsapp_min: 'altisima', review_voice_min: 'off' })).toMatchObject({ status: 422 });
+  });
+});
+
+describe('modo bajo ataque (E55, E56, E21 y E22; asignaciones/modo-bajo-ataque.md §9)', () => {
+  const INC = fx.incidentDetail.id;
+  const E55 = (org = DEMO, id = INC) => `/api/orgs/${org}/incidents/${id}/under-attack`;
+  type Oferta = { ofrece: boolean; motivo: string | null; activo: { action_id: string; expires_at: string; created_at: string } | null };
+
+  it('una org ajena o un incidente de otra org responden 404 a E55 y E56', async () => {
+    expect(await fallo(E55(AJENA))).toMatchObject({ status: 404, message: 'Organización no encontrada' });
+    expect(await fallo(`${E55(AJENA)}/propose`, 'POST', {})).toMatchObject({ status: 404, message: 'Organización no encontrada' });
+    expect(await fallo(E55(nueva))).toMatchObject({ status: 404, message: 'Este incidente no existe' });
+    expect(await fallo(`${E55(nueva)}/propose`, 'POST', {})).toMatchObject({ status: 404 });
+  });
+
+  it('la demo ofrece el modo en la inundación; el ensayo (sin CF_IP_FLOOD) no aplica; el anónimo no puede proponer', async () => {
+    expect(await pedir(E55())).toEqual(fx.underAttackOffer);
+    expect(await pedir(E55(DEMO, fx.incidents[1]!.id))).toMatchObject({ ofrece: false, motivo: 'no_aplica', ips: 0, scopes: [] });
+    expect(await fallo(`${E55(DEMO, fx.incidents[1]!.id)}/propose`, 'POST', {})).toMatchObject({ status: 422, details: { reason: 'no_aplica' } });
+    sesion.tipo = 'anonima';
+    expect(await pedir(E55())).toEqual(fx.underAttackOffer);                 // E55 es de lectura: el viewer también la ve
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 403 });
+  });
+
+  it('propose → confirm (activo 30 min, id ACTION_BAJO_ATAQUE) → E55 con activo → 409 al proponer otra vez → undo', async () => {
+    const p = await pedir<{ approval_id: string; expires_at: string }>(`${E55()}/propose`, 'POST', { scope: 'host' });
+    const { expires_at: _fija, ...resto } = fx.underAttackProposal;
+    expect(p).toMatchObject(resto);
+    expect(Date.parse(p.expires_at) - Date.now()).toBeGreaterThan(599_000);   // reescrita con el reloj, no la fija del fixture
+    expect(p.approval_id).toBe(fx.underAttackProposal.approval_id);
+    expect(await fallo(`/api/orgs/${nueva}/actions/${p.approval_id}/confirm`, 'POST', { code: '123456' })).toMatchObject({ status: 404 });
+    const r = await pedir<{ ok: boolean; action_id: string }>(`/api/orgs/${DEMO}/actions/${p.approval_id}/confirm`, 'POST', { code: '123456' });
+    expect(r).toMatchObject({ ok: true, action_id: 'ac000000-0000-4000-8000-000000000001' });
+    const o = await pedir<Oferta>(E55());
+    expect(o.activo).toMatchObject({ action_id: r.action_id, scope: 'host', target: 'demo.officialvanguard.com', retirada_fallida: false });
+    expect(Date.parse(o.activo!.expires_at) - Date.parse(o.activo!.created_at)).toBe(30 * 60_000);
+    const i = await pedir<IncidentDetail>(`/api/orgs/${DEMO}/incidents/${INC}`);
+    expect(i.status).toBe('mitigated');
+    expect(i.actions).toContainEqual(expect.objectContaining({ id: r.action_id, kind: 'under_attack_on', status: 'executed' }));
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 409, details: { reason: 'already_active', action_id: r.action_id } });
+    expect(await pedir(`/api/orgs/${DEMO}/actions/${r.action_id}/undo`, 'POST', {})).toMatchObject({ ok: true, resultado: 'Modo bajo ataque desactivado' });
+    expect((await pedir<Oferta>(E55())).activo).toBeNull();
+    expect((await pedir<IncidentDetail>(`/api/orgs/${DEMO}/incidents/${INC}`)).status).toBe('open');
+    expect(await fallo(`/api/orgs/${DEMO}/actions/${r.action_id}/undo`, 'POST', {})).toMatchObject({ status: 409 });
+  });
+
+  it('sin Modo blindaje: E55 dice sin_conexion y E56 da 409 no_action_connection', async () => {
+    const lista = await pedir<ConnectionPublic[]>(`/api/orgs/${DEMO}/connections`);
+    const accion = lista.find((c) => c.provider === 'cloudflare' && c.kind === 'action')!;
+    await pedir(`/api/orgs/${DEMO}/connections/${accion.id}`, 'DELETE');
+    expect(await pedir(E55())).toMatchObject({ ofrece: false, motivo: 'sin_conexion', connection_id: null });
+    expect(await fallo(`${E55()}/propose`, 'POST', {})).toMatchObject({ status: 409, details: { reason: 'no_action_connection' } });
   });
 });

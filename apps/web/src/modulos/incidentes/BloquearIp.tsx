@@ -2,7 +2,7 @@
 // también llega por el botón «Sí, bloquear» de WhatsApp (A8): si el incidente refrescado trae un block_ip executed
 // creado después de abrir la vista, se pasa a «hecho» solo.
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react';
-import { Ban, Undo2 } from 'lucide-react';
+import { Ban, Undo2, type LucideIcon } from 'lucide-react';
 import type { ActionPublic, ProposeResponse } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Input } from '@/componentes/ui/input';
@@ -181,10 +181,13 @@ export function BloquearIp({ org, incidentId, ip, ejecutada, puedeEscribir }: {
 }
 
 // Vista de la propuesta (efecto, avisos y code del servidor) con el campo del código. Presentación pura: el estado vive
-// en BloquearIp. Exportada para el arnés de XSS.
-export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, campo, alConfirmar, alCancelar, alVencer }: {
+// en BloquearIp (y en BajoAtaque, que cambia el verbo y el icono, y no tiene botón en el WhatsApp). Exportada para el
+// arnés de XSS.
+export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, campo, alConfirmar, alCancelar, alVencer,
+  verbo = 'Confirmar bloqueo', icono: Icono = Ban, conBotonWhatsapp = true }: {
   p: ProposeResponse; codigo: string; alCambiarCodigo: (v: string) => void; error?: string; escribiendo: boolean;
   campo?: Ref<HTMLInputElement>; alConfirmar: (ev: FormEvent) => void; alCancelar: () => void; alVencer: () => void;
+  verbo?: string; icono?: LucideIcon; conBotonWhatsapp?: boolean;
 }) {
   return (
     <form onSubmit={alConfirmar} className="flex w-full flex-col gap-3 rounded-xl border border-mal-borde bg-mal-relleno p-4">
@@ -192,7 +195,7 @@ export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, camp
       {p.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{sinBidi(a)}</p>)}
       <p className="text-sm text-muted-foreground">
         {p.delivery === 'whatsapp'
-          ? 'Te lo enviamos por WhatsApp. También puedes aprobar con el botón del mensaje.'
+          ? `Te lo enviamos por WhatsApp.${conBotonWhatsapp ? ' También puedes aprobar con el botón del mensaje.' : ''}`
           : <>No pudimos enviarte el WhatsApp: tu código es <span className="font-mono font-semibold text-foreground">{p.code ? sinBidi(p.code) : '—'}</span>.</>}
         {' '}Vence en <CuentaAtras hasta={p.expires_at} alVencer={alVencer} />.
       </p>
@@ -204,7 +207,7 @@ export function Propuesta({ p, codigo, alCambiarCodigo, error, escribiendo, camp
         </label>
         <Button type="button" variant="secundaria" size="grande" onClick={alCancelar}>Cancelar</Button>
         <Button type="submit" variant="peligro" size="grande" disabled={codigo.length !== 6 || escribiendo} aria-busy={escribiendo || undefined}>
-          {escribiendo ? <Spinner /> : <Ban />}Confirmar bloqueo
+          {escribiendo ? <Spinner /> : <Icono />}{verbo}
         </Button>
       </div>
       {error ? <p role="alert" className="text-sm font-medium text-mal">{sinBidi(error)}</p> : null}

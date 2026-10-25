@@ -4,7 +4,7 @@ import {
   fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
   type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
   type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
-  type WikiRun, type ZipFinding,
+  type UnderAttackActivo, type UnderAttackMotivo, type UnderAttackOffer, type UnderAttackProposal, type WikiRun, type ZipFinding,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { ApiError } from '../errores';
@@ -408,8 +408,9 @@ function muteFalso(org: string, id: string) {
   return { ok: true, resultado: 'Silenciado 1 h', en: iso(Date.now()) };
 }
 
-// Aprobaciones pendientes: approval_id → incidente, IP e intentos. Código válido en fixtures: 123456.
-const aprobaciones = new Map<string, { org: string; incident_id: string; target: string; intentos: number; vence: number; usada: boolean }>();
+// Aprobaciones pendientes: approval_id → incidente, objetivo (IP o host), tipo e intentos. Código válido en fixtures: 123456.
+type Aprobacion = { org: string; incident_id: string; target: string; kind: 'block_ip' | 'under_attack_on'; intentos: number; vence: number; usada: boolean };
+const aprobaciones = new Map<string, Aprobacion>();
 function proponerFalso(org: string, body: unknown) {
   const b = (body ?? {}) as { incident_id?: string; target?: string };
   const i = incidente(org, b.incident_id ?? '');
@@ -417,7 +418,7 @@ function proponerFalso(org: string, body: unknown) {
   if (!/^[\d.]+$|^[\da-f:]+$/i.test(ip)) falla(422, 'invalid_body', 'Solo bloqueamos una IP suelta (/32 o /128)', { reason: 'not_an_ip' });
   const approval_id = crypto.randomUUID();
   const vence = Date.now() + 600_000;          // el fixture trae una expires_at fija (sábado): se recalcula aquí (A9)
-  aprobaciones.set(approval_id, { org, incident_id: i.id, target: ip, intentos: 3, vence, usada: false });
+  aprobaciones.set(approval_id, { org, incident_id: i.id, target: ip, kind: 'block_ip', intentos: 3, vence, usada: false });
   marca(i, 'action_proposed', `Propuesto bloquear ${ip}`);
   return { ...fx.actionProposal, approval_id, efecto: `Bloquear ${ip} (/32) en la zona officialvanguard.com durante 1 h`, expires_at: iso(vence) };
 }
@@ -443,6 +444,10 @@ function confirmarFalso(org: string, approvalId: string, body: unknown) {
     return falla(422, 'invalid_body', 'Código incorrecto', { reason: 'wrong_code', attempts_left: a.intentos });   // misma forma que E21 (H9)
   }
   a.usada = true;
+  if (a.kind === 'under_attack_on') {
+    const accion = ejecutarBajoAtaque(org, a.incident_id, a.target, approvalId);
+    return { ok: true, resultado: `Modo bajo ataque activo ${TTL_BAJO_ATAQUE / 60_000} min en ${a.target}`, en: accion.created_at, action_id: accion.id };
+  }
   const accion = ejecutarBloqueo(org, a.incident_id, a.target, approvalId);
   return { ok: true, resultado: 'IP bloqueada 1 h', en: accion.created_at, action_id: accion.id };
 }
@@ -450,13 +455,64 @@ function deshacerFalso(org: string, actionId: string) {
   for (const i of incidentesDe(org)) {
     const a = i.actions.find((x) => x.id === actionId);
     if (!a) continue;
-    if (a.status === 'undone') falla(409, 'conflict', 'Ese bloqueo ya se deshizo', { reason: 'already_undone' });
+    const bajo = a.kind === 'under_attack_on';
+    if (a.status === 'undone') falla(409, 'conflict', bajo ? 'El modo bajo ataque ya se desactivó' : 'Ese bloqueo ya se deshizo', { reason: 'already_undone' });
     a.status = 'undone'; a.undone_at = iso(Date.now());
-    i.status = i.acked_at ? 'ack' : 'open'; i.mitigated_at = null;
-    marca(i, 'action_undone', `IP ${a.target} desbloqueada`);
-    return { ok: true, resultado: 'Desbloqueada', en: a.undone_at };
+    // Sigue mitigado si queda otra acción viva (un bloqueo y el modo bajo ataque a la vez).
+    if (!i.actions.some((x) => x.status === 'executed')) { i.status = i.acked_at ? 'ack' : 'open'; i.mitigated_at = null; }
+    marca(i, 'action_undone', bajo ? `Modo bajo ataque desactivado en ${a.target}` : `IP ${a.target} desbloqueada`);
+    return { ok: true, resultado: bajo ? 'Modo bajo ataque desactivado' : 'Desbloqueada', en: a.undone_at };
   }
   return falla(404, 'not_found', 'Esa acción no existe');
+}
+
+// ── Modo bajo ataque (E55 y E56; confirmar y deshacer, E21 y E22 de arriba; asignaciones/modo-bajo-ataque.md §9) ──
+// La demo trae dos IPs inundando demo.officialvanguard.com (fx.underAttackOffer). Como el BACK: sin CF_IP_FLOOD no aplica,
+// resuelto está cerrado y sin Modo blindaje no hay conexión; el modo vivo es del host, así que se busca en toda la org.
+const APPROVAL_BAJO_ATAQUE = fx.underAttackProposal.approval_id;
+const ACTION_BAJO_ATAQUE = 'ac000000-0000-4000-8000-000000000001';   // el de fixtures/ids.ts (el paquete no exporta los ids)
+const TTL_BAJO_ATAQUE = fx.underAttackOffer.ttl_s * 1000;
+const conBlindaje = (org: string) => listaDe(org).some((c) => c.provider === 'cloudflare' && c.kind === 'action' && c.status === 'active');
+
+function activoBajoAtaque(org: string, host: string): UnderAttackActivo | null {
+  for (const i of incidentesDe(org)) {
+    const a = i.actions.find((x) => x.kind === 'under_attack_on' && x.status === 'executed' && x.target === host);
+    if (a) return { action_id: a.id, scope: 'host', target: a.target, created_at: a.created_at, expires_at: a.expires_at, retirada_fallida: false };
+  }
+  return null;
+}
+function ofertaBajoAtaque(org: string, id: string): UnderAttackOffer {
+  const i = incidente(org, id);
+  const host = typeof i.details.host === 'string' ? i.details.host : null;
+  const base: UnderAttackOffer = { ...fx.underAttackOffer, hostname: host, activo: host ? activoBajoAtaque(org, host) : null };
+  const no = (motivo: UnderAttackMotivo, extra: Partial<UnderAttackOffer> = {}): UnderAttackOffer => ({ ...base, ofrece: false, motivo, scopes: [], ...extra });
+  if (!i.rule_ids.includes('CF_IP_FLOOD')) return no('no_aplica', { ips: 0 });
+  if (i.status === 'resolved') return no('cerrado');
+  if (!conBlindaje(org)) return no('sin_conexion', { connection_id: null, permiso: null });
+  return base;
+}
+function proponerBajoAtaque(org: string, id: string): UnderAttackProposal {
+  exigirAdmin();
+  const o = ofertaBajoAtaque(org, id);
+  if (o.activo) return falla(409, 'conflict', `El modo bajo ataque ya está activo en ${o.activo.target}`, { reason: 'already_active', action_id: o.activo.action_id });
+  if (o.motivo === 'sin_conexion') return falla(409, 'conflict', 'Activa el Modo blindaje con un token de acciones', { reason: 'no_action_connection' });
+  if (o.motivo === 'cerrado') return falla(409, 'conflict', 'El incidente ya se cerró', { reason: 'resolved' });
+  if (o.motivo || !o.hostname) return falla(422, 'invalid_body', 'El modo bajo ataque es solo para inundaciones de tráfico', { reason: o.motivo ?? 'sin_host' });
+  const vence = Date.now() + 600_000;          // como en el bloqueo: la expires_at del fixture es fija
+  aprobaciones.set(APPROVAL_BAJO_ATAQUE, { org, incident_id: id, target: o.hostname, kind: 'under_attack_on', intentos: 3, vence, usada: false });
+  marca(incidente(org, id), 'action_proposed', `Propuesto el modo bajo ataque en ${o.hostname}`);
+  return { ...fx.underAttackProposal, expires_at: iso(vence) };
+}
+function ejecutarBajoAtaque(org: string, incident_id: string, target: string, approval_id: string) {
+  const i = incidente(org, incident_id);
+  const ahora = Date.now();
+  const usado = incidentesDe(org).some((x) => x.actions.some((a) => a.id === ACTION_BAJO_ATAQUE));   // reactivarlo: id nuevo
+  const accion: ActionPublic = { id: usado ? crypto.randomUUID() : ACTION_BAJO_ATAQUE, kind: 'under_attack_on', target, status: 'executed',
+    created_at: iso(ahora), undone_at: null, expires_at: iso(ahora + TTL_BAJO_ATAQUE), approval_id };
+  i.actions.push(accion);
+  i.status = 'mitigated'; i.mitigated_at ??= iso(ahora);
+  marca(i, 'action_executed', `Modo bajo ataque activo en ${target}`);
+  return accion;
 }
 
 // Botones que solo existen en modo fixtures (S14 §14.19): ensayar el tramo de incidentes del guion sin BACK.
@@ -719,6 +775,8 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     (m) => structuredClone(incidente(m[1]!, m[2]!))],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/ack`),  (m) => ackFalso(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/mute`), (m) => muteFalso(m[1]!, m[2]!)],
+  ['GET',  r(`${ORG}\\/incidents\\/([^/]+)\\/under-attack`), (m) => ofertaBajoAtaque(m[1]!, m[2]!)],
+  ['POST', r(`${ORG}\\/incidents\\/([^/]+)\\/under-attack\\/propose`), (m) => proponerBajoAtaque(m[1]!, m[2]!)],
   ['POST', r(`${ORG}\\/actions\\/propose`),       (m, b) => proponerFalso(m[1]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/confirm`), (m, b) => confirmarFalso(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],

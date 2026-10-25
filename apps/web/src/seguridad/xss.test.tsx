@@ -19,7 +19,8 @@ import { Database } from 'lucide-react';
 import { z } from 'zod';
 import {
   fixtures as fx, CheckDato, ConnectionCreated, ConnectionPublic, Contact, EstadoModulo, Finding, FixPromptResponse, GrupoDato,
-  Incident, IncidentDetail, Me, Overview, PerfRunExt, ProposeResponse, ScanRun, Traffic, Ts, WikiDoc, WikiEstimate, WikiRun,
+  Incident, IncidentDetail, Me, Overview, PerfRunExt, ProposeResponse, ScanRun, Traffic, Ts, UnderAttackOffer, UnderAttackProposal,
+  WikiDoc, WikiEstimate, WikiRun,
   type AccionDato, type CifraDato, type PermCheck, type Severity,
 } from '@vanguard/contracts';
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
@@ -48,6 +49,7 @@ import { TarjetaConexion, TarjetaIngesta } from '@/modulos/conexiones/TarjetaCon
 import PaginaExportar from '@/modulos/exportar/PaginaExportar';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { DetalleHallazgo } from '@/modulos/hallazgos/DetalleHallazgo';
+import { BajoAtaque } from '@/modulos/incidentes/BajoAtaque';
 import { Propuesta } from '@/modulos/incidentes/BloquearIp';
 import { hitosDe, restoDe } from '@/modulos/incidentes/hitos';
 import PaginaIncidente from '@/modulos/incidentes/PaginaIncidente';
@@ -689,6 +691,30 @@ const CASOS: Caso[] = [
       </>);
     },
     ver: (c) => [marca(c, 'propuesta.efecto'), ...fx.actionProposal.avisos.map((_, k) => marca(c, `propuesta.avisos[${k}]`)), marca(c, 'propuesta.code'), marca(c, 'error')],
+  },
+  {
+    // Sin rellenar: un `activo` inventado convertiría la oferta en «Hecho» y no se vería el reposo.
+    nombre: 'BajoAtaque (oferta, modo activo, retirada fallida, sin permiso y fuera de zona de E55) y su Propuesta (E56)',
+    pintar: (c) => {
+      const tarjeta = (o: UnderAttackOffer) => pintar(<BajoAtaque org={ORG} incidentId={fx.incidentDetail.id} puedeEscribir ejecutada={undefined} />,
+        { datos: [[['org', ORG, 'under-attack', fx.incidentDetail.id], o]] });
+      const activo = { action_id: UUID, scope: 'host' as const, target: 'demo.officialvanguard.com', created_at: FECHA,
+        expires_at: '2099-10-24T19:42:00.000Z', retirada_fallida: false };
+      const oferta = (v: UnderAttackOffer, ruta: string) => envenenar(UnderAttackOffer, v, c, { ruta, rellenar: false });
+      const p = envenenar(UnderAttackProposal, { ...fx.underAttackProposal, delivery: 'in_app', code: '482913' }, c, { ruta: 'propuesta' });
+      const resto = { codigo: '12', alCambiarCodigo: () => {}, alConfirmar: () => {}, alCancelar: () => {}, alVencer: () => {} };
+      return [
+        tarjeta(oferta(fx.underAttackOffer, 'oferta')),
+        tarjeta(oferta({ ...fx.underAttackOffer, activo }, 'activa')),
+        tarjeta(oferta({ ...fx.underAttackOfferSinPermiso, activo: { ...activo, retirada_fallida: true } }, 'fallida')),
+        tarjeta(oferta(fx.underAttackOfferSinPermiso, 'permiso')),
+        tarjeta(oferta({ ...fx.underAttackOffer, ofrece: false, motivo: 'fuera_de_zona', scopes: [] }, 'zona')),
+        renderToStaticMarkup(<Propuesta p={p} {...resto} escribiendo={false} error={marca(c, 'error')} verbo="Activar bajo ataque" conBotonWhatsapp={false} />),
+      ].join('');
+    },
+    ver: (c) => [ltr(marca(c, 'oferta.hostname')), ltr(marca(c, 'activa.activo.target')), ltr(marca(c, 'fallida.activo.target')),
+      ltr(marca(c, 'fallida.copiar')), ltr(marca(c, 'permiso.hostname')), ltr(marca(c, 'zona.zone_name')), marca(c, 'propuesta.efecto'),
+      ...fx.underAttackProposal.avisos.map((_, k) => marca(c, `propuesta.avisos[${k}]`)), marca(c, 'propuesta.code'), marca(c, 'error')],
   },
   {
     nombre: 'Resultado de Asistente (last4, permisos comprobados, secreto de ingesta e id de la conexión)',

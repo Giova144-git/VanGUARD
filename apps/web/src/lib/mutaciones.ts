@@ -1,7 +1,7 @@
 // Escrituras (S14 §14.8). Al terminar invalidan por prefijo ['org', org, …].
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
-  AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, McpTokenCreated, type McpTokenCreate, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
+  AlertPrefs, CodeReviewSaved, Contact, ConnectionCreated, type CodeReviewState, ConnectionTest, Finding, FixPromptResponse, McpTokenCreated, type McpTokenCreate, NotificationTestResult, type ContactIn, ProposeResponse, RespuestaEscritura, ScanAccepted, UnderAttackProposal, type UnderAttackPropose, WikiEstimate, WikiRunAccepted, type WikiRepoRef, type WikiRunCreate, type ConnectionCreate, type FindingPatch, type ScanCreate, type ZipResult, type AlertPrefsIn, type CodeReviewPut,
 } from '@vanguard/contracts';
 import { z } from 'zod';
 import { api } from './api';
@@ -90,13 +90,10 @@ export function useAccionIncidente(org: string) {
   });
 }
 
-// «Bloquear esta IP» (E20–E22): simular → confirmar con el código de un solo uso → deshacer. Sin useMutation para el código.
-export function useBloqueo(org: string) {
-  const invalidar = useInvalidar(org);
-  const fin = () => invalidar('incident', 'incidents', 'overview', 'module');
+// Confirmar con el código de un solo uso (E21) y deshacer (E22): los comparten «Bloquear IP» y «Modo bajo ataque», que
+// el BACK despacha por el tipo de la aprobación o de la acción. `fin` refresca lo que cada una pinta.
+function canjeYDeshacer(org: string, fin: () => Promise<unknown>) {
   return {
-    proponer: (body: { incident_id: string; target: string }) =>
-      api(`/api/orgs/${org}/actions/propose`, { method: 'POST', body: { ...body, kind: 'block_ip' }, esquema: ProposeResponse }),
     confirmar: async (approvalId: string, code: string) => {
       const r = await api(`/api/orgs/${org}/actions/${approvalId}/confirm`, { method: 'POST', body: { code }, esquema: RespuestaEscritura });
       await fin();
@@ -107,6 +104,30 @@ export function useBloqueo(org: string) {
       await fin();
       return r;
     },
+  };
+}
+
+// «Bloquear esta IP» (E20–E22): simular → confirmar con el código de un solo uso → deshacer. Sin useMutation para el código.
+export function useBloqueo(org: string) {
+  const invalidar = useInvalidar(org);
+  const fin = () => invalidar('incident', 'incidents', 'overview', 'module');
+  return {
+    proponer: (body: { incident_id: string; target: string }) =>
+      api(`/api/orgs/${org}/actions/propose`, { method: 'POST', body: { ...body, kind: 'block_ip' }, esquema: ProposeResponse }),
+    ...canjeYDeshacer(org, fin),
+    refrescar: fin,
+  };
+}
+
+// «Modo bajo ataque» (E56, y E21/E22 como el bloqueo; asignaciones/modo-bajo-ataque.md §9). El host no viaja: el BACK lo
+// saca del incidente. fin() también refresca la oferta (E55), así la tarjeta pasa a «Hecho» sin recargar.
+export function useBajoAtaque(org: string) {
+  const invalidar = useInvalidar(org);
+  const fin = () => invalidar('incident', 'incidents', 'overview', 'module', 'under-attack');
+  return {
+    proponer: async (incidentId: string) => UnderAttackProposal.parse(await api(`/api/orgs/${org}/incidents/${incidentId}/under-attack/propose`,
+      { method: 'POST', body: { scope: 'host' } satisfies UnderAttackPropose, esquema: UnderAttackProposal })),
+    ...canjeYDeshacer(org, fin),
     refrescar: fin,
   };
 }

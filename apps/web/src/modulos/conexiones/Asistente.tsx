@@ -130,7 +130,7 @@ export default function Asistente() {
     }
     if (p === 'cloudflare') {
       if (!zoneIdValido(zona)) e.zona = 'El Zone ID son 32 caracteres hexadecimales en minúscula';
-      if (blindaje && !accion.trim()) e.accion = 'Para el Modo blindaje hace falta el segundo token, con solo Firewall Services · Edit';
+      if (blindaje && !accion.trim()) e.accion = 'Para el Modo blindaje hace falta el segundo token, con Firewall Services · Edit (y Config Rules · Edit para el modo bajo ataque)';
       if (accion.trim()) {
         const ra = preGuardar(accion, 'cloudflare');
         if (ra) e.accion = ra;
@@ -184,7 +184,7 @@ export default function Asistente() {
             <form onSubmit={enviar} className="flex flex-col gap-4" noValidate>
               {blindaje ? (
                 <p className="rounded-lg border border-info bg-info-relleno px-3 py-2 text-sm">
-                  Activa el Modo blindaje: pega tu token de lectura (puede ser el mismo de antes) y uno nuevo con solo Firewall Services · Edit.
+                  Activa el Modo blindaje: pega tu token de lectura (puede ser el mismo de antes) y uno nuevo con Firewall Services · Edit (y Config Rules · Edit para el modo bajo ataque).
                 </p>
               ) : null}
               {p === 'supabase' ? <CampoTexto id="sb-ref" etiqueta="Proyecto (URL o ref)" valor={ref} onCambio={setRef} error={errores.ref} mono
@@ -195,7 +195,7 @@ export default function Asistente() {
               {p !== 'ingest' ? <CampoToken id="tok" etiqueta={p === 'cloudflare' ? 'Token de lectura' : 'Token de acceso'} valor={token} onCambio={setToken}
                 error={errores.token} ayuda={p === 'supabase' ? 'Empieza por sbp_fc' : p === 'github' ? 'Empieza por github_pat_' : 'Solo permisos Zone · Read'} /> : null}
               {p === 'cloudflare' ? <CampoToken id="tok-accion" etiqueta={blindaje ? 'Token de Modo blindaje' : 'Token de Modo blindaje (opcional)'} valor={accion} onCambio={setAccion}
-                error={errores.accion} ayuda="Solo Firewall Services · Edit. Sin él no podrás bloquear IPs desde VanGUARD." /> : null}
+                error={errores.accion} ayuda="Firewall Services · Edit (y Config Rules · Edit para el modo bajo ataque). Sin él no podrás bloquear IPs desde VanGUARD." /> : null}
               {errores.general ? <p role="alert" className="rounded-lg border border-mal-borde bg-mal-relleno px-3 py-2 text-sm font-medium text-mal">{errores.general}</p> : null}
               <Button type="submit" variant="principal" size="grande" disabled={!org.puedeEscribir} aria-busy={ocupado || undefined}>
                 {ocupado ? <Spinner /> : null}{p === 'ingest' ? 'Crear conexión' : 'Conectar y probar'}

@@ -22,6 +22,7 @@ import { useAccionIncidente } from '@/lib/mutaciones';
 import { porQueImporta } from '@/lib/reglas-texto';
 import { deMapa } from '@/lib/severidad';
 import { ActivarBlindaje } from '@/modulos/conexiones/ActivarBlindaje';
+import { BajoAtaque } from './BajoAtaque';
 import { BloquearIp } from './BloquearIp';
 import { finDe, hitosDe, restoDe, t0De } from './hitos';
 import { estadoInc } from './PaginaIncidentes';
@@ -32,8 +33,8 @@ import { BotonSimularWhatsApp } from './Simulacion';
 const ICONO: Record<Channel, typeof MessageCircle> = { in_app: Bell, whatsapp: MessageCircle, voice: Phone };
 const NOMBRE_CANAL: Record<Channel, string> = { in_app: 'En la app', whatsapp: 'WhatsApp', voice: 'Llamada' };
 const TIPO_ACCION: Record<ActionKind, string> = {
-  block_ip: 'Bloqueo de IP', unblock_ip: 'Desbloqueo de IP', under_attack_on: 'Under Attack activado',
-  under_attack_off: 'Under Attack desactivado', rate_limit: 'Límite de peticiones',
+  block_ip: 'Bloqueo de IP', unblock_ip: 'Desbloqueo de IP', under_attack_on: 'Modo bajo ataque',
+  under_attack_off: 'Modo bajo ataque desactivado', rate_limit: 'Límite de peticiones',
 };
 const ESTADO_ACCION: Record<ActionStatus, string> = { executed: 'Activo', undone: 'Deshecho', proposed: 'En curso', failed: 'Falló' };
 // El texto crudo, con los controles bidi a la vista (lib/bidi.ts).
@@ -54,16 +55,18 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
   const conexiones = useConexiones(org);
   const blindaje = conexiones.data?.some((c) => c.provider === 'cloudflare' && c.kind === 'action' && c.status === 'active');
   const ejecutada = i.actions.find((a) => a.kind === 'block_ip' && a.status === 'executed');
+  const bajoAtaque = i.actions.find((a) => a.kind === 'under_attack_on' && a.status === 'executed');
   const silenciado = i.muted_until && Date.parse(i.muted_until) > Date.now();
   const esIp = i.resource.startsWith('ip:');
   const solo = puedeEscribir ? undefined : SOLO_LECTURA;
+  // Con el incidente ya visto, si fue con «Lo estoy viendo» del WhatsApp se dice en el sitio del botón (anexo de botones).
   return (
     <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Acciones">
       <div className="flex flex-wrap items-start gap-3">
         {i.status === 'open' ? (
           <BotonAccion variante="principal" tam="grande" icono={Eye} disabled={!!solo} ayuda={solo}
             ocupado={accion.isPending && accion.variables?.que === 'ack'} onClick={() => accion.mutate({ id: i.id, que: 'ack' })}>Lo estoy viendo</BotonAccion>
-        ) : null}
+        ) : i.acked_via === 'whatsapp' ? <Etiqueta texto="Visto por WhatsApp" icono={MessageCircle} className="mt-3" /> : null}
         {i.status !== 'resolved' ? (silenciado
           ? <Etiqueta texto={`Silenciado hasta ${cuando(i.muted_until)}`} icono={BellOff} className="mt-3" />
           : <BotonAccion icono={BellOff} tam="grande" disabled={!!solo} ayuda={solo}
@@ -74,6 +77,9 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
         ? <BloquearIp key={i.id} org={org} incidentId={i.id} ip={i.resource.slice(3)} ejecutada={ejecutada} puedeEscribir={puedeEscribir} />
         : conexiones.isPending ? <div className="h-14" aria-busy="true" />   // sin saber si hay blindaje: hueco fijo, no el CTA equivocado (L7)
         : <ActivarBlindaje titulo="Activa el Modo blindaje para bloquear desde aquí" />) : null}
+      {/* Solo ante una inundación (o con el modo ya activo); si E55 aún no existe en el BACK, no pinta nada. */}
+      {i.rule_ids.includes('CF_IP_FLOOD') || bajoAtaque
+        ? <BajoAtaque key={i.id} org={org} incidentId={i.id} puedeEscribir={puedeEscribir} ejecutada={bajoAtaque} /> : null}
       <BotonSimularWhatsApp org={org} incidentId={i.id} />
     </section>
   );

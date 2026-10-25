@@ -9,6 +9,7 @@ import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
 import { requireColaPropia } from '../mw/prod-host.ts';
+import { hostsPropios, UrlNoMedible, urlMedible } from '../scans/psi.ts';
 import { sanearNombreZip } from '../scans/zip-paso.ts';
 
 // E11 · POST /api/orgs/:org/scans, E12 · GET /api/orgs/:org/scans/:id y E23 · POST …/scans/:id/zip-result (S15 15.4, 15.8;
@@ -41,6 +42,14 @@ export function inicioDiaCaracas(ahora = new Date()): string {
   return new Date(Date.UTC(c.getUTCFullYear(), c.getUTCMonth(), c.getUTCDate(), 4)).toISOString();
 }
 
+// Topes diarios por org (día de Caracas): full_audit = app_config.topes.org_audits_day (3) y lighthouse = org_perf_day (10,
+// §10.4: cada medición es una llamada a PSI); la org de demo, 20 de cada uno [propuesta].
+const TOPE_DIA: Partial<Record<ScanKind, { clave: string; defecto: number; texto: (n: number) => string }>> = {
+  full_audit: { clave: 'org_audits_day', defecto: 3, texto: (n) => `Ya hiciste ${n} auditorías completas hoy. Vuelve mañana.` },
+  lighthouse: { clave: 'org_perf_day', defecto: 10,
+    texto: (n) => `Ya hiciste ${n} mediciones de rendimiento hoy, el máximo diario. Vuelve mañana.` },
+};
+
 // RL_COSTLY (§06.9): 10 por minuto y usuario en E11; cada auditoría encola trabajo y puede gastar IA.
 async function topeCostoso(c: Context<AppEnv>) {
   const { success } = await c.env.RL_COSTLY.limit({ key: `u:${c.get('userId')}` });
@@ -55,8 +64,16 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
   const body = await cuerpo(c, ScanCreate);
   const admin = db(c.env);
   const orgId = c.get('orgId');
+  // lighthouse («Medir ahora», §10.4): la URL se valida antes de tocar la base (scans/psi.ts; el paso la repite). Nunca IPs,
+  // hosts internos ni los de VanGUARD; se guarda como https://host/ruta, la forma que exigen perf_runs.url y el histórico.
+  let urlPerf: string | null = null;
   if (body.kind === 'lighthouse') {
-    throw new ApiError('invalid_body', 'Medir con Lighthouse llega en la siguiente versión', { reason: 'not_available' });
+    try {
+      urlPerf = urlMedible(body.url, hostsPropios(c.env));
+    } catch (e) {
+      if (!(e instanceof UrlNoMedible)) throw e;
+      throw new ApiError('invalid_body', e.message, { reason: e.motivo, field_errors: { url: [e.message] } });
+    }
   }
 
   // 409 si ya hay una del mismo kind en curso creada hace < 15 min (en zip se libera la que espera resultado).
@@ -67,12 +84,14 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
       await admin.from('scan_runs').update({ status: 'failed', error: 'ZIP_RESULT_MISSING', finished_at: new Date().toISOString() })
         .eq('id', enCurso.id).eq('org_id', orgId);
     } else {
-      throw new ApiError('conflict', 'Ya hay una auditoría de este tipo en curso', { scan_run_id: enCurso.id });
+      throw new ApiError('conflict', body.kind === 'lighthouse' ? 'Ya hay una medición de rendimiento en curso: espera a que termine'
+        : 'Ya hay una auditoría de este tipo en curso', { scan_run_id: enCurso.id });
     }
   }
 
-  // Algo que auditar: full_audit necesita al menos una conexión de lectura activa; un kind de una fuente, la suya.
-  if (body.kind !== 'zip') {
+  // Algo que auditar: full_audit necesita al menos una conexión de lectura activa; un kind de una fuente, la suya. zip y
+  // lighthouse no usan conexión (el ZIP llega del navegador y PSI mide una URL pública).
+  if (body.kind !== 'zip' && body.kind !== 'lighthouse') {
     const provs = body.kind === 'full_audit' ? ['supabase', 'cloudflare', 'github'] : [PROVEEDOR[body.kind] ?? ''];
     let q = admin.from('connections').select('id', { count: 'exact', head: true }).eq('org_id', orgId)
       .eq('kind', 'read').eq('status', 'active').in('provider', provs);
@@ -81,16 +100,17 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
     if (!count) throw new ApiError('conflict', 'No hay ninguna conexión que auditar. Conecta un servicio primero.');
   }
 
-  // Tope diario de full_audit (app_config.topes.org_audits_day = 3; la org de demo, 20 [propuesta]).
-  if (body.kind === 'full_audit') {
+  // Tope diario de full_audit y de mediciones de Rendimiento (TOPE_DIA), contando los scan_runs de ese kind de hoy.
+  const cupo = TOPE_DIA[body.kind];
+  if (cupo) {
     const [{ data: cfg }, { data: org }, { count: hoy }] = await Promise.all([
       admin.from('app_config').select('value').eq('key', 'topes').maybeSingle(),
       admin.from('orgs').select('is_demo').eq('id', orgId).maybeSingle(),
-      admin.from('scan_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('kind', 'full_audit')
+      admin.from('scan_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('kind', body.kind)
         .gte('created_at', inicioDiaCaracas()),
     ]);
-    const tope = org?.is_demo ? 20 : Number((cfg?.value as Record<string, unknown> | undefined)?.org_audits_day ?? 3);
-    if ((hoy ?? 0) >= tope) throw new ApiError('budget_exceeded', `Ya hiciste ${tope} auditorías completas hoy. Vuelve mañana.`);
+    const tope = org?.is_demo ? 20 : Number((cfg?.value as Record<string, unknown> | undefined)?.[cupo.clave] ?? cupo.defecto);
+    if ((hoy ?? 0) >= tope) throw new ApiError('budget_exceeded', cupo.texto(tope));
   }
 
   const kind = body.kind as ScanKind;
@@ -99,8 +119,18 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
   if ('connection_id' in body && body.connection_id) params.connection_id = body.connection_id;
   // zip: el nombre saneado (es el prefijo zip:<archivo>/ de sus hallazgos); queda queued en waiting_result sin encolar nada.
   if (body.kind === 'zip') Object.assign(params, { filename: sanearNombreZip(body.filename), size_bytes: body.size_bytes });
+  // lighthouse: p.perf de §10.2, que lee el paso psi. Un solo paso con la estrategia pedida (ScanCreate admite una).
+  if (body.kind === 'lighthouse') {
+    params.perf = { url: urlPerf, strategy: body.strategy, ...(body.version_label ? { version_label: body.version_label } : {}),
+      trigger: 'manual' };
+  }
   const { data: fila, error } = await admin.from('scan_runs').insert({ org_id: orgId, kind, status: 'queued', steps, params,
     requested_by: c.get('userId'), ...(body.kind === 'zip' ? { step: 'waiting_result' } : {}) }).select('id').single();
+  if (error?.code === '23514') {
+    // private.looks_like_secret de scan_runs (0004): algo de params (la ruta de la URL) parece un secreto en claro.
+    log('warn', 'TRIPWIRE', { rid: c.get('rid'), donde: 'scan_params' });
+    throw new ApiError('invalid_body', 'La petición trae algo que parece un secreto sin enmascarar', { reason: 'looks_like_secret' });
+  }
   if (error || !fila) {
     log('error', 'scans.crear_error', { rid: c.get('rid'), code: error?.code ?? null });
     throw new ApiError('internal', 'No pudimos crear la auditoría');
@@ -114,7 +144,7 @@ scans.post('/orgs/:org/scans', requireAdmin, requireColaPropia, async (c) => {
       throw new ApiError('provider_unavailable', 'No pudimos arrancar la auditoría. Vuelve a intentarlo.');
     }
   }
-  log('info', 'scan.creado', { rid: c.get('rid'), kind });
+  log('info', 'scan.creado', { rid: c.get('rid'), kind, ...(body.kind === 'lighthouse' ? { strategy: body.strategy } : {}) });
   return c.json(ScanAccepted.parse({ scan_run_id: fila.id }), 202);
 });
 

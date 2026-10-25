@@ -9,6 +9,7 @@ import { envDoble } from '../test/dobles.ts';
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
 const { app } = await import('../app.ts');
+const { inicioDiaCaracas } = await import('./scans.ts');
 
 const ANA = '7b1e0000-0000-4000-8000-000000000001';    // admin
 const BETO = '7b1e0000-0000-4000-8000-000000000002';   // otro admin de la misma org
@@ -24,6 +25,8 @@ const ROL: Record<string, string> = { [ANA]: 'admin', [BETO]: 'admin', [VERA]: '
 type Fila = Record<string, unknown>;
 let filas: Fila[];
 let rechazoUpdate: Resp['error'];
+let esDemo: boolean;                         // orgs.is_demo de ORG
+let topes: Record<string, unknown> | null;   // app_config 'topes'
 let doble: ReturnType<typeof dbDoble>;
 const hace = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const cumple = (f: Fila, op: Op) => op.filters.every(([c, o, v]) =>
@@ -36,10 +39,14 @@ const fila = (id = SCAN) => filas.find((x) => x.id === id)!;
 beforeEach(() => {
   filas = [esperando(), esperando({ id: AJENO, org_id: OTRA_ORG })];
   rechazoUpdate = null;
+  esDemo = false;
+  topes = null;
   doble = dbDoble({
     claims: (tok) => (USUARIO[tok] ? { sub: USUARIO[tok], email: `${tok}@acme.dev`, is_anonymous: false } : null),
     tabla: (op: Op): Resp | undefined => {
       if (op.table === 'org_members') return { data: eqDe(op, 'org_id') === ORG ? { role: ROL[String(eqDe(op, 'user_id'))] } : null };
+      if (op.table === 'orgs') return { data: eqDe(op, 'id') === ORG ? { is_demo: esDemo } : null };
+      if (op.table === 'app_config') return { data: topes ? { value: topes } : null };
       if (op.table !== 'scan_runs') return undefined;
       const casan = filas.filter((x) => cumple(x, op));
       if (op.action === 'select') return { data: op.single ? (casan[0] ?? null) : casan, count: casan.length };
@@ -127,6 +134,97 @@ describe('E11 · POST /api/orgs/:org/scans con kind zip', () => {
     expect(r.status).toBe(429);
     expect(r.headers.get('retry-after')).toBe('60');
     expect(filas).toEqual([]);
+  });
+});
+
+describe('E11 · POST /api/orgs/:org/scans con kind lighthouse («Medir ahora», §10.4)', () => {
+  beforeEach(() => { filas = []; });
+  const medir = (body: Record<string, unknown>, quien = 'ana', d = envDoble(PROD)) =>
+    post(`/${ORG}/scans`, { kind: 'lighthouse', ...body }, quien, d);
+  // Mediciones ya hechas hoy (justo después de la medianoche de Caracas, así nunca caen en ayer) y terminadas.
+  const hechasHoy = (n: number, extra: Fila = {}) => Array.from({ length: n }, (_, i) => esperando({ kind: 'lighthouse',
+    id: `5a1c0000-0000-4000-8000-${String(i).padStart(12, '0')}`, status: 'succeeded', step: null,
+    created_at: new Date(Date.parse(inicioDiaCaracas()) + 1000 + i).toISOString(), ...extra }));
+
+  it('crea el scan con un solo paso psi y params.perf (URL normalizada), y encola UN mensaje psi; móvil por defecto', async () => {
+    const d = envDoble(PROD);
+    const r = await medir({ url: 'https://Tienda.Example.com/ofertas?utm=x#arriba', version_label: 'v2-regresion' }, 'ana', d);
+    expect(r.status).toBe(202);
+    const { scan_run_id } = ScanAccepted.parse(await r.json());
+    expect(fila(scan_run_id)).toMatchObject({ org_id: ORG, kind: 'lighthouse', status: 'queued', requested_by: ANA, step: null,
+      steps: [{ name: 'psi', status: 'pending' }],
+      params: { perf: { url: 'https://tienda.example.com/ofertas', strategy: 'mobile', version_label: 'v2-regresion', trigger: 'manual' } } });
+    expect(d.enviados).toEqual<JobMsg[]>([{ v: 1, kind: 'scan', scan_run_id, org_id: ORG, paso: 'psi' }]);
+    expect(doble.ops.some((o) => o.table === 'connections')).toBe(false);   // no hace falta ninguna conexión
+  });
+
+  it('escritorio y sin etiqueta: params.perf.strategy desktop sin version_label, y un único mensaje', async () => {
+    const d = envDoble(PROD);
+    const r = await medir({ url: 'https://tienda.example.com/', strategy: 'desktop' }, 'ana', d);
+    expect(r.status).toBe(202);
+    const { scan_run_id } = ScanAccepted.parse(await r.json());
+    expect(fila(scan_run_id).params).toEqual({ perf: { url: 'https://tienda.example.com/', strategy: 'desktop', trigger: 'manual' } });
+    expect(d.enviados).toHaveLength(1);
+  });
+
+  it('URL http, con IP, localhost, de VanGUARD, con credenciales o puerto raro → 422 sin crear ni encolar', async () => {
+    const d = envDoble(PROD);
+    const casos: [string, string | null][] = [['http://tienda.example.com/', null], ['https://127.0.0.1/', 'ip'],
+      ['https://8.8.8.8/', 'ip'], ['https://[::1]/', 'ip'], ['https://localhost/', 'interno'], ['https://db.internal/', 'interno'],
+      ['https://officialvanguard.com/', 'propio'], ['https://demo.officialvanguard.com/', 'propio'],
+      ['https://vanguard.giovannizm14.workers.dev/', 'propio'], ['https://ana:clave@tienda.example.com/', 'credenciales'],
+      ['https://tienda.example.com:8443/', 'puerto']];
+    for (const [url, reason] of casos) {
+      const r = await medir({ url }, 'ana', d);
+      expect(r.status, url).toBe(422);
+      const e = await error(r);
+      expect(e.details?.field_errors, url).toHaveProperty('url');
+      if (reason) expect(e.details?.reason, url).toBe(reason);   // http:// lo para antes el contrato (solo https)
+    }
+    expect(filas).toEqual([]);
+    expect(d.enviados).toEqual([]);
+  });
+
+  it('cupo diario: 10 mediciones hoy → 429 budget_exceeded con texto claro; las de ayer no cuentan; demo 20; app_config manda', async () => {
+    filas = hechasHoy(10);
+    const r = await medir({ url: 'https://tienda.example.com/' });
+    expect(r.status).toBe(429);
+    const e = await error(r);
+    expect(e.code).toBe('budget_exceeded');
+    expect(e.message).toBe('Ya hiciste 10 mediciones de rendimiento hoy, el máximo diario. Vuelve mañana.');
+    expect(filas).toHaveLength(10);
+    filas = hechasHoy(9);
+    filas.push(esperando({ id: AJENO, kind: 'lighthouse', status: 'succeeded', created_at: hace(60 * 30) }));   // de ayer
+    expect((await medir({ url: 'https://tienda.example.com/' })).status).toBe(202);
+    esDemo = true;
+    filas = hechasHoy(19);
+    expect((await medir({ url: 'https://tienda.example.com/' })).status).toBe(202);
+    for (const x of filas) x.status = 'succeeded';   // la 20.ª terminó: sin esto la siguiente daría 409 (en curso)
+    expect((await error(await medir({ url: 'https://tienda.example.com/' }))).message).toMatch(/^Ya hiciste 20 mediciones/);
+    esDemo = false;
+    topes = { org_perf_day: 2, org_audits_day: 3 };
+    filas = hechasHoy(2);
+    expect((await error(await medir({ url: 'https://tienda.example.com/' }))).message).toMatch(/^Ya hiciste 2 mediciones/);
+    // Las mediciones no gastan el cupo de auditorías completas.
+    filas = hechasHoy(5, { kind: 'full_audit' });
+    topes = null;
+    expect((await medir({ url: 'https://tienda.example.com/' })).status).toBe(202);
+  });
+
+  it('RL_COSTLY agotado → 429 rate_limited con Retry-After; viewer → 403; una medición en curso → 409', async () => {
+    const lleno = envDoble({ ...PROD, RL_COSTLY: { limit: async () => ({ success: false }) } } as Partial<CloudflareBindings>);
+    const r = await medir({ url: 'https://tienda.example.com/' }, 'ana', lleno);
+    expect(r.status).toBe(429);
+    expect((await error(r)).code).toBe('rate_limited');
+    expect(r.headers.get('retry-after')).toBe('60');
+    expect((await medir({ url: 'https://tienda.example.com/' }, 'vera')).status).toBe(403);
+    expect(filas).toEqual([]);
+    filas = [esperando({ kind: 'lighthouse', status: 'running', step: 'psi', created_at: hace(1) })];
+    const enCurso = await medir({ url: 'https://tienda.example.com/' });
+    expect(enCurso.status).toBe(409);
+    const e = await error(enCurso);
+    expect(e.details).toEqual({ scan_run_id: SCAN });
+    expect(e.message).toMatch(/medición de rendimiento en curso/);
   });
 });
 

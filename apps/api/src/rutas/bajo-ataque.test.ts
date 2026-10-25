@@ -166,6 +166,20 @@ describe('E55 · GET incidents/:id/under-attack (oferta, solo base)', () => {
     expect((await leerOferta(await oferta())).activo).toBeNull();
   });
 
+  it('retirada fallida de una huérfana antes de su expires_at → «Sigue activa hasta …», no «Ya no actúa»', async () => {
+    // retirarHuerfanaBajoAtaque la deja failed con un 403 a los 2–29 min: la regla, si está, todavía actúa.
+    const expira = new Date(Date.now() + 27 * 60_000).toISOString();
+    const descripcion = 'VanGUARD #A1F3C9 · bajo ataque · ab000000 · hasta 2026-10-24T23:42:00Z';
+    filas = [{ id: ACT, status: 'failed', target: HOST, created_at: hace(3), expires_at: expira, provider_ref: null,
+      previous: { scope: 'host', descripcion, zone_name: ZN, caduca_en_regla: true, ref: refBajoAtaque(INC),
+        huerfana: 'sin_comprobar', deshacer_error: 'sin_permiso' } }];
+    const o = await leerOferta(await oferta());
+    expect(o.activo).toMatchObject({ action_id: ACT, expires_at: expira, retirada_fallida: true });
+    expect(o.copiar).not.toContain('Ya no actúa');
+    const hora = `las ${expira.slice(11, 16)} UTC del ${expira.slice(0, 10)}`;
+    expect(o.copiar!.split('\n')[1]).toBe(`Sigue activa hasta ${hora}; después solo ocupa una regla de tu plan.`);
+  });
+
   it('una executed (aunque ya haya vencido) → activo sin retirada_fallida, también con el incidente resuelto', async () => {
     incidente.status = 'resolved';
     ips = 1;

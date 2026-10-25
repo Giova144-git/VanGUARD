@@ -269,8 +269,10 @@ export async function leerOfertaBajoAtaque(env: CloudflareBindings, o: { orgId: 
 
   let copiar: string | null = null;
   if (activo?.retirada_fallida) {
+    // caducoEn aún por llegar (una huérfana que no se pudo retirar a los pocos minutos): «Sigue activa hasta …».
     const caduco = prev.caduca_en_regla === true && activo.expires_at ? new Date(activo.expires_at) : null;
-    copiar = pasosRetirarBajoAtaque(str(prev.descripcion) ?? '', hostCanonico(prev.zone_name) ?? conexion?.zone_name ?? null, caduco);
+    const zona = hostCanonico(prev.zone_name) ?? conexion?.zone_name ?? null;
+    copiar = pasosRetirarBajoAtaque(str(prev.descripcion) ?? '', zona, caduco, ahora);
   } else if (host && (motivo === 'sin_conexion' || motivo === 'sin_permiso')) {
     copiar = pasosManualesBajoAtaque(host, conexion?.zone_name ?? null);
   }
@@ -345,8 +347,9 @@ async function validarEnSeco(env: CloudflareBindings, admin: Cliente, o: Opcione
 // TODO(WhatsApp, pendiente de Giovanni; docs/plan_maestro_trabajo/asignaciones/avisos-whatsapp-botones.md): el 2.º
 // mensaje «Ataque desde {n} IPs en {host}…» con el botón uat («Modo bajo ataque») lo manda el despachador cuando
 // ofreceBajoAtaque(incidente, ips) diga ofrece; uat → las mismas guardas y dry_run de proponerBajoAtaque con las filas
-// ok/no (approvals.params = los de §4.2 + etapa, mismo group) en lugar de la in_app; ok → executeUnderAttack (canal
-// whatsapp, requested_by de params) y responder con resultado y expires_at; no → hermanas usadas. Aquí no se toca nada.
+// ok/no (approvals.params = los de §4.2 + etapa, mismo group y ref = refBajoAtaque(group), cada fila con su id, como
+// filasWa de E20) en lugar de la in_app; ok → executeUnderAttack (canal whatsapp, requested_by de params; acepta el ref
+// del group o el de la propia fila) y responder con resultado y expires_at; no → hermanas usadas. Aquí no se toca nada.
 
 /** E56 (§5). Reutilizable desde un botón de WhatsApp: la regla, las guardas y el dry_run no dependen del canal; aquí la
  *  entrega es la de la app (fila in_app con el HMAC del código y el código por WhatsApp de texto o, solo en la org de
@@ -502,12 +505,16 @@ const mensajeRechazo = (cf: FalloCf | SinCupo) => (cf.tipo === 'sin_cupo' ? `Tu 
  *  aprobación a la vez: se devuelve esa fila sin tocar Cloudflare, D7); (3) hermanas usadas; (4) la regla con
  *  expires_at = ahora + ttl_s DENTRO de la expresión (crearRegla); (5) executed con provider_ref = id de la regla y el
  *  previous completo, e incidente mitigated (si el UPDATE falla, se borra la regla antes del 500); (6) 4xx o cupo →
- *  failed y ok:false; red/5xx → failed y 502. Lanza ApiError internal solo si la base falla. */
+ *  failed y ok:false; red/5xx → failed y 502. Lanza ApiError internal solo si la base falla. El ref de params es el del
+ *  group (las filas ok/no del botón de WhatsApp lo comparten, cada una con su id; en la in_app group = id) o el de la
+ *  propia fila: con el índice de 0017 solo hay un modo vivo por host, así que el ref compartido sigue siendo único. */
 export async function executeUnderAttack(env: CloudflareBindings, approval: AprobacionCanjeada,
   o: { rid: string; ahora?: number }): Promise<ResultadoBajoAtaque> {
   const p = leerParamsBajoAtaque(approval.params);
   if (approval.action_kind !== 'under_attack_on' || !p || !UUID.test(approval.org_id) || !UUID.test(approval.id)
-    || p.ref !== refBajoAtaque(approval.id)) return { tipo: 'invalido' };
+    || (p.ref !== refBajoAtaque(p.group ?? approval.id) && p.ref !== refBajoAtaque(approval.id))) {
+    return { tipo: 'invalido' };
+  }
   const admin = db(env);
   const org = approval.org_id;
   const ahora = o.ahora ?? Date.now();
@@ -621,24 +628,44 @@ export const MENSAJE_DESHACER_BAJO_ATAQUE: Record<Exclude<ResultadoDeshacer, 'de
 const delStatus = (s: number): ResultadoDeshacer => ((s >= 200 && s < 300) || s === 404 ? 'deshecho'
   : s === 403 ? 'sin_permiso' : s === 401 ? 'token_invalido' : caidoHttp(s) ? 'caido' : 'rechazado');
 
+/** GET del entrypoint de la fase y DELETE de la regla que trae ese ref (§8, D8): 'no_estaba' si la fase no tiene ruleset
+ *  o ninguna regla lo trae. 1 o 2 subpeticiones, contadas con cuenta(). Nunca lanza. */
+async function borrarPorRef(token: string, zone: string, ref: string,
+  cuenta: () => void): Promise<ResultadoDeshacer | 'no_estaba'> {
+  cuenta();
+  const ep = await leerEntrypoint(token, zone);
+  if (ep.tipo === 'no_existe') return 'no_estaba';
+  if (ep.tipo === 'fallo') return ep.status === null || ep.caido ? 'caido' : delStatus(ep.status);
+  const regla = idDeRef(ep.reglas, ref);
+  if (!regla) return 'no_estaba';
+  cuenta();
+  try { return delStatus(await borrarReglaCf(token, zone, ep.id, regla)); } catch { return 'caido'; }
+}
+
 /** DELETE /zones/{previous.zone_id}/rulesets/{previous.ruleset_id}/rules/{provider_ref} con el token de
- *  previous.connection_id (un sobre por conexión); 2xx o 404 = ya no está. El ruleset nunca se borra (D9: pudo ganar
- *  reglas del cliente). Alcance zone (P1) → invalido por ahora. Las deshechas pasan a undone en UNA escritura (executed o
- *  failed: E22 reintenta las que la caducidad no pudo retirar). Subpeticiones = 2 por conexión + 1 por regla + 1.
- *  Lanza ApiError internal si la base falla. */
+ *  previous.connection_id (un sobre por conexión); 2xx o 404 = ya no está. Sin provider_ref (la retirada fallida de una
+ *  huérfana, que E55 enseña y E22 «Reintentar» admite) se busca por previous.ref: GET del entrypoint y DELETE de esa regla
+ *  (borrarPorRef; si no está, deshecho). El ruleset nunca se borra (D9: pudo ganar reglas del cliente). Alcance zone (P1)
+ *  → invalido por ahora. Las deshechas pasan a undone en UNA escritura (executed o failed: E22 reintenta las que la
+ *  caducidad no pudo retirar). Subpeticiones = 2 por conexión + 1 por regla (2 por la del ref) + 1. Las executed siempre
+ *  traen provider_ref: la caducidad y E10 no pasan por el ref. Lanza ApiError internal si la base falla. */
 export async function deshacerBajoAtaque(env: CloudflareBindings, acciones: readonly AccionBajoAtaque[],
   o: { rid: string; ahora?: number }): Promise<{ resultados: Map<string, ResultadoDeshacer>; subpeticiones: number }> {
   const resultados = new Map<string, ResultadoDeshacer>();
   let subpeticiones = 0;
-  const grupos = new Map<string, { org: string; conn: string; xs: { id: string; zone: string; rs: string; ref: string }[] }>();
+  type Regla = { id: string; zone: string } & ({ rs: string; regla: string } | { ref: string });
+  const grupos = new Map<string, { org: string; conn: string; xs: Regla[] }>();
   for (const a of acciones) {
     const prev = obj(a.previous);
-    const conn = uuid(prev.connection_id), zone = str(prev.zone_id), rs = str(prev.ruleset_id), ref = str(a.provider_ref);
-    if (prev.scope !== 'host' || !UUID.test(a.org_id) || !conn || !zone || !ZONA_ID.test(zone) || !rs || !ID_CF.test(rs) || !ref
-      || !ID_CF.test(ref)) { resultados.set(a.id, 'invalido'); continue; }
+    const conn = uuid(prev.connection_id), zone = str(prev.zone_id), rs = str(prev.ruleset_id), regla = str(a.provider_ref);
+    const ref = str(prev.ref);
+    const x: Regla | null = prev.scope !== 'host' || !UUID.test(a.org_id) || !conn || !zone || !ZONA_ID.test(zone) ? null
+      : regla ? (rs && ID_CF.test(rs) && ID_CF.test(regla) ? { id: a.id, zone, rs, regla } : null)
+      : ref && REF.test(ref) ? { id: a.id, zone, ref } : null;
+    if (!x || !conn) { resultados.set(a.id, 'invalido'); continue; }
     const k = `${a.org_id}|${conn}`;
     const g = grupos.get(k) ?? { org: a.org_id, conn, xs: [] };
-    g.xs.push({ id: a.id, zone, rs, ref });
+    g.xs.push(x);
     grupos.set(k, g);
   }
   const admin = db(env);
@@ -647,9 +674,14 @@ export async function deshacerBajoAtaque(env: CloudflareBindings, acciones: read
     try {
       await withSecret(env, admin, { orgId: g.org, connectionId: g.conn, provider: 'cloudflare', kind: 'action' }, async (token) => {
         for (const x of g.xs) {
+          if ('ref' in x) {
+            const r = await borrarPorRef(token, x.zone, x.ref, () => { subpeticiones++; });
+            resultados.set(x.id, r === 'no_estaba' ? 'deshecho' : r);
+            continue;
+          }
           subpeticiones++;
           try {
-            resultados.set(x.id, delStatus(await borrarReglaCf(token, x.zone, x.rs, x.ref)));
+            resultados.set(x.id, delStatus(await borrarReglaCf(token, x.zone, x.rs, x.regla)));
           } catch {
             resultados.set(x.id, 'caido');
           }
@@ -665,8 +697,9 @@ export async function deshacerBajoAtaque(env: CloudflareBindings, acciones: read
   if (hechos.length) {
     subpeticiones++;
     const undone_at = new Date(o.ahora ?? Date.now()).toISOString();
-    const { error } = await admin.from('actions').update({ status: 'undone', undone_at }).in('id', hechos.map((x) => x.id)).in('org_id', [...new Set(hechos.map((a) => a.org_id))]).eq('kind', 'under_attack_on')
-      .in('status', ['executed', 'failed']);
+    const orgs = [...new Set(hechos.map((a) => a.org_id))];
+    const { error } = await admin.from('actions').update({ status: 'undone', undone_at }).in('id', hechos.map((x) => x.id))
+      .in('org_id', orgs).eq('kind', 'under_attack_on').in('status', ['executed', 'failed']);
     if (error) interno(o.rid, 'bajo_ataque.undone_error', error.code);
   }
   for (const [id, r] of resultados) {
@@ -707,16 +740,7 @@ export async function retirarHuerfanaBajoAtaque(env: CloudflareBindings, o: { ri
       subpeticiones += 2;
       try {
         r = await withSecret(env, admin, { orgId: org, connectionId: conn, provider: 'cloudflare', kind: 'action' },
-          async (token): Promise<ResultadoDeshacer | 'no_estaba'> => {
-            subpeticiones++;
-            const ep = await leerEntrypoint(token, zone);
-            if (ep.tipo === 'no_existe') return 'no_estaba';
-            if (ep.tipo === 'fallo') return ep.status === null || ep.caido ? 'caido' : delStatus(ep.status);
-            const regla = idDeRef(ep.reglas, ref);
-            if (!regla) return 'no_estaba';
-            subpeticiones++;
-            try { return delStatus(await borrarReglaCf(token, zone, ep.id, regla)); } catch { return 'caido'; }
-          });
+          (token) => borrarPorRef(token, zone, ref, () => { subpeticiones++; }));
       } catch (e) {
         const material = e instanceof Error && !(e instanceof ApiError) && e.message === 'CRYPTO_MATERIAL_UNAVAILABLE';
         r = material ? 'caido' : 'sin_credencial';

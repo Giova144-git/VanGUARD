@@ -130,15 +130,21 @@ export function pasosManualesBajoAtaque(host: string, zona: string | null): stri
 }
 
 /** Texto de copiar cuando la retirada falló: «En Cloudflare (zona …): Rules → Configuration Rules → borra la regla
- *  «<descripcion>».» Con caducoEn añade «Ya no actúa desde <hora UTC>; solo ocupa una regla de tu plan.»; sin ella,
- *  «Sigue activa hasta que la borres.» (≤ 1500). La descripción viene de la fila: solo pasan letras, cifras y # · : . - */
-export function pasosRetirarBajoAtaque(descripcion: string, zona: string | null, caducoEn: Date | null): string {
+ *  «<descripcion>».» Con caducoEn ya pasada (≤ ahora) añade «Ya no actúa desde <hora UTC>; solo ocupa una regla de tu
+ *  plan.»; aún por llegar (una huérfana que no se pudo retirar a los pocos minutos), «Sigue activa hasta las <hora UTC>;
+ *  después solo ocupa una regla de tu plan.»; sin ella, «Sigue activa hasta que la borres.» (≤ 1500). La descripción
+ *  viene de la fila: solo pasan letras, cifras y # · : . - */
+export function pasosRetirarBajoAtaque(descripcion: string, zona: string | null, caducoEn: Date | null,
+  ahora: number = Date.now()): string {
   const d = descripcion.replace(/[^\p{L}\p{N} #·:.\-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 120)
     || 'VanGUARD · bajo ataque';
   const donde = zona ? `En Cloudflare (zona ${zona})` : 'En Cloudflare';
-  const iso = caducoEn && Number.isFinite(caducoEn.getTime()) ? caducoEn.toISOString() : null;
-  const fin = iso ? `Ya no actúa desde las ${iso.slice(11, 16)} UTC del ${iso.slice(0, 10)}; solo ocupa una regla de tu plan.`
-    : 'Sigue activa hasta que la borres.';
+  const t = caducoEn ? caducoEn.getTime() : NaN;
+  const iso = Number.isFinite(t) ? new Date(t).toISOString() : null;
+  const hora = iso ? `las ${iso.slice(11, 16)} UTC del ${iso.slice(0, 10)}` : '';
+  const fin = !iso ? 'Sigue activa hasta que la borres.'
+    : t <= ahora ? `Ya no actúa desde ${hora}; solo ocupa una regla de tu plan.`
+    : `Sigue activa hasta ${hora}; después solo ocupa una regla de tu plan.`;
   return `${donde}: Rules → Configuration Rules → borra la regla «${d}».\n${fin}`.slice(0, 1500);
 }
 

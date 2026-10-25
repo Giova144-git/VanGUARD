@@ -20,7 +20,8 @@ import { SIN_AVANCE_MS } from '../wiki/corridas.ts';
 // failed. Solo con VG_ENV=production (cron sin petición, S15 15.3): en local y previews no se toca Cloudflare.
 // Modo bajo ataque (modo-bajo-ataque.md §8): la misma caducidad lee también under_attack_on y la retira con
 // deshacerBajoAtaque (DELETE de la regla de configuración); de las ≤ 5 filas por minuto, ≤ 2 son de bajo ataque (con la
-// caducidad dentro de la regla no corre prisa). Después, solo si la caducidad de este minuto gastó ≤ 15 subpeticiones,
+// caducidad dentro de la regla no corre prisa). Después, solo si la caducidad de este minuto gastó ≤ 15 subpeticiones
+// (una función de deshacer que lanza cuenta su tope: lo gastado en Cloudflare no vuelve en su resultado),
 // una propuesta huérfana (proposed de bajo ataque de > 2 min: el Worker murió entre el POST y el UPDATE) se reconcilia
 // por su ref y queda failed (retirarHuerfanaBajoAtaque, ≤ 6).
 // SB_DB_DOWN se cierra en su monitor (2 lecturas sanas seguidas), no aquí.
@@ -53,6 +54,13 @@ const SIN_RPC = new Set(['PGRST202', '42883']);
 const esperaMs = (intentos: number) => Math.min(2 ** (intentos - 1), 60) * 60_000;
 type Obj = Record<string, unknown>;
 const obj = (x: unknown): Obj => (x && typeof x === 'object' && !Array.isArray(x) ? x as Obj : {});
+type Fila = { id: string; org_id: string; kind?: string; provider_ref: string | null; previous: unknown };
+// Lo más que gasta una función de deshacer con estas filas: 2 por conexión (el sobre), 1 por regla (2 si va por su ref,
+// sin provider_ref) y ≤ 2 escrituras. Solo se usa cuando lanza, para no contar de menos.
+const topeDeshacer = (xs: readonly Fila[]) => {
+  const conexiones = new Set(xs.map((f) => `${f.org_id}|${String(obj(f.previous).connection_id)}`)).size;
+  return 2 * conexiones + xs.length + xs.filter((f) => !f.provider_ref).length + 2;
+};
 
 export type ResultadoHousekeeping = {
   resueltos: number;
@@ -170,7 +178,6 @@ async function caducar(env: CloudflareBindings, now: Date, r: ResultadoHousekeep
       r.error ??= error.code ?? 'actions';
       return;
     }
-    type Fila = { id: string; org_id: string; kind?: string; provider_ref: string | null; previous: unknown };
     const modo = (f: Fila) => f.kind === 'under_attack_on';
     // Las más viejas primero, ≤ LIMITE_CADUCIDAD en total y ≤ LIMITE_CADUCIDAD_BAJO_ATAQUE de bajo ataque.
     const filas: Fila[] = [];
@@ -183,10 +190,22 @@ async function caducar(env: CloudflareBindings, now: Date, r: ResultadoHousekeep
     }
     if (!filas.length) return;
     const bloqueos = filas.filter((f) => !modo(f)), enModo = filas.filter(modo);
-    const a = bloqueos.length ? await deshacerBloqueos(env, bloqueos, { rid: 'cron', ahora: t }) : null;
-    const b = enModo.length ? await deshacerBajoAtaque(env, enModo, { rid: 'cron', ahora: t }) : null;
+    // Cada función suma lo suyo nada más volver, y su tope si lanza (falla su escritura a undone): lo ya gastado en
+    // Cloudflare no vuelve en su resultado y la huérfana no debe correr sobre un presupuesto falso.
+    const contando = async <T extends { subpeticiones: number }>(xs: Fila[], fn: () => Promise<T>): Promise<T> => {
+      try {
+        const x = await fn();
+        r.subpeticiones += x.subpeticiones;
+        return x;
+      } catch (e) {
+        r.subpeticiones += topeDeshacer(xs);
+        throw e;
+      }
+    };
+    const opc = { rid: 'cron', ahora: t };
+    const a = bloqueos.length ? await contando(bloqueos, () => deshacerBloqueos(env, bloqueos, opc)) : null;
+    const b = enModo.length ? await contando(enModo, () => deshacerBajoAtaque(env, enModo, opc)) : null;
     const resultados = new Map([...(a?.resultados ?? []), ...(b?.resultados ?? [])]);
-    r.subpeticiones += (a?.subpeticiones ?? 0) + (b?.subpeticiones ?? 0);
     r.deshechos = filas.filter((f) => resultados.get(f.id) === 'deshecho').length;
     // Una escritura por fila no retirada (≤ 5): cada una guarda su previous con el intento o el motivo.
     const pendientes = filas.filter((f) => resultados.get(f.id) !== 'deshecho');

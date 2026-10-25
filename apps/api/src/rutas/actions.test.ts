@@ -469,4 +469,20 @@ describe('E21 y E22 · under_attack_on (despacho por tipo)', () => {
     const r = await deshacer();
     expect([r.status, (await error(r)).details?.reason]).toEqual([409, 'undone']);
   });
+
+  it('E22: «Reintentar» la retirada fallida de una huérfana (failed sin provider_ref) → GET + DELETE por su ref', async () => {
+    accion = { ...accion, status: 'failed', provider_ref: null, previous: { connection_id: CONN, zone_id: ZONA, scope: 'host',
+      ref: refBajoAtaque(APR), huerfana: 'sin_comprobar', deshacer_error: 'sin_permiso' } };
+    const reglas = [{ id: REGLA, ref: refBajoAtaque(APR) }];
+    cf[`GET ${EP}`] = () => new Response(JSON.stringify({ success: true, result: { id: RS, rules: reglas } }));
+    const r = await deshacer();
+    expect(RespuestaEscritura.parse(await r.json())).toMatchObject({ ok: true, resultado: 'Modo bajo ataque desactivado' });
+    expect(aCloudflare().map((c) => `${(c[1] as RequestInit).method} ${String(c[0])}`))
+      .toEqual([`GET ${EP}`, `DELETE ${POST_REGLA}/${REGLA}`]);
+    expect(de('actions', 'update')[0]!.payload).toMatchObject({ status: 'undone' });
+    // Una failed de una ejecución que no llegó a poner la regla (sin deshacer_error) no es una retirada pendiente: 409.
+    accion = { ...accion, previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: refBajoAtaque(APR) } };
+    const otra = await deshacer();
+    expect([otra.status, (await error(otra)).details?.reason]).toEqual([409, 'not_executed']);
+  });
 });

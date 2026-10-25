@@ -187,8 +187,30 @@ describe('executeUnderAttack (E21)', () => {
   it('params ilegibles o un ref que no es el de esa aprobación → invalido sin tocar nada', async () => {
     expect(await ejecutar(aprobacion({ params: params({ ref: refBajoAtaque(INC) }) }))).toEqual({ tipo: 'invalido' });
     expect(await ejecutar(aprobacion({ action_kind: 'block_ip' }))).toEqual({ tipo: 'invalido' });
+    // Una fila de otro id: sin group, su ref solo puede ser el suyo; con group, ni el suyo ni el del group → invalido.
+    const OK = 'ab000000-0000-4000-8000-0000000000aa';
+    expect(await ejecutar(aprobacion({ id: OK, channel: 'whatsapp', params: params({ group: null }) })))
+      .toEqual({ tipo: 'invalido' });
+    expect(await ejecutar(aprobacion({ id: OK, channel: 'whatsapp', params: params({ ref: refBajoAtaque(INC) }) })))
+      .toEqual({ tipo: 'invalido' });
     expect(doble.ops).toHaveLength(0);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fila ok de WhatsApp del mismo group (id propio) con los params de §4.2 y el ref del group → ejecutado', async () => {
+    // El patrón de E20 (filasWa): las filas ok/no copian params y group, cada una con su id. El «Sí, activar» la reutiliza.
+    const OK = 'ab000000-0000-4000-8000-0000000000aa';
+    const x = await ejecutar(aprobacion({ id: OK, channel: 'whatsapp', recipient: '58' + '4141234567',
+      params: params({ etapa: 'ok' }) }));
+    expect(x).toMatchObject({ tipo: 'ejecutado', action_id: ACT, repetido: false });
+    expect(de('actions', 'insert')[0]!.payload).toMatchObject({ approval_id: OK, requested_by: ANA, previous: { ref: REF } });
+    expect(cuerpoDe(1)).toMatchObject({ ref: REF });
+    const hermanas = de('approvals', 'update')[0]!;
+    expect([eqDe(hermanas, 'org_id'), eqDe(hermanas, 'params->>group')]).toEqual([ORG, APR]);
+    // El ref propio de la fila (sin el del group) también vale: cada fila ok puede llevar el suyo.
+    cf[`POST ${CF}/rulesets/${RS}/rules`] = () => ruleset([{ id: REGLA_ID, ref: refBajoAtaque(OK) }]);
+    expect(await ejecutar(aprobacion({ id: OK, channel: 'whatsapp', params: params({ ref: refBajoAtaque(OK) }) })))
+      .toMatchObject({ tipo: 'ejecutado', repetido: false });
   });
 
   it('el UPDATE a executed falla → borra la regla recién creada antes del 500', async () => {
@@ -244,6 +266,35 @@ describe('deshacerBajoAtaque (E22, E10 y caducidad)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     cred.withSecret.mockImplementation(async () => { throw new Error('sin credencial'); });
     expect((await deshacerBajoAtaque(envDoble().env, [accion()], { rid: 'r' })).resultados.get(ACT)).toBe('sin_credencial');
+  });
+
+  it('retirada fallida de una huérfana (sin provider_ref, con previous.ref) → GET del entrypoint y DELETE por su ref', async () => {
+    const huerfana = accion({ provider_ref: null, previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF,
+      huerfana: 'sin_comprobar', deshacer_error: 'sin_permiso' } });
+    cf[`GET ${EP}`] = () => ruleset([{ id: 'c'.repeat(32), ref: 'del_cliente' }, { id: REGLA_ID, ref: REF }]);
+    cf[`DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`] = () => new Response(null, { status: 200 });
+    let r = await deshacerBajoAtaque(envDoble().env, [huerfana], { rid: 'r', ahora: AHORA });
+    expect(r.resultados.get(ACT)).toBe('deshecho');
+    expect(r.subpeticiones).toBe(2 + 2 + 1);                   // sobre · GET · DELETE · undone
+    expect(metodos()).toEqual([`GET ${EP}`, `DELETE ${CF}/rulesets/${RS}/rules/${REGLA_ID}`]);
+    expect(de('actions', 'update')[0]!.payload).toEqual({ status: 'undone', undone_at: new Date(AHORA).toISOString() });
+    sinPut();
+
+    // Sin la regla de ese ref (o sin ruleset en la fase) ya no está: deshecho sin DELETE.
+    fetchMock.mockClear();
+    cf[`GET ${EP}`] = () => ruleset([{ id: 'c'.repeat(32), ref: 'del_cliente' }]);
+    r = await deshacerBajoAtaque(envDoble().env, [huerfana], { rid: 'r', ahora: AHORA });
+    expect([r.resultados.get(ACT), r.subpeticiones, metodos()]).toEqual(['deshecho', 2 + 1 + 1, [`GET ${EP}`]]);
+    // 403 en el GET → sin_permiso y la fila no cambia.
+    cf[`GET ${EP}`] = () => json({ success: false }, 403);
+    const antes = de('actions', 'update').length;
+    expect((await deshacerBajoAtaque(envDoble().env, [huerfana], { rid: 'r' })).resultados.get(ACT)).toBe('sin_permiso');
+    expect(de('actions', 'update')).toHaveLength(antes);
+    // Sin provider_ref ni un ref vg_ua_ → invalido sin tocar Cloudflare.
+    fetchMock.mockClear();
+    const sinRef = accion({ provider_ref: null, previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: 'x' } });
+    expect((await deshacerBajoAtaque(envDoble().env, [sinRef], { rid: 'r' })).resultados.get(ACT)).toBe('invalido');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -222,12 +222,14 @@ async function confirmarBajoAtaque(c: Context<AppEnv>, id: string, code: string,
 }
 
 // E22 · under_attack_on: DELETE de la regla de configuración (deshacerBajoAtaque). Admite la failed que la caducidad no
-// pudo retirar (provider_ref y previous), como el bloqueo. 5 subpeticiones.
+// pudo retirar (provider_ref y previous), como el bloqueo, y la retirada fallida de una huérfana (sin provider_ref, con
+// previous.deshacer_error: E55 la enseña con «Reintentar»), que se busca por previous.ref. 5–6 subpeticiones.
 async function deshacerModoBajoAtaque(c: Context<AppEnv>, id: string, accion: Fila) {
   const rid = c.get('rid');
   if (accion.status === 'undone') throw new ApiError('conflict', 'El modo bajo ataque ya estaba desactivado', { reason: 'undone' });
-  const sinRetirar = accion.status === 'failed' && str(accion.provider_ref) !== null
-    && typeof accion.previous === 'object' && accion.previous !== null;
+  const previo = typeof accion.previous === 'object' && accion.previous !== null ? accion.previous as Fila : null;
+  const sinRetirar = accion.status === 'failed' && previo !== null
+    && (str(accion.provider_ref) !== null || str(previo.deshacer_error) !== null);
   if (accion.status !== 'executed' && !sinRetirar) {
     throw new ApiError('conflict', 'No hay ningún modo bajo ataque activo que retirar', { reason: 'not_executed' });
   }

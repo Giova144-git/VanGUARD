@@ -18,7 +18,8 @@ const estado = vi.hoisted(() => ({
   update: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
   vencidas: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
   huerfanas: (): { data?: unknown; error?: { code?: string } | null } => ({ data: [] }),
-  actualizar: (): { data?: unknown; error?: { code?: string } | null } => ({ data: null }),
+  actualizar: (_l?: { metodos: [string, ...unknown[]][] }): { data?: unknown; error?: { code?: string } | null } =>
+    ({ data: null }),
   tablas: {} as Record<string, (Record<string, unknown> & { id: string })[]>,
   errorTabla: null as { code?: string } | null,
   antesDeUpdate: null as (() => void) | null,
@@ -80,7 +81,8 @@ function cliente() {
         // La lectura de la propuesta huérfana del modo bajo ataque es la única con status 'proposed'.
         const esHuerfana = l.metodos.some(([m, c, v]) => m === 'eq' && c === 'status' && v === 'proposed');
         const r: R = tabla === 'wiki_runs' || tabla === 'scan_runs' ? updateEnMemoria(tabla, l)
-          : tabla === 'actions' ? (esUpdate ? estado.actualizar() : esHuerfana ? estado.huerfanas() : estado.vencidas()) : estado.update();
+          : tabla === 'actions' ? (esUpdate ? estado.actualizar(l) : esHuerfana ? estado.huerfanas() : estado.vencidas())
+          : estado.update();
         return Promise.resolve({ data: r.data ?? null, error: r.error ?? null }).then(ok);
       };
       return b;
@@ -355,6 +357,25 @@ describe('housekeeping · modo bajo ataque: caducidad por tipo y propuesta huér
     r = await housekeeping(envDoble(PROD).env, AHORA);
     expect(leeHuerfana()).toBe(true);
     expect(r.subpeticiones).toBeLessThanOrEqual(29);
+  });
+
+  it('si una función de deshacer lanza (falla su undone), lo que ya gastó cuenta y no se lee la huérfana', async () => {
+    // 3 bloqueos y 2 modos, cada uno en su conexión, todos retirados: caducidad real 1 + (3 × 2 + 3 + 2) + (2 × 2 + 2 + 1)
+    // = 19 > 15.
+    estado.vencidas = () => ({ data: [
+      ...[1, 2, 3].map((i) => vencida(`a${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, existed: false } })),
+      ...[4, 5].map((i) => modo(`u${i}`, { previous: { connection_id: conn(i), zone_id: ZONA, scope: 'host', ruleset_id: RS } })),
+    ] });
+    estado.actualizar = (l) => (l?.metodos.some(([m, c, v]) => m === 'eq' && c === 'kind' && v === 'under_attack_on')
+      ? { error: { code: '57014' } } : { data: null });
+    estado.huerfanas = () => ({ data: [{ id: 'h1', org_id: ORG, expires_at: AHORA.toISOString(),
+      previous: { connection_id: CONN, zone_id: ZONA, scope: 'host', ref: REF } }] });
+    const r = await housekeeping(envDoble(PROD).env, AHORA);
+    expect(r.error).toBe('internal');
+    expect(leeHuerfana()).toBe(false);
+    // rpc · vigilante · lectura · bloqueos (11, los suyos) · bajo ataque: su tope 2 × 2 + 2 + 2 = 8 (real 7) al lanzar.
+    expect(r.subpeticiones).toBe(1 + 1 + 1 + 11 + 8);
+    expect(r.subpeticiones).toBeGreaterThanOrEqual(1 + 1 + 19);
   });
 });
 

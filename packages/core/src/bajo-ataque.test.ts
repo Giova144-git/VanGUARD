@@ -126,8 +126,12 @@ describe('textos', () => {
   });
   it('pasos para retirar: con la hora de caducidad o «sigue activa»; la descripción no cuela saltos ni comillas', () => {
     const notas = notasBajoAtaque('A1F3C9', APR, HASTA);
-    expect(pasosRetirarBajoAtaque(notas, ZONA, HASTA)).toBe(`En Cloudflare (zona ${ZONA}): Rules → Configuration Rules → `
-      + `borra la regla «${notas}».\nYa no actúa desde las 23:42 UTC del 2026-10-24; solo ocupa una regla de tu plan.`);
+    expect(pasosRetirarBajoAtaque(notas, ZONA, HASTA, HASTA.getTime())).toBe(`En Cloudflare (zona ${ZONA}): Rules → `
+      + `Configuration Rules → borra la regla «${notas}».\n`
+      + 'Ya no actúa desde las 23:42 UTC del 2026-10-24; solo ocupa una regla de tu plan.');
+    // Antes de caducar (una huérfana que no se pudo retirar a los 3 min) la regla aún actúa: no se dice «Ya no actúa».
+    expect(pasosRetirarBajoAtaque(notas, ZONA, HASTA, HASTA.getTime() - 60_000).split('\n')[1])
+      .toBe('Sigue activa hasta las 23:42 UTC del 2026-10-24; después solo ocupa una regla de tu plan.');
     expect(pasosRetirarBajoAtaque(notas, ZONA, null).split('\n')[1]).toBe('Sigue activa hasta que la borres.');
     const bidi = String.fromCharCode(0x202e);
     const sucio = pasosRetirarBajoAtaque(`VanGUARD${bidi} «x»\n<b>`, null, null);

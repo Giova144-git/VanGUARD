@@ -64,11 +64,13 @@ wiki.post('/orgs/:org/wiki/estimate', requireAdmin, async (c) => {
   const salida = salidaGithub(TOPE_SUBPETICIONES - SUBPETICIONES_RUTA_E40);
   let estimacion: Estimacion;
   try {
-    // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub, nada más.
-    estimacion = await conTokenGithub(c.env, db(c.env), c.get('orgId'), body.connection_id, async (githubToken) => {
-      const deps = depsWiki({ fetch: salida.fetch, githubToken });
-      return estimar(await pasoArbol(body, deps), deps);
-    });
+    // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub, nada más. La
+    // conexión tiene que ser la del repo pedido (B8 de varias-codebases.md).
+    estimacion = await conTokenGithub(c.env, db(c.env), c.get('orgId'), body.connection_id, body.repo_full_name,
+      async (githubToken) => {
+        const deps = depsWiki({ fetch: salida.fetch, githubToken });
+        return estimar(await pasoArbol(body, deps), deps);
+      });
   } catch (e) {
     errorGithub(c, e, conToken, salida, 'wiki.estimar_github');
   }
@@ -115,7 +117,7 @@ wiki.post('/orgs/:org/wiki/runs', requireAdmin, requireColaPropia, async (c) => 
   const salida = salidaGithub(TOPE_SUBPETICIONES - SUBPETICIONES_RUTA_E41);
   let meta: MetaRepo;
   try {
-    meta = await conTokenGithub(c.env, admin, orgId, connectionId, (githubToken) =>
+    meta = await conTokenGithub(c.env, admin, orgId, connectionId, body.repo_full_name, (githubToken) =>
       leerMeta(body, depsWiki({ fetch: salida.fetch, githubToken })));
   } catch (e) {
     errorGithub(c, e, conToken, salida, 'wiki.correr_github');

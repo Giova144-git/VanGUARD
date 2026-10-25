@@ -5,7 +5,8 @@ import { dbDoble, type Op } from '../test/db-doble.ts';
 // Cable trampa de vg_upsert_findings (15.8 regla 9, hallazgos 16, 19 y 24) con el cliente de supabase-js simulado.
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
-const { PARECE_SECRETO, TOPE_SUBPETICIONES, conexionActiva, guardarHallazgos, prefiltrar } = await import('./comun.ts');
+const { PARECE_SECRETO, TOPE_SUBPETICIONES, aFila, claveDeRepo, conexionActiva, guardarHallazgos, prefiltrar } =
+  await import('./comun.ts');
 const { ProviderError } = await import('../lib/http.ts');
 
 const m = { v: 1, kind: 'scan', scan_run_id: '5a1c0000-0000-4000-8000-000000000001', org_id: '0f6c0000-0000-4000-8000-000000000001',
@@ -168,5 +169,33 @@ describe('conexionActiva (varias-codebases B0)', () => {
     expect(ops[0]!.orden).toEqual([['created_at', true], ['id', true]]);
     expect(ops[0]!.filters).toEqual(expect.arrayContaining([['status', 'eq', 'active'], ['provider', 'eq', 'github']]));
     expect(ops[1]!.orden).toEqual([['created_at', false], ['id', false]]);
+  });
+});
+
+describe('claveDeRepo (varias-codebases B2)', () => {
+  const dep = { rule_id: 'CB_DEP_VULN', severity: 'high', title: 'Dependencia con avisos: lodash@4.17.15',
+    resource: 'npm:lodash@4.17.15' };
+  const clave = async (meta: Record<string, unknown>, b = dep) => (await aFila(m.org_id, claveDeRepo(meta)(b))).dedupe_key;
+
+  it('dos conexiones con la marca y el mismo npm:lodash@4.17.15 → dos dedupe_key; el resource visible no cambia', async () => {
+    const tienda = { repo_full_name: 'Acme/Tienda', hallazgos_por_repo: true };
+    const landing = { repo_full_name: 'acme/landing', hallazgos_por_repo: true };
+    const a = await clave(tienda);
+    const b = await clave(landing);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(b);
+    expect(a).toBe(await clave({ ...tienda, repo_full_name: 'acme/tienda' }));   // el repo va en minúsculas
+    expect(claveDeRepo(tienda)(dep)).toEqual({ ...dep, dedupe_input: 'acme/tienda|npm:lodash@4.17.15' });
+    // Con un dedupe_input propio (p. ej. recurso#política), el repo va delante de él.
+    expect(claveDeRepo(tienda)({ ...dep, dedupe_input: 'x#y' }).dedupe_input).toBe('acme/tienda|x#y');
+  });
+
+  it('sin la marca (la primera conexión, las de antes, las reconectadas): la clave de hoy, la misma en los dos repos', async () => {
+    const hoy = (await aFila(m.org_id, dep)).dedupe_key;
+    expect(await clave({ repo_full_name: 'acme/tienda' })).toBe(hoy);
+    expect(await clave({ repo_full_name: 'acme/landing' })).toBe(hoy);
+    expect(await clave({ repo_full_name: 'acme/tienda', hallazgos_por_repo: 'true' })).toBe(hoy);   // solo el booleano true
+    expect(await clave({ hallazgos_por_repo: true })).toBe(hoy);                                    // sin repo, nada que añadir
+    expect(claveDeRepo({})(dep)).toBe(dep);
   });
 });

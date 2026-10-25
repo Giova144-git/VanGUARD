@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError as ApiErrorBody, ScanAccepted, type ZipResult } from '@vanguard/contracts';
+import { ApiError as ApiErrorBody, MAX_REPOS_GITHUB, ScanAccepted, ScanRun, type ZipResult } from '@vanguard/contracts';
 import type { JobMsg } from '../jobs.ts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 import { envDoble } from '../test/dobles.ts';
@@ -239,5 +239,63 @@ describe('E23 · POST /api/orgs/:org/scans/:id/zip-result', () => {
       envDoble(PROD).env);
     expect(r.status).toBe(403);
     expect(fila()).toMatchObject({ step: 'waiting_result' });
+  });
+});
+
+// E12 con varios repos (asignaciones/varias-codebases.md §2.3, B4): repos sale de coverage.detail.codebase.repos.
+describe('E12 · GET /api/orgs/:org/scans/:id · repos (varias-codebases B4)', () => {
+  const AUDITORIA = '5a1c0000-0000-4000-8000-0000000000c3';
+  const CONN_1 = 'c0000000-0000-4000-8000-000000000001';
+  const CONN_2 = 'c0000000-0000-4000-8000-000000000007';
+  const auditoria = (codebase?: Fila): Fila => ({ id: AUDITORIA, org_id: ORG, kind: 'full_audit', status: 'succeeded', progress: 100,
+    step: null, steps: [{ name: 'repo', status: 'done', findings: 7, error_code: 'parcial' }], score: 64, summary: null, error: null,
+    coverage: { seen: 1, total: 4, missing: [], ...(codebase ? { detail: { codebase } } : {}) },
+    created_at: hace(30), started_at: hace(29), finished_at: hace(28) });
+  const leer = async () => {
+    const r = await app.request(`https://officialvanguard.com/api/orgs/${ORG}/scans/${AUDITORIA}`,
+      { headers: { authorization: 'Bearer vera' } }, envDoble(PROD).env);
+    expect(r.status).toBe(200);
+    const crudo = await r.json() as ScanRun;   // tal cual sale (sin que zod quite nada en la prueba), y cumple ScanRun
+    ScanRun.parse(crudo);
+    return crudo;
+  };
+
+  it('presente: cada entrada con ScanRepo (sin miradas, sha ni nada interno); sin repos o sin detalle, sin campo', async () => {
+    filas.push(auditoria({ modo: 'riesgo', connection_id: CONN_1, miradas: { secretos: true }, repos: [
+      { connection_id: CONN_1, repo_full_name: 'acme/tienda', status: 'done', findings: 7, sha: 'a'.repeat(40),
+        miradas: { env: true } },
+      { connection_id: CONN_2, repo_full_name: 'acme/landing', status: 'failed', error_code: 'unauthorized' },
+    ] }));
+    const run = await leer();
+    expect(run.repos).toEqual([
+      { connection_id: CONN_1, repo_full_name: 'acme/tienda', status: 'done', findings: 7 },
+      { connection_id: CONN_2, repo_full_name: 'acme/landing', status: 'failed', error_code: 'unauthorized' },
+    ]);
+    expect(run.coverage).toEqual({ seen: 1, total: 4, missing: [] });   // el detalle interno no sale
+
+    filas.splice(filas.length - 1, 1, auditoria({ modo: 'riesgo', connection_id: CONN_1 }));
+    expect('repos' in (await leer())).toBe(false);
+    filas.splice(filas.length - 1, 1, auditoria());
+    expect('repos' in (await leer())).toBe(false);
+  });
+
+  it('descarta la entrada inválida (id malformado, estado raro, error_code > 40); si no queda ninguna, sin campo', async () => {
+    const buena = { connection_id: CONN_1, repo_full_name: 'acme/tienda', status: 'done', findings: 0 };
+    filas.push(auditoria({ repos: [{ ...buena, connection_id: 'no-es-un-id' }, buena, { ...buena, status: 'rara' },
+      { ...buena, connection_id: CONN_2, status: 'failed', error_code: 'x'.repeat(41) }, 'texto', null] }));
+    expect((await leer()).repos).toEqual([buena]);
+    filas.splice(filas.length - 1, 1, auditoria({ repos: [{ ...buena, status: 'rara' }] }));
+    expect('repos' in (await leer())).toBe(false);
+    filas.splice(filas.length - 1, 1, auditoria({ repos: 'no es una lista' }));
+    expect('repos' in (await leer())).toBe(false);
+  });
+
+  it(`como mucho ${MAX_REPOS_GITHUB} entradas (el contrato no admite más)`, async () => {
+    const entrada = (i: number) => ({ connection_id: `c0000000-0000-4000-8000-00000000001${i}`, repo_full_name: `acme/r${i}`,
+      status: 'done', findings: i });
+    filas.push(auditoria({ repos: Array.from({ length: MAX_REPOS_GITHUB + 2 }, (_, i) => entrada(i)) }));
+    const run = await leer();
+    expect(run.repos).toHaveLength(MAX_REPOS_GITHUB);
+    expect(run.repos?.[0]).toEqual(entrada(0));
   });
 });

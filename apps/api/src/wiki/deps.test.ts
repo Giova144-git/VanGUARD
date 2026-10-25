@@ -133,10 +133,13 @@ describe('depsWiki y sinLlm', () => {
 describe('conTokenGithub · el PAT solo dentro de withSecret', () => {
   // Filas de connections; el doble aplica todos los .eq() de la consulta, como Postgres.
   const FILAS = [
-    { id: CONN, org_id: ORG, provider: 'github', kind: 'read', status: 'active' },
-    { id: 'c0aa0000-0000-4000-8000-000000000002', org_id: OTRA_ORG, provider: 'github', kind: 'read', status: 'active' },
-    { id: 'c0aa0000-0000-4000-8000-000000000003', org_id: ORG, provider: 'github', kind: 'read', status: 'revoked' },
-    { id: 'c0aa0000-0000-4000-8000-000000000004', org_id: ORG, provider: 'cloudflare', kind: 'read', status: 'active' },
+    { id: CONN, org_id: ORG, provider: 'github', kind: 'read', status: 'active', meta: { repo_full_name: 'Acme/Tienda' } },
+    { id: 'c0aa0000-0000-4000-8000-000000000002', org_id: OTRA_ORG, provider: 'github', kind: 'read', status: 'active',
+      meta: { repo_full_name: 'acme/tienda' } },
+    { id: 'c0aa0000-0000-4000-8000-000000000003', org_id: ORG, provider: 'github', kind: 'read', status: 'revoked',
+      meta: { repo_full_name: 'acme/tienda' } },
+    { id: 'c0aa0000-0000-4000-8000-000000000004', org_id: ORG, provider: 'cloudflare', kind: 'read', status: 'active', meta: {} },
+    { id: 'c0aa0000-0000-4000-8000-000000000005', org_id: ORG, provider: 'github', kind: 'read', status: 'active', meta: {} },
   ];
   const doble = (error?: { code: string }) => dbDoble({
     tabla: (op: Op) => {
@@ -152,14 +155,14 @@ describe('conTokenGithub · el PAT solo dentro de withSecret', () => {
   it('sin connection_id: fn(undefined), sin tocar la base ni withSecret', async () => {
     const d = doble();
     const fn = vi.fn(async (t: string | undefined) => t ?? 'publico');
-    expect(await conTokenGithub(env, admin(d), ORG, undefined, fn)).toBe('publico');
+    expect(await conTokenGithub(env, admin(d), ORG, undefined, 'acme/publico', fn)).toBe('publico');
     expect(d.ops).toHaveLength(0);
     expect(cred.withSecret).not.toHaveBeenCalled();
   });
 
   it('conexión GitHub activa de esta org: withSecret con su contexto y fn recibe el token', async () => {
     const d = doble();
-    const r = await conTokenGithub(env, admin(d), ORG, CONN, async (t) => (t === PAT ? 'con-token' : 'otro'));
+    const r = await conTokenGithub(env, admin(d), ORG, CONN, 'acme/tienda', async (t) => (t === PAT ? 'con-token' : 'otro'));
     expect(r).toBe('con-token');
     const filtros = d.ops[0]?.filters ?? [];
     expect(filtros).toEqual(expect.arrayContaining([['id', 'eq', CONN], ['org_id', 'eq', ORG], ['provider', 'eq', 'github'],
@@ -172,7 +175,7 @@ describe('conTokenGithub · el PAT solo dentro de withSecret', () => {
     const textos = new Set<string>();
     for (const id of ['c0aa0000-0000-4000-8000-000000000002', 'c0aa0000-0000-4000-8000-000000000003',
       'c0aa0000-0000-4000-8000-000000000004', 'c0aa0000-0000-4000-8000-0000000000ff']) {
-      const e = await conTokenGithub(env, admin(doble()), ORG, id, async () => 'no').catch((x: unknown) => x);
+      const e = await conTokenGithub(env, admin(doble()), ORG, id, 'acme/tienda', async () => 'no').catch((x: unknown) => x);
       expect(e).toBeInstanceOf(ApiError);
       expect((e as ApiError).status, id).toBe(404);
       textos.add((e as ApiError).message);
@@ -181,8 +184,26 @@ describe('conTokenGithub · el PAT solo dentro de withSecret', () => {
     expect(cred.withSecret).not.toHaveBeenCalled();
   });
 
+  it('B8: tiene que ser la conexión del repo pedido: otras mayúsculas valen; otro repo o meta sin repo → el mismo 404', async () => {
+    const d = doble();
+    const r = await conTokenGithub(env, admin(d), ORG, CONN, 'ACME/tienda', async (t) => (t === PAT ? 'vale' : 'otro'));
+    expect(r).toBe('vale');
+    expect(d.ops[0]?.columns).toContain('meta');   // la misma subpetición, con meta
+    const SIN_REPO = 'c0aa0000-0000-4000-8000-000000000005';
+    const textos = new Set<string>();
+    for (const [id, repo] of [[CONN, 'acme/privado'], [CONN, 'acme/tienda-2'], [SIN_REPO, 'acme/tienda']] as const) {
+      const e = await conTokenGithub(env, admin(doble()), ORG, id, repo, async () => 'no').catch((x: unknown) => x);
+      expect(e, `${id} ${repo}`).toBeInstanceOf(ApiError);
+      expect((e as ApiError).status).toBe(404);
+      textos.add((e as ApiError).message);
+    }
+    expect([...textos]).toEqual(['Conexión no encontrada']);
+    expect(cred.withSecret).toHaveBeenCalledTimes(1);   // solo la que casa: con otro repo el PAT ni se descifra
+  });
+
   it('error de la base → 500 internal sin detalles de Postgres', async () => {
-    const e = await conTokenGithub(env, admin(doble({ code: '57014' })), ORG, CONN, async () => 'no').catch((x: unknown) => x);
+    const e = await conTokenGithub(env, admin(doble({ code: '57014' })), ORG, CONN, 'acme/tienda', async () => 'no')
+      .catch((x: unknown) => x);
     expect(e).toMatchObject({ code: 'internal', status: 500 });
     expect(cred.withSecret).not.toHaveBeenCalled();
   });

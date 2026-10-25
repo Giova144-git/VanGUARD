@@ -104,3 +104,32 @@ describe('#21 · E5 cuenta todo lo abierto, no las 10 filas de «ahora»', () =>
     expect(r.status).toBe(500);
   });
 });
+
+// Varias codebases (asignaciones/varias-codebases.md §2.4, B4): el repo de cada hallazgo de «ahora» viaja por
+// connection_id (null si no tiene); los incidentes no llevan el campo. Puntaje y counts, agregados como siempre.
+describe('E5 · connection_id en «ahora» (varias-codebases B4)', () => {
+  it('hallazgo con su conexión, hallazgo sin conexión (ZIP o repo quitado) → null; incidente → sin campo', async () => {
+    const REPO_1 = 'c0000000-0000-4000-8000-000000000001';
+    const REPO_2 = 'c0000000-0000-4000-8000-000000000007';
+    const top = [
+      { id: uuid(), module: 'codebase', rule_id: 'CB_DEP_VULN', severity: 'high', confirmed: false, title: 'lodash',
+        resource: 'npm:lodash@4.17.15', connection_id: REPO_1 },
+      { id: uuid(), module: 'codebase', rule_id: 'CB_DEP_VULN', severity: 'high', confirmed: false, title: 'lodash',
+        resource: 'npm:lodash@4.17.15', connection_id: REPO_2 },
+      { id: uuid(), module: 'codebase', rule_id: 'CB_ENV_COMMITTED', severity: 'high', confirmed: false, title: '.env',
+        resource: 'zip:proyecto.zip/.env', connection_id: null },
+    ];
+    tabla = (op) => {
+      if (op.table === 'incidents' && !op.head) return { data: [incidente()] };
+      if (esTop(op)) return { data: top };
+      return undefined;
+    };
+    const r = await pedir();
+    const crudo = await r.json() as { ahora: Record<string, unknown>[] };   // tal cual sale, antes de que zod quite nada
+    const b = Overview.parse(crudo);
+    expect(b.ahora.map((a) => a.kind)).toEqual(['incident', 'finding', 'finding', 'finding']);
+    expect('connection_id' in crudo.ahora[0]!).toBe(false);
+    expect(crudo.ahora.slice(1).map((a) => a.connection_id)).toEqual([REPO_1, REPO_2, null]);
+    expect(doble.ops.find(esTop)!.columns).toContain('connection_id');
+  });
+});

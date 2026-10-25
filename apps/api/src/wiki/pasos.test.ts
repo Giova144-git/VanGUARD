@@ -71,6 +71,7 @@ let fallaAvanzar: number;
 let escrituras: number;
 let auditorias: Record<string, unknown>[];
 let hallazgosDb: Record<string, unknown>[];
+let repoConexion: string;   // meta.repo_full_name de la conexión CONN (B8 de varias-codebases.md)
 
 const json = (v: unknown) => new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } });
 function githubOk(url: string): Response {
@@ -97,6 +98,7 @@ beforeEach(() => {
     est_usd: null, max_usd: 1, models: { fast: 'claude-haiku-5-5', smart: 'claude-sonnet-5-5' }, state: null,
     steps: [], progress: 0, cost_usd: 0, doc: null, error: null, commit_sha: SHA, started_at: null, finished_at: null,
     updated_at: 't0' };
+  repoConexion = 'Acme/Tienda';   // otras mayúsculas que la fila: el repo se compara sin distinguirlas
   casPierde = false;
   fallaAvanzar = 0;
   escrituras = 0;
@@ -114,7 +116,8 @@ beforeEach(() => {
         return { data: eqDe(op, 'id') === fila.id && eqDe(op, 'org_id') === fila.org_id ? clon(fila) : null };
       }
       if (op.table === 'connections' && op.single === 'maybe') {
-        return { data: eqDe(op, 'id') === CONN ? { id: CONN, provider: 'github', kind: 'read', status: 'active' } : null };
+        return { data: eqDe(op, 'id') === CONN
+          ? { id: CONN, provider: 'github', kind: 'read', status: 'active', meta: { repo_full_name: repoConexion } } : null };
       }
       if (op.table === 'connections') {
         return { data: [{ id: CONN, meta: { repo_full_name: 'Acme/Tienda' } }, { id: OTRA_CONN, meta: { repo_full_name: 'acme/otro' } }] };
@@ -479,6 +482,16 @@ describe('errores de GitHub y de la IA', () => {
     expect(await pasoWiki(d.env, msg('arbol'))).toBe('ack');
     expect(stepDe('arbol')).toMatchObject({ status: 'failed', error_code: 'conexion_no_encontrada' });
     expect(urls).toEqual([]);
+  });
+
+  it('B8: la conexión es de otro repo (que el PAT también ve) → failed con conexion_no_encontrada sin leer GitHub', async () => {
+    const d = conIA();
+    repoConexion = 'acme/otro';
+    expect(await pasoWiki(d.env, msg('arbol'))).toBe('ack');
+    expect(stepDe('arbol')).toMatchObject({ status: 'failed', error_code: 'conexion_no_encontrada' });
+    expect(urls).toEqual([]);
+    const consulta = doble.ops.find((o) => o.table === 'connections' && o.single === 'maybe')!;
+    expect(consulta.columns).toContain('meta');
   });
 
   it('IA_CORTE=1 → failed con sin_llm antes de leer GitHub, sin coste', async () => {

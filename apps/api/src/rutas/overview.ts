@@ -27,7 +27,8 @@ export async function armarOverview(env: CloudflareBindings, orgId: string, rid:
       // Puntaje sobre todos los open, como el paso puntaje (mismo tope y solo las columnas que usa score()).
       admin.from('findings').select('module, severity, confirmed').eq('org_id', orgId).eq('status', 'open')
         .order('severity_rank', { ascending: false }).limit(TOPE_PUNTAJE),
-      admin.from('findings').select('id, module, rule_id, severity, confirmed, title, resource').eq('org_id', orgId).eq('status', 'open')
+      admin.from('findings').select('id, module, rule_id, severity, confirmed, title, resource, connection_id')
+        .eq('org_id', orgId).eq('status', 'open')
         .order('severity_rank', { ascending: false }).order('confirmed', { ascending: false }).order('last_seen_at', { ascending: false }).limit(10),
       admin.from('incidents').select('id, rule_ids, severity, title, resource').eq('org_id', orgId).in('status', ['open', 'ack'])
         .order('severity_rank', { ascending: false }).limit(10),
@@ -47,15 +48,16 @@ export async function armarOverview(env: CloudflareBindings, orgId: string, rid:
   }
   const paraPuntaje = (fs.data ?? []) as { module: AhoraItem['module']; severity: Severity; confirmed: boolean }[];
   const hallazgos = (top.data ?? []) as { id: string; module: AhoraItem['module']; rule_id: string; severity: Severity; confirmed: boolean;
-    title: string; resource: string }[];
+    title: string; resource: string; connection_id: string | null }[];
   const incidentes = (inc.data ?? []) as { id: string; rule_ids: string[]; severity: Severity; title: string; resource: string }[];
   const counts = Object.fromEntries(Severity.options.map((s, i) => [s, porSeveridad[i]?.count ?? 0]));
   const p = cov.seen === 0 ? null : score(paraPuntaje);
   const ahora: AhoraItem[] = [
     ...incidentes.map((i) => ({ kind: 'incident' as const, id: i.id, module: MODULO_DE_REGLA[(i.rule_ids[0] ?? '').slice(0, 2)] ?? 'cloudflare',
       rule_id: i.rule_ids[0] ?? 'CF_UNKNOWN', severity: i.severity, title: i.title, resource: i.resource })),
+    // El repo de cada hallazgo viaja por connection_id (varias-codebases.md §2.4): chip del FRONT con ≥ 2 repos.
     ...hallazgos.map((f) => ({ kind: 'finding' as const, id: f.id, module: f.module, rule_id: f.rule_id, severity: f.severity,
-      title: f.title, resource: f.resource })),
+      title: f.title, resource: f.resource, connection_id: f.connection_id ?? null })),
   ].slice(0, 10);
   const l = last.data as { id: string; status: string; finished_at: string | null } | null;
   const aiData = (ai.data ?? null) as { enabled?: boolean; level?: string } | null;

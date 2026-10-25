@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError as ApiErrorBody, ConnectionCreated, ConnectionPublic, ConnectionTest } from '@vanguard/contracts';
+import { ApiError as ApiErrorBody, ConnectionCreated, ConnectionPublic, ConnectionTest, MAX_REPOS_GITHUB }
+  from '@vanguard/contracts';
+import { ApiError } from '../lib/errors.ts';
 import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 import { envDoble } from '../test/dobles.ts';
 
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
-const cred = vi.hoisted(() => ({ createConnectionWithSecret: vi.fn(), withSecret: vi.fn() }));
+const cred = vi.hoisted(() => ({ createConnectionWithSecret: vi.fn(), withSecret: vi.fn(), rotarSecretoConexion: vi.fn() }));
 vi.mock('../lib/credentials.ts', () => cred);
 
 const { app } = await import('../app.ts');
@@ -42,11 +44,13 @@ beforeEach(() => {
   doble = dbDoble({
     tabla: (op) => {
       if (op.table === 'org_members') return { data: { role: rol } };
+      const propia = tabla(op);
+      if (propia) return propia;
       if (op.table === 'connections' && op.action === 'select' && op.filters.some(([c, o]) => c === 'id' && o === 'in')) {
         return { data: creadas.map((c) => fila({ id: c.connectionId, provider: c.provider, kind: c.kind, label: c.label,
           meta: c.meta, capabilities: c.capabilities, scopes: c.scopes })) };
       }
-      return tabla(op);
+      return undefined;
     },
     claims: (tok) => (tok === 'ana' ? { sub: ANA, email: 'ana@acme.dev', is_anonymous: false } : null),
   });
@@ -55,6 +59,7 @@ beforeEach(() => {
     creadas.push(c);
   });
   cred.withSecret.mockReset();
+  cred.rotarSecretoConexion.mockReset().mockResolvedValue(undefined);
   fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
   vi.stubGlobal('fetch', fetchMock);
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -255,12 +260,6 @@ describe('E8 · Supabase · sondeo negativo (permisos de más, §06.3)', () => {
 });
 
 describe('E8 · GitHub e ingest', () => {
-  it('ya hay un repo activo → 409 sin llamar a GitHub', async () => {
-    tabla = (op) => (op.table === 'connections' && eqDe(op, 'provider') === 'github' ? { count: 1 } : undefined);
-    expect((await post({ provider: 'github', repo_full_name: 'acme/web', pat: PAT_GH })).status).toBe(409);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('repo que el token no ve → 422 provider_rejected [metadata:read]', async () => {
     fetchMock.mockImplementation(async () => new Response('{}', { status: 404 }));
     const e = await error(await post({ provider: 'github', repo_full_name: 'acme/web', pat: PAT_GH }));
@@ -274,6 +273,174 @@ describe('E8 · GitHub e ingest', () => {
     expect(b.ingest_secret).toMatch(/^vgi_[A-Za-z0-9_-]{43}$/);
     expect(cred.createConnectionWithSecret.mock.calls[0]?.[3]).toBe(b.ingest_secret);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// Varios repos por org (asignaciones/varias-codebases.md §2.1, B1): tope por nombres distintos, duplicados por nombre y
+// por repo_id, «Reconectar» sin perder el id, la marca de la clave por repo y la conexión de estados fuera de la cuenta.
+describe('E8 · GitHub · varios repos por org (varias-codebases B1)', () => {
+  const VIEJA = 'c0aa0000-0000-4000-8000-0000000000a1';
+  const OTRA_VIEJA = 'c0aa0000-0000-4000-8000-0000000000a2';
+  const ACTIVA = 'c0aa0000-0000-4000-8000-0000000000a3';
+  let previas: Record<string, unknown>[];
+  // Conexión GitHub ya guardada (como la devuelve la base); previas va en orden de created_at.
+  const gh = (id: string, repo: string, o: Record<string, unknown> = {}) => fila({ id, provider: 'github', label: `GitHub · ${repo}`,
+    org_id: ORG, meta: { repo_full_name: repo, default_branch: 'main', private: true, repo_id: 100 + Number(id.slice(-1)) },
+    capabilities: { metadata: true, contents: true }, ...o });
+  const cumple = (f: Record<string, unknown>, op: Op) => op.filters.every(([c, o, v]) =>
+    (o === 'eq' ? f[c] === v : o === 'in' ? (v as unknown[]).includes(f[c]) : true));
+  // GitHub ve `repo` (sin distinguir mayúsculas, como la API) con ese id; commits y dependabot, 200.
+  const githubVe = (repo: string, id: number) => fetchMock.mockImplementation(async (url: string) =>
+    (String(url).toLowerCase() === `https://api.github.com/repos/${repo.toLowerCase()}`
+      ? Response.json({ id, full_name: repo, default_branch: 'main', private: true }) : new Response('[]', { status: 200 })));
+  const alta = (repo: string, pat = PAT_GH) => post({ provider: 'github', repo_full_name: repo, pat });
+  const escrituras = () => doble.ops.filter((o) => o.action !== 'select');
+
+  beforeEach(() => {
+    previas = [];
+    // Las lecturas de connections de E8 (la lista y leer) salen de previas con los .eq() aplicados, como en Postgres;
+    // una conexión recién creada sigue saliendo de `creadas` (manejador de arriba).
+    tabla = (op) => {
+      if (op.table !== 'connections' || op.action !== 'select') return undefined;
+      const sel = previas.filter((f) => cumple(f, op));
+      return sel.length || !op.filters.some(([c, o]) => c === 'id' && o === 'in') ? { data: sel } : undefined;
+    };
+    // vg_rotate_secret deja la conexión active (0003).
+    cred.rotarSecretoConexion.mockImplementation(async (_e: unknown, _a: unknown, ctx: { connectionId: string }) => {
+      const f = previas.find((p) => p.id === ctx.connectionId);
+      if (f) f.status = 'active';
+    });
+  });
+
+  it('el mismo repo ACTIVO (otras mayúsculas) → 409 repo_duplicado sin llamar a GitHub; lee solo las de lectura', async () => {
+    previas = [gh(ACTIVA, 'acme/web')];
+    const r = await alta('ACME/Web');
+    expect(r.status).toBe(409);
+    const e = await error(r);
+    expect([e.message, e.details?.reason]).toEqual(['Ese repo ya está conectado.', 'repo_duplicado']);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+    const sel = doble.ops.find((o) => o.table === 'connections')!;
+    expect(sel.filters).toEqual(expect.arrayContaining([['org_id', 'eq', ORG], ['provider', 'eq', 'github'],
+      ['kind', 'eq', 'read']]));
+    expect(sel.orden).toEqual([['created_at', true], ['id', true]]);   // la más antigua primero
+  });
+
+  it('el mismo repo_id ACTIVO (renombrado en GitHub) → 409 repo_duplicado después del sondeo y nada guardado', async () => {
+    previas = [gh(ACTIVA, 'acme/web-vieja')];   // repo_id 103
+    githubVe('acme/web', 103);
+    const r = await alta('acme/web');
+    expect([r.status, (await error(r)).details?.reason]).toEqual([409, 'repo_duplicado']);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+    expect(cred.rotarSecretoConexion).not.toHaveBeenCalled();
+  });
+
+  it('la primera de la org conserva la clave de hoy; un 2.º repo nace con meta.hallazgos_por_repo', async () => {
+    githubVe('acme/web', 201);
+    expect((await alta('acme/web')).status).toBe(201);
+    expect(cred.createConnectionWithSecret.mock.calls[0]![2].meta).toEqual({ repo_full_name: 'acme/web', default_branch: 'main',
+      private: true, repo_id: 201 });
+
+    previas = [gh(ACTIVA, 'acme/web')];
+    githubVe('acme/landing', 202);
+    const r = await alta('acme/landing');
+    expect(r.status).toBe(201);
+    const [, , conn, token] = cred.createConnectionWithSecret.mock.calls[1]!;
+    expect(conn).toMatchObject({ orgId: ORG, provider: 'github', kind: 'read', meta: { repo_full_name: 'acme/landing',
+      repo_id: 202, hallazgos_por_repo: true } });
+    expect(token).toBe(PAT_GH);
+    expect(ConnectionCreated.parse(await r.json()).connection.meta).toMatchObject({ hallazgos_por_repo: true });
+    expect(cred.rotarSecretoConexion).not.toHaveBeenCalled();
+  });
+
+  it('«Reconectar» el mismo repo NO activo → token nuevo en la MÁS ANTIGUA (mismo id), 201 con ella y sin crear otra', async () => {
+    const marcada = { repo_full_name: 'Acme/Web', repo_id: 101, hallazgos_por_repo: true };
+    previas = [gh(VIEJA, 'Acme/Web', { status: 'revoked', meta: marcada }), gh(OTRA_VIEJA, 'acme/web', { status: 'expired' })];
+    githubVe('acme/web', 101);
+    const r = await alta('acme/web', ` ${PAT_GH} `);
+    expect(r.status).toBe(201);
+    expect(cred.rotarSecretoConexion).toHaveBeenCalledTimes(1);
+    const [, , ctx, token, sondeo] = cred.rotarSecretoConexion.mock.calls[0]!;
+    expect(ctx).toEqual({ orgId: ORG, connectionId: VIEJA, provider: 'github', kind: 'read' });
+    expect(token).toBe(PAT_GH);
+    expect(sondeo).toEqual({ scopes: ['metadata:read', 'contents:read', 'dependabot_alerts:read'],
+      capabilities: { metadata: true, contents: true, dependabot_alerts: true }, expiresAt: null });
+    const b = ConnectionCreated.parse(await r.json());
+    // Mismo id, active y con su meta (la marca incluida): hallazgos, config de revisión y webhook siguen colgando de él.
+    expect(b.connection).toMatchObject({ id: VIEJA, status: 'active', meta: marcada });
+    expect(b.ingest_secret).toBeNull();
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+    expect(escrituras()).toEqual([]);   // ni findings, ni code_review_configs, ni connections: solo vg_rotate_secret
+    const lineas = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((x) => String(x[0])).join('\n');
+    expect(lineas).toContain('connection.reconectada');
+    expect(lineas).not.toMatch(/acme\/web|github_pat_/i);   // ni el repo ni el token en el log
+  });
+
+  it('renombrado y NO activo (mismo repo_id) → reconecta esa conexión', async () => {
+    previas = [gh(VIEJA, 'acme/web-vieja', { status: 'error' })];   // repo_id 101
+    githubVe('acme/web', 101);
+    const r = await alta('acme/web');
+    expect(r.status).toBe(201);
+    expect(cred.rotarSecretoConexion.mock.calls[0]?.[2]).toMatchObject({ connectionId: VIEJA });
+    expect(cred.createConnectionWithSecret).not.toHaveBeenCalled();
+  });
+
+  it('el mismo PAT que otra conexión de la org → 409 sin reason, al crear y al reconectar', async () => {
+    const mismoToken = () => new ApiError('conflict', 'Ese token ya está conectado en esta organización.');
+    previas = [gh(ACTIVA, 'acme/web')];
+    githubVe('acme/landing', 202);
+    cred.createConnectionWithSecret.mockRejectedValueOnce(mismoToken());
+    let r = await alta('acme/landing');
+    let e = await error(r);
+    expect([r.status, e.message, e.details?.reason]).toEqual([409, 'Ese token ya está conectado en esta organización.', undefined]);
+
+    previas = [gh(VIEJA, 'acme/landing', { status: 'revoked' }), gh(ACTIVA, 'acme/web')];
+    cred.rotarSecretoConexion.mockRejectedValueOnce(mismoToken());
+    r = await alta('acme/landing');
+    e = await error(r);
+    expect([r.status, e.message, e.details?.reason]).toEqual([409, 'Ese token ya está conectado en esta organización.', undefined]);
+    expect(previas[0]?.status).toBe('revoked');
+  });
+
+  it(`tope: ${MAX_REPOS_GITHUB} nombres distintos → 409 tope_repos sin GitHub; las parejas de «Reconectar» cuentan uno`, async () => {
+    const cinco = ['acme/a', 'acme/b', 'acme/c', 'acme/d', 'acme/e'];
+    previas = cinco.map((repo, i) => gh(`c0aa0000-0000-4000-8000-0000000000b${i}`, repo, { status: i % 2 ? 'revoked' : 'active' }));
+    let r = await alta('acme/f');
+    let e = await error(r);
+    expect([r.status, e.details?.reason]).toEqual([409, 'tope_repos']);
+    expect(e.message).toBe('Ya tienes 5 repos conectados: quita uno para conectar otro.');
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Con 5 nombres, reconectar uno de ellos que no está activo sí vale (no es un repo más).
+    githubVe('acme/b', 101);
+    r = await alta('ACME/B');
+    expect(r.status).toBe(201);
+    expect(cred.rotarSecretoConexion).toHaveBeenCalledTimes(1);
+
+    // 6 filas pero 4 nombres (una pareja vieja de acme/a con otras mayúsculas): cabe un 5.º repo.
+    previas = [...cinco.slice(0, 4).map((repo, i) => gh(`c0aa0000-0000-4000-8000-0000000000b${i}`, repo)),
+      gh('c0aa0000-0000-4000-8000-0000000000c1', 'ACME/A', { status: 'revoked' }),
+      gh('c0aa0000-0000-4000-8000-0000000000c2', 'acme/b', { status: 'expired' })];
+    githubVe('acme/f', 301);
+    r = await alta('acme/f');
+    expect(r.status).toBe(201);
+    expect(cred.createConnectionWithSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it('la conexión de estados del bloqueo de merge (kind action) no cuenta ni para el tope ni para los duplicados', async () => {
+    previas = [gh(ACTIVA, 'acme/web', { kind: 'action' })];
+    githubVe('acme/web', 103);
+    let r = await alta('acme/web');
+    expect(r.status).toBe(201);
+    // La org no tenía ninguna de lectura: es la primera y conserva la clave de hoy.
+    expect(cred.createConnectionWithSecret.mock.calls[0]![2].meta).not.toHaveProperty('hallazgos_por_repo');
+
+    previas = [...['acme/a', 'acme/b', 'acme/c', 'acme/d'].map((repo, i) => gh(`c0aa0000-0000-4000-8000-0000000000b${i}`, repo)),
+      gh(ACTIVA, 'acme/estados', { kind: 'action' })];
+    githubVe('acme/f', 301);
+    r = await alta('acme/f');
+    expect(r.status).toBe(201);
   });
 });
 

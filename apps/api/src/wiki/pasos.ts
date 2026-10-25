@@ -176,7 +176,7 @@ async function correrArbol(ctx: Ctx): Promise<RespuestaCola> {
   const salida = salidaGithub(TOPE_SUBPETICIONES - FIJAS_ARBOL);
   ctx.github = salida;
   // El PAT solo existe dentro de esta función: va a deps.githubToken y de ahí a la cabecera de GitHub.
-  const leido = await conTokenGithub(env, db(env), m.org_id, fila.connection_id ?? undefined,
+  const leido = await conTokenGithub(env, db(env), m.org_id, fila.connection_id ?? undefined, fila.repo_full_name,
     (githubToken) => pasoArbol(ref, depsWiki({ fetch: salida.fetch, githubToken })));
   const estado: EstadoWiki = fijo && fila.branch ? { ...leido, meta: { ...leido.meta, branch: fila.branch } } : leido;
   const s = siguientePaso(estado);
@@ -207,7 +207,7 @@ async function correrArea(ctx: Ctx, estado: EstadoWiki): Promise<RespuestaCola> 
   const salida = salidaGithub(TOPE_SUBPETICIONES - FIJAS_AREA);
   ctx.github = salida;
   const llm = llmWiki(env, m.org_id, ctx.modelos);
-  const nuevo = await conTokenGithub(env, db(env), m.org_id, fila.connection_id ?? undefined,
+  const nuevo = await conTokenGithub(env, db(env), m.org_id, fila.connection_id ?? undefined, fila.repo_full_name,
     (githubToken) => pasoArea(estado, nombre, { ...depsWiki({ fetch: salida.fetch, githubToken, llm }), modelos: ctx.modelos }));
   if (nuevo === estado) return 'ack';
   const s = siguientePaso(nuevo);
@@ -359,7 +359,7 @@ function clasificar(e: unknown): Clase {
     return { reintentar: e.reintentable, codigo: e.codigo, texto: textoDe(e.codigo),
       ...(e.esperaS !== null ? { esperaS: e.esperaS } : {}) };
   }
-  // conTokenGithub: conexión de otra org, revocada o sin credencial → not_found; lectura fallida → internal.
+  // conTokenGithub: conexión de otra org, revocada, de otro repo o sin credencial → not_found; lectura fallida → internal.
   if (e instanceof ApiError) {
     return e.code === 'not_found'
       ? { reintentar: false, codigo: 'conexion_no_encontrada', texto: textoDe('conexion_no_encontrada') }

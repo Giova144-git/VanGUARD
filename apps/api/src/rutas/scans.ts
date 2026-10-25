@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono';
-import { AuditSummary, Coverage, Id, ScanAccepted, ScanCreate, ScanRun, ZipResult, type ScanKind } from '@vanguard/contracts';
+import { AuditSummary, Coverage, Id, MAX_REPOS_GITHUB, ScanAccepted, ScanCreate, ScanRepo, ScanRun, ZipResult,
+  type ScanKind } from '@vanguard/contracts';
 import type { AppEnv } from '../env.ts';
 import { pasosDe, primerPaso } from '../jobs.ts';
 import { cuerpo } from '../lib/body.ts';
@@ -24,15 +25,28 @@ const PROVEEDOR: Partial<Record<ScanKind, string>> = { supabase: 'supabase', clo
 
 export const banda = (s: number | null) => (s === null ? null : s <= 49 ? 'red' : s <= 79 ? 'amber' : 'green');
 
-// Fila de scan_runs → ScanRun. coverage.detail y otros campos internos los quita zod; summary inválido → null.
+// Cómo le fue a cada repo (varias-codebases.md §2.3): coverage.detail.codebase.repos, cada entrada con ScanRepo (las
+// inválidas se descartan; zod quita miradas, sha y lo demás interno) y como mucho MAX_REPOS_GITHUB.
+function reposDe(coverage: unknown): ScanRepo[] {
+  const o = (x: unknown) => (x && typeof x === 'object' && !Array.isArray(x) ? x as Record<string, unknown> : {});
+  const lista = o(o(o(coverage).detail).codebase).repos;
+  if (!Array.isArray(lista)) return [];
+  const validas = lista.flatMap((r) => { const p = ScanRepo.safeParse(r); return p.success ? [p.data] : []; });
+  return validas.slice(0, MAX_REPOS_GITHUB);
+}
+
+// Fila de scan_runs → ScanRun. coverage.detail y otros campos internos los quita zod; summary inválido → null. repos
+// solo si el paso repo dejó alguna entrada válida.
 export function aScanRun(f: Record<string, unknown>): ScanRun {
   const cov = Coverage.safeParse(f.coverage);
   const sum = AuditSummary.safeParse(f.summary);
   const score = typeof f.score === 'number' ? f.score : null;
   const t = (x: unknown) => (typeof x === 'string' ? iso(x) : null);
+  const repos = reposDe(f.coverage);
   return ScanRun.parse({ ...f, steps: Array.isArray(f.steps) ? f.steps : [], score, band: banda(score),
     coverage: cov.success ? cov.data : null, summary: sum.success ? sum.data : null,
-    created_at: iso(String(f.created_at)), started_at: t(f.started_at), finished_at: t(f.finished_at) });
+    created_at: iso(String(f.created_at)), started_at: t(f.started_at), finished_at: t(f.finished_at),
+    ...(repos.length ? { repos } : {}) });
 }
 
 // Inicio del día en Caracas (UTC−4, sin horario de verano): el tope de auditorías es por día de America/Caracas.

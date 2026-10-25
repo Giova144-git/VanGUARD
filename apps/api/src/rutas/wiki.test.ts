@@ -300,6 +300,22 @@ describe('E40 · POST /api/orgs/:org/wiki/estimate', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('B8: la conexión tiene que ser la del repo pedido: otro repo que vea el PAT → 404; otras mayúsculas → vale', async () => {
+    for (const repo of ['acme/privado', 'acme/viejo', 'otra/tienda']) {
+      const r = await estimarPost({ repo_full_name: repo, connection_id: CONN });
+      expect(r.status, repo).toBe(404);
+      expect((await error(r)).message).toBe('Conexión no encontrada');
+    }
+    expect(cred.withSecret).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // GitHub no distingue mayúsculas en el nombre del repo.
+    fetchMock.mockImplementation(async (u: string) => github(String(u).replace('/repos/ACME/Tienda', '/repos/acme/tienda')));
+    const r = await estimarPost({ repo_full_name: 'ACME/Tienda', connection_id: CONN });
+    expect(r.status).toBe(200);
+    expect(cred.withSecret).toHaveBeenCalledTimes(1);
+    expect(cabeceras(0).Authorization).toBe(`Bearer ${PAT}`);
+  });
+
   it('viewer y anónimo → 403 sin llamar a GitHub', async () => {
     rol = 'viewer';
     expect((await estimarPost({ repo_full_name: 'acme/tienda' })).status).toBe(403);
@@ -606,6 +622,16 @@ describe('E41 · POST /api/orgs/:org/wiki/runs', () => {
     expect(cabeceras(0).Authorization).toBe(`Bearer ${PAT}`);
     expect(corridas[0]?.connection_id).toBe(CONN);
     for (const t of [texto, JSON.stringify(corridas), JSON.stringify(enviados), lineas.join('\n')]) expect(t).not.toContain(PAT);
+  });
+
+  it('B8: connection_id de acme/tienda con otro repo → 404 sin descifrar, sin GitHub, sin fila ni mensaje', async () => {
+    const { r, enviados } = await correr({ repo_full_name: 'acme/privado', connection_id: CONN });
+    expect(r.status).toBe(404);
+    expect((await error(r)).message).toBe('Conexión no encontrada');
+    expect(cred.withSecret).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(corridas).toEqual([]);
+    expect(enviados).toEqual([]);
   });
 
   it('GitHub: repo inexistente → 404 y límite → 429 con Retry-After, sin filas ni mensajes', async () => {

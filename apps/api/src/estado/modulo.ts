@@ -8,7 +8,9 @@ import { log } from '../lib/log.ts';
 // hay acción posible; un chequeo que no corrió va con comprobado:false y n:null (nunca verde sin mirar). Error de base o
 // de proveedor → ok:false con cifras n:null y chequeos sin mirar (§15.4 E6).
 type FilaFinding = { id: string; rule_id: string; severity: string; title: string; resource: string; confirmed: boolean;
-  evidence: Record<string, unknown> | null };
+  evidence: Record<string, unknown> | null; connection_id?: string | null };
+type Conexion = { id: string; provider: string; kind: string; status: string; last_error: string | null;
+  meta?: Record<string, unknown> | null; created_at?: string };
 type ErrorEstado = NonNullable<EstadoModulo['error']>;
 type Proveedor = Exclude<Module, 'performance'>;
 type Miradas = Record<string, unknown>;
@@ -48,25 +50,30 @@ const ORDEN: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2,
 const obj = (x: unknown): Record<string, unknown> | null => (x && typeof x === 'object' && !Array.isArray(x) ? x as Record<string, unknown> : null);
 const num = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null);
 
-function fila(m: Module, f: FilaFinding): FilaDato {
+// repoDe: nombre del repo de una conexión GitHub, solo con ≥ 2 repos activos (varias-codebases.md §2.4): va como chip,
+// sin recortar, para distinguir dos hallazgos con el mismo título y recurso en dos repos.
+type RepoDe = (connectionId: string | null | undefined) => string | null;
+function fila(m: Module, f: FilaFinding, repoDe?: RepoDe): FilaDato {
   const r = rol(f.severity);
   const sub = typeof f.evidence?.path === 'string' ? `${f.evidence.path}${typeof f.evidence.line === 'number' ? `:${f.evidence.line}` : ''}` : undefined;
+  const repo = repoDe?.(f.connection_id) ?? null;
+  const chips = [...(f.confirmed ? ['confirmado'] : []), ...(repo ? [repo] : [])];
   return { clave: f.id, modulo: m, tipo: 'finding', rol: r, etiqueta: f.title.slice(0, 40), objeto: f.resource,
-    ...(sub ? { sub } : {}), ...(f.confirmed ? { chips: ['confirmado'] } : {}),
+    ...(sub ? { sub } : {}), ...(chips.length ? { chips } : {}),
     acciones: [
       { verbo: 'Generar prompt', clase: 'prompt', principal: true, args: { finding_id: f.id } },
       { verbo: 'Ver hallazgos', clase: 'navegar', destino: { modulo: m, filtro: f.resource } },
     ] };
 }
 
-function grupos(m: Module, hallazgos: FilaFinding[]): GrupoDato[] {
+function grupos(m: Module, hallazgos: FilaFinding[], repoDe?: RepoDe): GrupoDato[] {
   const porRegla = new Map<string, FilaFinding[]>();
   for (const f of hallazgos) porRegla.set(f.rule_id, [...(porRegla.get(f.rule_id) ?? []), f]);
   return [...porRegla.entries()]
     .map(([regla, xs]) => {
       const peor = xs.reduce((a, b) => ((ORDEN[b.severity] ?? 0) > (ORDEN[a.severity] ?? 0) ? b : a));
       return { grupo: regla, etiqueta: peor.title.slice(0, 60), rol: rol(peor.severity), n: xs.length, orden: ORDEN[peor.severity],
-        filas: xs.slice(0, 20).map((f) => fila(m, f)) };
+        filas: xs.slice(0, 20).map((f) => fila(m, f, repoDe)) };
     })
     .sort((a, b) => (b.orden ?? 0) - (a.orden ?? 0));
 }
@@ -76,9 +83,10 @@ const contador = (hallazgos: FilaFinding[]) => {
   return { rojo: cuenta('mal'), aviso: cuenta('aviso'), cola: cuenta('cola') };
 };
 
-// count exacto: «Hallazgos abiertos» no se queda en 200 aunque la lista sí.
+// count exacto: «Hallazgos abiertos» no se queda en 200 aunque la lista sí. connection_id: el repo de cada hallazgo.
+const COLUMNAS_HALLAZGO = 'id, rule_id, severity, title, resource, confirmed, evidence, connection_id';
 const consultaHallazgos = (admin: SupabaseClient, orgId: string, m: Module) =>
-  admin.from('findings').select('id, rule_id, severity, title, resource, confirmed, evidence', { count: 'exact' }).eq('org_id', orgId)
+  admin.from('findings').select(COLUMNAS_HALLAZGO, { count: 'exact' }).eq('org_id', orgId)
     .eq('module', m).eq('status', 'open').order('severity_rank', { ascending: false }).limit(200);
 
 // Respuesta de error: nunca verde. Cifras con n:null, chequeos sin mirar; contador y «ahora» solo si los hallazgos se leyeron.
@@ -104,7 +112,7 @@ export function errorDeConexion(status: string, lastError: string | null): Error
 }
 
 // Último intento (done|failed) de los pasos del módulo, con las miradas de ESA auditoría (null = corrida vieja sin miradas).
-type Scan = { steps: unknown; coverage: unknown; finished_at: string | null };
+type Scan = { steps: unknown; coverage: unknown; finished_at: string | null; params?: unknown };
 export function ultimoPaso(scans: Scan[], nombres: ScanStep['name'][], modulo: Proveedor):
   { status: 'done' | 'failed'; miradas: Miradas | null } | null {
   for (const s of scans) {
@@ -115,6 +123,45 @@ export function ultimoPaso(scans: Scan[], nombres: ScanStep['name'][], modulo: P
   return null;
 }
 
+// ── Codebase con varios repos (varias-codebases.md §2.4, B5) ──
+// Repo = meta.repo_full_name en minúsculas: las parejas viejas de «Reconectar» son el mismo repo.
+const nombreRepo = (c: Conexion) => String(obj(c.meta)?.repo_full_name ?? '').toLowerCase();
+export type IntentoRepo = { done: boolean; miradas: Miradas | null };
+
+// Último intento del paso repo de CADA repo. Las auditorías van de la más nueva a la más vieja y cada paso repo
+// terminado (done|failed) se atribuye: (1) con detail.codebase.repos (recorrido de varios repos), cada entrada con su
+// status y sus miradas (pending o skipped = sin mirar; sin miradas propias, las de la corrida, que son el Y de todas);
+// (2) si no, a detail.codebase.connection_id (B0) con el status del paso y detail.codebase.miradas; (3) si no
+// (auditorías de antes de B0), a params.connection_id o, sin él, a la conexión GitHub de lectura más antigua. El
+// primer intento que aparece de cada repo es su último intento. Un paso zip no cuenta para ningún repo. `conns`: las
+// GitHub de lectura en cualquier estado, created_at ascendente.
+export function ultimoPorRepo(scans: Scan[], conns: Conexion[]): Map<string, IntentoRepo> {
+  const repoDe = new Map(conns.map((c) => [c.id, nombreRepo(c)]));
+  const masAntigua = conns[0]?.id;
+  const out = new Map<string, IntentoRepo>();
+  const anotar = (id: unknown, i: IntentoRepo) => {
+    const n = typeof id === 'string' ? repoDe.get(id) : undefined;
+    if (n && !out.has(n)) out.set(n, i);
+  };
+  for (const s of scans) {
+    const steps = (Array.isArray(s.steps) ? s.steps : []) as ScanStep[];
+    const p = steps.find((x) => x.name === 'repo' && (x.status === 'done' || x.status === 'failed'));
+    if (!p) continue;
+    const cb = obj(obj(obj(s.coverage)?.detail)?.codebase);
+    const repos = (Array.isArray(cb?.repos) ? cb.repos : []).map(obj).filter((e) => e !== null);
+    if (repos.length) {
+      for (const e of repos) {
+        anotar(e.connection_id, { done: e.status === 'done', miradas: obj(e.miradas) ?? obj(cb?.miradas) });
+      }
+      continue;
+    }
+    const pedida = obj(s.params)?.connection_id;
+    const id = typeof cb?.connection_id === 'string' ? cb.connection_id : typeof pedida === 'string' ? pedida : masAntigua;
+    anotar(id, { done: p.status === 'done', miradas: obj(cb?.miradas) });
+  }
+  return out;
+}
+
 export async function estadoModulo(env: CloudflareBindings, orgId: string, m: Module): Promise<EstadoModulo> {
   return m === 'performance' ? estadoRendimiento(env, orgId) : estadoProveedor(env, orgId, m);
 }
@@ -123,10 +170,13 @@ async function estadoProveedor(env: CloudflareBindings, orgId: string, m: Provee
   const admin = db(env);
   const ahora = new Date();
   const provs = m === 'cloudflare' ? ['cloudflare', 'ingest'] : [PROVEEDOR[m]];
+  // params, meta y created_at: para atribuir cada auditoría a un repo cuando hay varios (B5); las mismas 3 consultas.
   const [fs, sc, cx] = await Promise.all([
     consultaHallazgos(admin, orgId, m),
-    admin.from('scan_runs').select('steps, coverage, finished_at').eq('org_id', orgId).order('created_at', { ascending: false }).limit(20),
-    admin.from('connections').select('id, provider, kind, status, last_error').eq('org_id', orgId).in('provider', provs).limit(20),
+    admin.from('scan_runs').select('steps, coverage, params, finished_at').eq('org_id', orgId)
+      .order('created_at', { ascending: false }).limit(20),
+    admin.from('connections').select('id, provider, kind, status, last_error, meta, created_at').eq('org_id', orgId)
+      .in('provider', provs).order('created_at', { ascending: true }).order('id', { ascending: true }).limit(20),
   ]);
   const scans = (sc.data ?? []) as Scan[];
   const fin = scans.find((s) => s.finished_at)?.finished_at;
@@ -140,12 +190,24 @@ async function estadoProveedor(env: CloudflareBindings, orgId: string, m: Provee
     return fallo('sin_conexion', hora, cifrasBase, CHECKS[m], m, fs.error ? null : ((fs.data ?? []) as FilaFinding[]));
   }
   const hallazgos = (fs.data ?? []) as FilaFinding[];
-  const conns = (cx.data ?? []) as { id: string; provider: string; kind: string; status: string; last_error: string | null }[];
+  const conns = (cx.data ?? []) as Conexion[];
   const propias = conns.filter((c) => c.provider === PROVEEDOR[m] && c.kind === 'read');
   if (!propias.some((c) => c.status === 'active')) {
     const mala = propias[0];
     return fallo(mala ? errorDeConexion(mala.status, mala.last_error) : 'sin_conexion', hora, cifrasBase, CHECKS[m], m, hallazgos);
   }
+
+  // Codebase con 2 o más repos activos (nombres distintos): lo que miró un repo no da por mirado a otro. Un chequeo solo
+  // sale comprobado si CADA repo activo tiene su último intento done con todas sus `mira` en true (§2.4). Con uno, como
+  // siempre.
+  const activos = new Set(propias.filter((c) => c.status === 'active').map(nombreRepo));
+  const varios = m === 'codebase' && activos.size >= 2;
+  const ultimos = varios ? ultimoPorRepo(scans, propias) : null;
+  const intentos = ultimos ? [...activos].map((n) => ultimos.get(n)) : [];
+  const miro = (i: IntentoRepo | undefined, mira: readonly string[]) =>
+    !!i?.done && (i.miradas ? mira.every((k) => i.miradas?.[k] === true) : true);
+  const nombres = new Map(propias.map((c) => [c.id, String(obj(c.meta)?.repo_full_name ?? '')]));
+  const repoDe: RepoDe | undefined = varios ? (id) => (id ? nombres.get(id) || null : null) : undefined;
 
   const paso = ultimoPaso(scans, PASO[m], m);
   const revisado = paso?.status === 'done';
@@ -155,19 +217,28 @@ async function estadoProveedor(env: CloudflareBindings, orgId: string, m: Provee
       const n = vivo?.incidentes.filter((r) => r.includes(codigo)).length ?? null;
       return { nombre, codigo, n, comprobado: n !== null };
     }
-    const corrio = !!mira && revisado && (paso.miradas ? mira.every((k) => paso.miradas?.[k] === true) : true);
+    const corrio = !!mira && (varios ? intentos.every((i) => miro(i, mira))
+      : revisado && (paso.miradas ? mira.every((k) => paso.miradas?.[k] === true) : true));
     return { nombre, codigo, n: corrio ? hallazgos.filter((f) => casa(codigo, f.rule_id)).length : null, comprobado: corrio };
   });
   const total = fs.count ?? hallazgos.length;
   const visto = revisado || total > 0;
+  // «Repos revisados» (solo con varios): repos activos cuyo último intento quedó done, de los activos; sin ningún
+  // intento, sin dato. Sale del mismo recorrido: no depende del recorrido de varios repos en el paso repo.
+  const conIntento = intentos.filter((i) => i !== undefined).length;
+  const hechos = intentos.filter((i) => i?.done).length;
+  const rolRepos: RolDato = hechos === activos.size ? 'bien' : 'aviso';
+  const cifraRepos: CifraDato[] = varios ? [{ tipo: 'codebase_repos', etiqueta: 'Repos revisados',
+    n: conIntento ? hechos : null, de: activos.size, ...(conIntento ? { rol: rolRepos } : {}) }] : [];
   return EstadoModulo.parse({
     ok: true, hora, contador: contador(hallazgos),
     cifras: [
       { ...cifrasBase[0], n: visto ? total : null,
         rol: hallazgos.some((f) => rol(f.severity) === 'mal') ? 'mal' : total ? 'aviso' : 'bien' },
       { ...cifrasBase[1], n: visto ? hallazgos.filter((f) => f.severity === 'critical').length : null },
+      ...cifraRepos,
     ],
-    ahora: grupos(m, hallazgos),
+    ahora: grupos(m, hallazgos, repoDe),
     checks,
   });
 }

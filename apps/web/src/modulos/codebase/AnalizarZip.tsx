@@ -132,7 +132,7 @@ export function AnalizarZip({ titulo = 'Analizar un ZIP' }: { titulo?: string })
 
   return (
     <section className="flex flex-col gap-3" aria-labelledby="zip-titulo">
-      <h3 id="zip-titulo" className="text-[17px] font-semibold">{titulo}</h3>
+      <h3 id="zip-titulo" className="text-[17px] font-semibold" data-info="analizar-zip">{titulo}</h3>
       <p className="flex gap-2 text-[15px] text-muted-foreground"><Lock className="mt-0.5 size-4 shrink-0" />{TEXTO_FIJO}</p>
       {org.puedeEscribir ? (
         <input ref={entrada} type="file" accept=".zip,application/zip" className="sr-only" tabIndex={-1} aria-label="Archivo ZIP de tu proyecto"

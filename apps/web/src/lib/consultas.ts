@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AiUsage, AlertPrefs, AuditDelta, type CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  AiUsage, AlertPrefs, FIX_REQUEST_ABIERTA, FixRequest, AuditDelta, type CodeReviewState, Evolution, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   UnderAttackOffer,
   type Module, type Severity,
 } from '@vanguard/contracts';
@@ -138,6 +138,23 @@ export const useExportMd = (org: string) => useQuery({
   queryKey: ['org', org, 'export', 'md'], staleTime: 60_000, refetchIntervalInBackground: false,
   queryFn: async () => (await api<Response>(`/api/orgs/${org}/export?format=md`, { crudo: true })).text(),
 });
+
+// Cola «Enviar a mi IA» (E58b): el distintivo de cada hallazgo. Llega por Realtime (fix_requests en el broadcast de la
+// org); sin canal, sondeo de 10 s solo mientras haya alguna abierta (el MCP la pasa a «arreglando» y la auditoría a
+// «corregido»), y si no, 60 s.
+export function useColaIA(org: string) {
+  const vivo = useVivo();
+  return useQuery({
+    ...base, queryKey: ['org', org, 'fix-requests'], queryFn: () => api(`/api/orgs/${org}/fix-requests`, { esquema: z.array(FixRequest) }),
+    refetchInterval: (q) => (vivo ? 60_000 : q.state.data?.some((x) => FIX_REQUEST_ABIERTA.includes(x.status)) ? 10_000 : 60_000),
+  });
+}
+
+/** El envío a la IA de un hallazgo (el último), o null. */
+export function useEnvioIA(org: string, findingId: string | null | undefined): FixRequest | null {
+  const q = useColaIA(org);
+  return (findingId && q.data?.find((x) => x.finding_id === findingId)) || null;
+}
 
 // Tokens MCP (E29b): solo admin; para el viewer no se llama. Nunca traen el token, solo sus 4 últimos caracteres.
 export const useTokensMcp = (org: string, habilitado: boolean) => useQuery({

@@ -16,7 +16,7 @@ export function PuntajeBlindaje({ score = null, band = null, coverage, enlaceCon
   const rol: Rol = score == null || band == null ? 'neutra'
     : band === 'red' ? 'mal' : band === 'amber' ? 'aviso' : completa ? 'bien' : 'neutra';
   return (
-    <div className="flex flex-col gap-1" aria-busy={coverage ? undefined : true}>
+    <div className="flex flex-col gap-1" aria-busy={coverage ? undefined : true} data-info="puntaje-blindaje">
       <span className="text-[12.5px] font-medium text-muted-foreground">Puntaje de blindaje</span>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className={cn('font-mono text-6xl font-semibold tabular-nums', score == null ? 'text-texto-3' : rol === 'neutra' ? 'text-foreground' : TEXTO_ROL[rol])}

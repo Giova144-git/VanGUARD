@@ -13,15 +13,17 @@ import { FichaFila } from '@/componentes/vg/FichaFila';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
-import { useHallazgo } from '@/lib/consultas';
+import { useConexiones, useEnvioIA, useHallazgo } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { esId } from '@/lib/ids';
+import { repoParaArreglar } from '@/lib/mcp';
 import { cuando } from '@/lib/formato';
 import { usePatchHallazgo } from '@/lib/mutaciones';
 import { porQueImporta, referencias } from '@/lib/reglas-texto';
 import { useRepoDeConexion } from '@/lib/repos';
 import { deMapa, type Rol } from '@/lib/severidad';
 import { PromptCorreccion } from './PromptCorreccion';
+import { EstadoEnvioIA } from './EnviarAMiIA';
 import { ResolverConMcp } from './ResolverConMcp';
 
 const MODULO: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Cloudflare', codebase: 'Codebase', performance: 'Rendimiento' };
@@ -66,6 +68,8 @@ function Acciones({ org, f, puedeEscribir }: { org: string; f: Finding; puedeEsc
 export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: string; puedeEscribir: boolean }) {
   const q = useHallazgo(org, id);
   const repoDe = useRepoDeConexion(org);   // chip del repo con 2 o más (varias-codebases §6.4)
+  const conexiones = useConexiones(org);   // el repo de «Enviar a mi IA» (Claude Code se abre en su clon)
+  const envio = useEnvioIA(org, esId(id) ? id : null);
   if (!esId(id) || (q.isError && esApiError(q.error) && q.error.status === 404))
     return <p className="text-[15px] text-muted-foreground">Este hallazgo no existe o no es de esta organización.</p>;
   if (q.isError && !q.data) return <ErrorBloque error={q.error} onReintentar={() => q.refetch()} />;
@@ -82,8 +86,9 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
           <ChapaSeveridad severity={f.severity} />
           <Etiqueta texto={deMapa(MODULO, f.module, '—')} />
           <ChipRepo repo={repoDe(f.connection_id)} />
-          <Etiqueta texto={f.confirmed ? 'Confirmado por regla' : 'Posible'} rol={f.confirmed ? 'neutra' : 'aviso'} />
+          <Etiqueta texto={f.confirmed ? 'Confirmado por regla' : 'Posible'} rol={f.confirmed ? 'neutra' : 'aviso'} data-info="confianza-hallazgo" />
           <Etiqueta texto={estado.texto} rol={estado.rol} />
+          <EstadoEnvioIA envio={envio} />
         </div>
         <h2 className="text-[17px] font-semibold wrap-anywhere">{sinBidi(f.title)}</h2>
         <p className="font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.rule_id)}</bdi></p>
@@ -115,7 +120,8 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
 
       <PromptCorreccion org={org} finding={f} puedeEscribir={puedeEscribir} />
 
-      {f.status === 'open' ? <ResolverConMcp org={org} findingId={f.id} /> : null}
+      {f.status === 'open' ? <ResolverConMcp org={org} findingId={f.id} repo={repoParaArreglar(f.connection_id, conexiones.data)}
+        puedeEscribir={puedeEscribir} envio={envio} /> : null}
 
       <section className="flex flex-col gap-2" aria-label="Evidencia">
         <h3 className="text-[15px] font-semibold">Evidencia</h3>

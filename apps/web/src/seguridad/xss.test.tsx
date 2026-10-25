@@ -282,6 +282,16 @@ const PROHIBIDAS = new Set(['script', 'iframe', 'img', 'image', 'object', 'embed
 const ATTR_URL = new Set(['href', 'src', 'xlink:href', 'action', 'formaction', 'poster', 'srcset', 'background', 'ping', 'data', 'cite']);
 // Destinos externos que el FRONT construye a propósito (referencias CVE/OSV, revocar el token, repo de los jueces, wa.me).
 const HOSTS = new Set(['officialvanguard.com', 'www.cve.org', 'osv.dev', 'supabase.com', 'dash.cloudflare.com', 'github.com', 'wa.me']);
+// Enlaces profundos oficiales de Claude Code («Abrir en Claude Code», lib/mcp.ts): solo esos dos destinos exactos y solo
+// con sus parámetros documentados. Cualquier otro esquema sigue siendo un peligro.
+const PROFUNDOS: Record<string, { host: string; ruta: string; params: readonly string[] }> = {
+  'claude-cli:': { host: 'open', ruta: '', params: ['repo', 'q'] },
+  'vscode:': { host: 'anthropic.claude-code', ruta: '/open', params: ['prompt'] },
+};
+const esProfundo = (u: URL) => {
+  const d = PROFUNDOS[u.protocol];
+  return !!d && u.host === d.host && u.pathname === d.ruta && !u.hash && [...u.searchParams.keys()].every((k) => d.params.includes(k));
+};
 const BASE = 'https://officialvanguard.com/o/org/aqui';
 // React 19 sustituye un href/src javascript: por esta URL inerte: no se ejecuta, pero el componente se lo pasó.
 const BLOQUEO_REACT = "javascript:throw new Error('React has blocked a javascript: URL as a security precaution.')";
@@ -298,6 +308,7 @@ function peligros(html: string, estricto = false): string[] {
       if (v === BLOQUEO_REACT) { if (estricto) p.push(`<${t.nombre} ${k}> javascript: (bloqueado por React)`); continue; }
       let u: URL;
       try { u = new URL(v, BASE); } catch { continue; }                 // relativo raro: no sale del origen
+      if (esProfundo(u)) continue;
       if (u.protocol !== 'https:' && u.protocol !== 'http:') p.push(`<${t.nombre} ${k}="${v.slice(0, 60)}"> esquema ${u.protocol}`);
       else if (!HOSTS.has(u.host)) p.push(`<${t.nombre} ${k}="${v.slice(0, 60)}"> host ${u.host}`);
     }

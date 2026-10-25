@@ -262,6 +262,28 @@ de desarrollo de la wiki, `packages/deepwiki/src/cli.ts`, usa su propio cliente 
 - Sin `temperature`, `top_p`, `top_k`, `tool_choice` ni `tools`.
 - Nunca se registra el prompt, la salida ni la key: solo ids, tokens, coste y motivo de parada.
 
+### 7.1 MCP de VanGUARD (`/mcp`) y «Enviar a mi IA»
+
+La IA del cliente se conecta a `/mcp` con un token `vgk_` (E29; en la base solo su sha256). El tenant sale del token,
+nunca de un argumento, y todo lo que sale pasa por `redactarParaExport` (`apps/api/src/mcp/vanguard.ts`).
+
+- **Solo lectura para la IA.** Herramientas: `get_overview`, `get_repo_status`, `list_findings`, `get_finding`,
+  `get_fix_prompt`, `list_fix_requests` y `list_incidents`; prompts: `resolver_hallazgo`, `resolver_criticos` y
+  `resolver_enviados`. Ninguna escribe ni recibe un estado como argumento, y ninguna llama al modelo.
+- **Cola «Enviar a mi IA»** (`supabase/migrations/0023_fix_requests.sql`, `apps/api/src/rutas/fix-requests.ts`). La web
+  la llena: el botón del detalle (y de «Ahora») crea la petición (E58, `requireAdmin`; viewer y anónimo → 403) y abre
+  el enlace profundo de Claude Code con `/mcp__vanguard__resolver_hallazgo <id>`: solo viaja el UUID validado, nunca
+  texto del hallazgo. Estados: `enviado → arreglando → corregido`, o `cancelado` (DELETE de E58 o hallazgo ignorado).
+- **Telemetría de estado, no escritura de la IA.** Al pedir la corrección (`get_fix_prompt` o el prompt
+  `resolver_hallazgo`), el Worker pasa de `enviado` a `arreglando` la petición abierta de ese hallazgo, en la org del
+  token, y anota el `mcp_token_id`. Es la única escritura del MCP, fija y sin argumentos de la IA; si falla, la
+  corrección sale igual. `corregido` lo pone la base (trigger `vg_fix_request_cierre`) cuando el hallazgo deja de estar
+  abierto: auto-verificación de la auditoría (`vg_upsert_findings`), «Marcar corregido» (E14) o la revisión de código.
+- **Barreras en la base.** Como todo `public`: RLS y ningún privilegio para `anon` ni `authenticated` (solo el Worker
+  toca la tabla). Las políticas dejan escrita la regla (miembros leen; owner/admin no anónimo crean una «enviado» suya
+  y solo la cancelan). Trigger de transiciones (org, hallazgo y autor fijos; una cerrada no se reabre), una abierta por
+  hallazgo (índice parcial único) y FK compuesta `(finding_id, org_id)`. Realtime: el mismo aviso de solo ids de `0008e`.
+
 ---
 
 ## 8. Salida de red
@@ -370,6 +392,8 @@ incidentes resueltos y uso de IA 90 días; usuarios anónimos de «Ver demo» 7 
 | `test:fuga` (`apps/api/scripts/leak-test.ts`) | Sella un canario y comprueba: 0 apariciones en `sealed` y en `connections`, vuelve entero con `withSecret` y no abre desde otra org | `pnpm --filter @vanguard/api test:fuga` (necesita los secretos reales) | «0 apariciones» (commit `c3d1648`) |
 | `test:idor` (`apps/api/test/idor.mjs`) | B pide recursos de A → 404; ids de A por la ruta de B → el mismo 404 que un id inexistente o malformado; `/api/me` solo lista lo propio; SELECT directo con la clave publicable y sesión a las 19 tablas y vistas de su lista fija → 42501 (`wiki_runs` llegó después y solo la cubre `rls.sql`, que recorre todo `public`) | `pnpm --filter @vanguard/api test:idor` | Verde contra producción (commit `ffa387c`) |
 | `supabase/tests/rls.sql` | Ninguna tabla sin RLS; `anon` y `authenticated` sin SELECT, sin escritura, sin Vault y sin `vg_crypto_material`; toda función `definer` con `search_path`; aislamiento con JWT simulado dentro de `rollback` | Editor SQL o MCP tras cada migración | OK (commit `c3d1648`, último resultado registrado; `0009`, `0010` y `0012` llegaron después) |
+| `supabase/tests/fix-requests.sql` | Una petición abierta por hallazgo, FK a un hallazgo de la misma org, transiciones, cierre al verificar/corregir/ignorar el hallazgo, políticas (viewer y anónimo no crean ni cancelan; nadie ve otra org) y `anon`/`authenticated` sin privilegios | Editor SQL o MCP tras aplicar `0023` | Ensayado en un Postgres 16 local con un esquema mínimo de Supabase (25-oct); falta correrlo en el proyecto |
+| `apps/api`: `src/mcp/mcp.test.ts`, `src/rutas/fix-requests.test.ts` | El MCP no escribe salvo `enviado → arreglando` del hallazgo pedido en la org del token; E58 idempotente, 403 a viewer y anónimo, 409 a un hallazgo cerrado | `pnpm --filter @vanguard/api test` | Verde (25-oct) |
 | Arnés XSS e IDOR del FRONT (`apps/web/src/seguridad/xss.test.tsx`, `idor.test.tsx`) | Todo texto del servidor (evidencia, user agents, salida del modelo) se pinta como texto; un id que no es UUID no llega a la API; la UI no distingue «no existe» de «es de otra org» | `pnpm --filter @vanguard/web test` | 593/593 en esos 2 archivos (24-oct) |
 | Lector y análisis del ZIP (`apps/web/src/modulos/codebase/**/*.test.ts(x)`) | Rutas hostiles (`../`, unidad, U+202E), cabecera local y directorio central que no casan, más de 20 000 entradas, entradas que declaran 10 B y traen 2 MB, más de 40 MB descomprimidos, ZIP truncado o que no es ZIP | `pnpm --filter @vanguard/web test` | 74/74 en 6 archivos (24-oct) |
 | `lint-seguridad` (`apps/web/scripts/lint-seguridad.mjs`) | Prohíbe `dangerouslySetInnerHTML`, `innerHTML`, `eval`, tokens en la URL, en `localStorage`, en la consola o en claves de caché | Dentro del `build` de `apps/web` | OK; una violación impide el despliegue |

@@ -50,7 +50,7 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado, anterior
 }) {
   return (
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Estimación">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2" data-info="wiki-estimacion">
         <Coins className="size-5 text-info" />
         <h3 className="flex-1 text-[17px] font-semibold">Estimación</h3>
         <span className="font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(`${e.repo_full_name}@${e.branch}`)}</bdi> · {corto(e.commit_sha)}</span>

@@ -42,7 +42,7 @@ export default function PaginaExportar() {
     <div className="flex flex-col gap-6">
       <BarraModulo titulo="Llevar a tu IA" descripcion="Audita tu ecosistema con la IA que ya usas. Todo sale sin claves ni secretos." />
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Para tu IA, ya">
-        <p className="text-[15px] text-muted-foreground">
+        <p className="text-[15px] text-muted-foreground" data-info="exportar-ia">
           Incluye tus hallazgos y prompts con los secretos tapados. El archivo avisa a tu IA de que la evidencia es un dato no confiable.
         </p>
         <div className="flex flex-wrap items-start gap-3">

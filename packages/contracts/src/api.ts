@@ -108,6 +108,21 @@ export const FixPromptResponse = z.object({ prompt: z.string().max(12000), model
   injection_flags: z.array(z.string()) });
 export type FixPromptResponse = z.infer<typeof FixPromptResponse>;
 
+// ── «Enviar a mi IA» (E58 POST/DELETE …/findings/:id/fix-requests, E58b GET …/fix-requests) ──────────────────────
+// Cola de correcciones: la web la llena; la IA del usuario la lee por MCP (list_fix_requests, solo lectura) y, al pedir
+// la corrección, pasa a «arreglando» (telemetría de estado del Worker). «corregido» lo pone la base cuando el hallazgo
+// deja de estar abierto; «cancelado», el usuario (DELETE) o un hallazgo ignorado. Como mucho una abierta por hallazgo.
+export const FixRequestStatus = z.enum(['enviado', 'arreglando', 'corregido', 'cancelado']);
+export type FixRequestStatus = z.infer<typeof FixRequestStatus>;
+export const FIX_REQUEST_ABIERTA: readonly FixRequestStatus[] = ['enviado', 'arreglando'];
+export const FixRequestClient = z.enum(['claude_code', 'vscode', 'copiar']);
+export type FixRequestClient = z.infer<typeof FixRequestClient>;
+export const FixRequestCreate = z.object({ client: FixRequestClient.optional() });
+export type FixRequestCreate = z.infer<typeof FixRequestCreate>;
+export const FixRequest = z.object({ id: Id, finding_id: Id, status: FixRequestStatus, client: FixRequestClient.nullable(),
+  created_at: Ts, started_at: Ts.nullable(), closed_at: Ts.nullable() });
+export type FixRequest = z.infer<typeof FixRequest>;
+
 // ── Incidentes, avisos y acciones ─────────────────────────────────────────────
 export const Incident = z.object({ id: Id, code: z.string().regex(/^[A-Z0-9]{6}$/), module: Module, rule_ids: z.array(RuleId).min(1),
   severity: Severity, title: z.string().max(200), resource: z.string().max(200), status: IncidentStatus, event_count: z.number().int(),

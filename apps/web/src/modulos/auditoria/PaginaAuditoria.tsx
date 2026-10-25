@@ -18,6 +18,8 @@ import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { ESPERAS, textosEspera } from '@/componentes/vigia/esperas';
+import { useEspera } from '@/componentes/vigia/useEspera';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { invalidarPerf } from '@/modulos/rendimiento/medir';
 import { useDeltaAuditoria, useHallazgos, useOverview, useScan } from '@/lib/consultas';
@@ -30,7 +32,7 @@ import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
 import { useRepoDeConexion } from '@/lib/repos';
 import { Cambios } from './Cambios';
-import { PINTA_PASO, esMedicion, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
+import { PINTA_PASO, esMedicion, faseEspera, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
 const ORDEN_SEV: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -189,9 +191,15 @@ function Corrida({ id }: { id: string }) {
   const { auditar, ocupado, error } = useLanzarYNavegar();
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   // «Nuevo» en «Hallazgos abiertos»: nuevo frente a la auditoría anterior (E51; sin foto o con 404, sin etiqueta).
-  const delta = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded' && !esMedicion(q.data.kind)).data;
+  const deltaQ = useDeltaAuditoria(org.id, id, q.data?.status === 'succeeded' && !esMedicion(q.data.kind));
+  const delta = deltaQ.data;
   const nuevos = useMemo(() => new Set(delta?.available && !delta.first ? delta.new.items.map((i) => i.finding_id) : []), [delta]);
   const run = q.data;
+  const espera = esMedicion(run?.kind) ? ESPERAS.medicion : ESPERAS.auditoria;
+  // Terminada pero esperando el delta: las frases del último paso (resumen), así no vuelve a «Preparo la auditoría…».
+  const pasosAhora = run?.status === 'succeeded' ? ['resumen_ia']
+    : [run?.step, ...(Array.isArray(run?.steps) ? run.steps : []).filter((s) => s?.status === 'running').map((s) => s.name)];
+  useEspera(faseEspera(run, { cargando: deltaQ.isLoading, datos: delta }), textosEspera(pasosAhora, espera), espera.fin);
   const qc = useQueryClient();
   // Medición cerrada (bien o mal): al volver a Rendimiento, el histórico y el estado del módulo se releen.
   const medicionCerrada = esMedicion(run?.kind) && (run?.status === 'succeeded' || run?.status === 'failed');

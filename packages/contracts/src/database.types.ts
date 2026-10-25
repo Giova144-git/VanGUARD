@@ -920,6 +920,70 @@ export type Database = {
           },
         ]
       }
+      fix_requests: {
+        Row: {
+          client: string | null
+          closed_at: string | null
+          created_at: string
+          finding_id: string
+          id: string
+          mcp_token_id: string | null
+          org_id: string
+          requested_by: string | null
+          started_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          client?: string | null
+          closed_at?: string | null
+          created_at?: string
+          finding_id: string
+          id?: string
+          mcp_token_id?: string | null
+          org_id: string
+          requested_by?: string | null
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          client?: string | null
+          closed_at?: string | null
+          created_at?: string
+          finding_id?: string
+          id?: string
+          mcp_token_id?: string | null
+          org_id?: string
+          requested_by?: string | null
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fix_requests_finding_id_org_id_fkey"
+            columns: ["finding_id", "org_id"]
+            isOneToOne: false
+            referencedRelation: "findings"
+            referencedColumns: ["id", "org_id"]
+          },
+          {
+            foreignKeyName: "fix_requests_mcp_token_id_fkey"
+            columns: ["mcp_token_id"]
+            isOneToOne: false
+            referencedRelation: "mcp_tokens"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fix_requests_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       incidents: {
         Row: {
           acked_at: string | null

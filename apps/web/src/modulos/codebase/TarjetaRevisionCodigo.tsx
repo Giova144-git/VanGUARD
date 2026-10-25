@@ -128,7 +128,7 @@ export function TarjetaRevisionCodigo({ conexion, varios = false }: { conexion: 
 
   return (
     <section id="revision-codigo" className="flex scroll-mt-20 flex-col gap-4 rounded-xl border bg-card p-5" aria-labelledby="t-revision">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3" data-info="revision-codigo">
         <h3 id="t-revision" className="flex-1 text-[17px] font-semibold">Revisión automática de código</h3>
         <Etiqueta {...chipHook(c ?? { state: 'off', last_event_at: null, last_ping_at: null }, (t) => cuando(t))} />
         {/* «Silenciar repo 1 h» desde WhatsApp: sin avisos de revisión de este repo hasta esa hora (el check sigue). */}

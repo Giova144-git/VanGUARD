@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PINTA_PASO, estadoPaso, estadoScan, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
+import { fixtures as fx, type AuditDelta } from '@vanguard/contracts';
+import { PINTA_PASO, estadoPaso, estadoScan, faseEspera, hayCriticosNuevos, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 const cob = (missing: ('supabase' | 'cloudflare' | 'codebase' | 'performance')[]) => ({ coverage: { seen: 4 - missing.length, total: 4, missing } });
 
@@ -83,5 +84,33 @@ describe('estadoPaso', () => {
     expect(estadoPaso({ coverage: null }, { name: 'psi', status: 'done', error_code: 'runtime_error' })).toBe('en_parte');
     expect(textoFallo(null, 'lighthouse')).toBe('La medición falló');
     expect(textoFallo(null, 'full_audit')).toBe('La auditoría falló');
+  });
+});
+
+// Vigía en la espera (useEspera): la fase sale del estado de la corrida y, al terminar una auditoría, del delta (E51).
+describe('faseEspera', () => {
+  const d = fx.auditDelta as unknown as AuditDelta;
+  const conCritico = { ...d, first: false, counts: { ...(d as Extract<AuditDelta, { available: true }>).counts,
+    new: { supabase: { critical: 1, high: 0, medium: 0, low: 0, info: 0 } } } } as unknown as AuditDelta;
+  it('en cola o corriendo espera; falla → fallo; sin corrida o estado raro → inactiva', () => {
+    expect(faseEspera(undefined, { cargando: false })).toBe('inactiva');
+    expect(faseEspera({ status: 'queued', kind: 'full_audit' }, { cargando: false })).toBe('esperando');
+    expect(faseEspera({ status: 'running', kind: 'lighthouse' }, { cargando: false })).toBe('esperando');
+    expect(faseEspera({ status: 'failed', kind: 'full_audit' }, { cargando: false })).toBe('fallo');
+    expect(faseEspera({ status: '??' as never, kind: 'full_audit' }, { cargando: false })).toBe('inactiva');
+  });
+  it('terminada: espera al delta; con críticos nuevos alerta; si no, bien; una medición no mira el delta', () => {
+    const ok = { status: 'succeeded', kind: 'full_audit' } as const;
+    expect(faseEspera(ok, { cargando: true })).toBe('esperando');
+    expect(faseEspera(ok, { cargando: false })).toBe('bien');
+    expect(faseEspera(ok, { cargando: false, datos: conCritico })).toBe('alerta');
+    expect(faseEspera({ status: 'succeeded', kind: 'lighthouse' }, { cargando: true })).toBe('bien');
+  });
+  it('hayCriticosNuevos: solo con foto, con anterior y con algún crítico nuevo; un conteo raro no lanza', () => {
+    expect(hayCriticosNuevos(conCritico)).toBe(true);
+    expect(hayCriticosNuevos({ ...conCritico, first: true } as AuditDelta)).toBe(false);
+    expect(hayCriticosNuevos({ available: false, scan_run_id: d.scan_run_id, reason: 'en_curso' })).toBe(false);
+    expect(hayCriticosNuevos(undefined)).toBe(false);
+    expect(hayCriticosNuevos({ ...conCritico, counts: { new: { supabase: null } } } as unknown as AuditDelta)).toBe(false);
   });
 });

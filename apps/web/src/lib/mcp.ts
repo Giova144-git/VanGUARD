@@ -44,3 +44,30 @@ export const pedidoResolver = (findingId: string) =>
 export const pedidoResolverTodo = () =>
   'Usa el MCP de VanGUARD: llama a get_repo_status y a list_findings con severity "critical" (después "high"), y resuelve '
   + 'cada hallazgo con get_fix_prompt, uno por uno, mostrándome el diff y esperando mi confirmación antes de aplicar cada uno.';
+
+// ── «Abrir en Claude Code» (enlaces profundos oficiales) ──────────────────────────────────────────────────────────
+// claude-cli://open abre una terminal con Claude Code en el clon local del repo (`repo` = owner/name que ya vio Claude
+// Code) y la orden escrita; vscode://anthropic.claude-code/open abre una pestaña de Claude Code en la ventana activa.
+// Ninguno envía nada: Claude Code avisa «Prompt from an external link» y el usuario pulsa Enter
+// (https://code.claude.com/docs/en/deep-links.md, …/vs-code.md#launch-a-vs-code-tab-from-other-tools).
+// La orden solo lleva el comando y el id (UUID): la corrección la trae la IA del MCP.
+const REPO_SLUG = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+/** owner/name válido para el parámetro `repo`, o null (sin espacios, barras de más, `..` ni controles). */
+export const slugRepo = (s: unknown): string | null =>
+  typeof s === 'string' && REPO_SLUG.test(s) && !s.split('/').some((p) => p === '.' || p === '..') ? s : null;
+
+type ConexionRepo = { id: string; provider: string; kind: string; status: string; meta: Record<string, unknown> };
+/** Repo de GitHub donde arreglar: el de la conexión del hallazgo y, si no es de GitHub, el primero activo de la org. */
+export function repoParaArreglar(connectionId: string | null, conexiones: readonly ConexionRepo[] | undefined): string | null {
+  const gh = (conexiones ?? []).filter((c) => c.provider === 'github' && c.kind === 'read');
+  const propia = gh.find((c) => c.id === connectionId);
+  return slugRepo((propia ?? gh.find((c) => c.status === 'active') ?? gh[0])?.meta?.repo_full_name);   // meta fuera de contrato: sin repo
+}
+
+/** Enlace que abre Claude Code en la terminal (en el clon de `repo` si lo conoce) con `orden` escrita. */
+export function enlaceClaudeCode(orden: string, repo?: string | null): string {
+  const r = slugRepo(repo);
+  return `claude-cli://open?${r ? `repo=${r}&` : ''}q=${encodeURIComponent(orden)}`;
+}
+/** Enlace que abre una pestaña de Claude Code en VS Code con `orden` escrita. */
+export const enlaceVsCode = (orden: string) => `vscode://anthropic.claude-code/open?prompt=${encodeURIComponent(orden)}`;

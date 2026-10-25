@@ -3,6 +3,7 @@
 import { aiUsage, contacts } from './ajustes.ts';
 import { scanDone, scanDoneDosRepos, scanRunning } from './auditoria.ts';
 import { underAttackOffer, underAttackOfferSinPermiso, underAttackOfferUnaIp, underAttackProposal } from './bajo-ataque.ts';
+import { fixRequests } from './correcciones.ts';
 import { conexionGithub2, connections, permChecks } from './conexiones.ts';
 import { auditDelta, deltasRevision, evolution, hallazgosCorregidos } from './evolucion.ts';
 import { exportMd, mcpTokens } from './exportar.ts';
@@ -26,4 +27,5 @@ export const fixtures = {
   codeReviewStateBloqueo, mergeGateSaved,
   auditDelta, evolution, hallazgosCorregidos, deltasRevision,
   underAttackOffer, underAttackOfferUnaIp, underAttackOfferSinPermiso, underAttackProposal,
+  fixRequests,
 };

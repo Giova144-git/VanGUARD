@@ -9,6 +9,7 @@ import { demo } from './demo.ts';
 import { evolucion } from './evolucion.ts';
 import { exportRuta } from './export.ts';
 import { findings } from './findings.ts';
+import { fixRequests } from './fix-requests.ts';
 import { incidents } from './incidents.ts';
 import { modules } from './modules.ts';
 import { notifications } from './notifications.ts';
@@ -36,6 +37,7 @@ rutas.route('/', connections);
 rutas.route('/', scans);
 rutas.route('/', evolucion);   // E51 (scans/:id/delta) y E52 (evolution)
 rutas.route('/', findings);
+rutas.route('/', fixRequests);   // E58–E58b «Enviar a mi IA»
 rutas.route('/', overview);
 rutas.route('/', modules);
 rutas.route('/', contacts);

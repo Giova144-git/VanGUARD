@@ -35,8 +35,9 @@ const HUECOS: Record<Module, number> = { supabase: 2, cloudflare: 2, codebase: 2
 
 // `proveedor = null` (Rendimiento, S14 §14.13): sin conexión propia; «Sin datos» = ninguna cifra con n → «Aún no medimos tu web».
 // `arriba`: la acción propia del módulo justo bajo la barra («Medir ahora» de Rendimiento); también con «Aún no medimos».
-export function PantallaModulo({ modulo, proveedor, arriba, children }: {
-  modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; arriba?: ReactNode; children?: ReactNode;
+// `data-info`: lo que Vigía cuenta del módulo con clic derecho → «Info» sobre su título (vigia/info.ts).
+export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info': info }: {
+  modulo: Module; proveedor: Exclude<Provider, 'ingest'> | null; arriba?: ReactNode; children?: ReactNode; 'data-info'?: string;
 }) {
   const org = useOrg();
   const navegar = useNavigate();
@@ -57,7 +58,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children }: {
     : est?.error === 'sin_permiso' ? 'Ver' : null;
 
   const barra = (
-    <BarraModulo titulo={e.nombre} descripcion={e.descripcion} contador={est?.contador ?? null} extra={<>
+    <BarraModulo titulo={e.nombre} descripcion={e.descripcion} contador={est?.contador ?? null} data-info={info} extra={<>
       {chapa ? <Etiqueta {...chapa} /> : null}
       {/* sin_conexion = aún no hay conexión (estado/modulo.ts del BACK): no es un fallo; lo explica el «Conecta …» de abajo (L3). */}
       {est && !est.ok && est.error === 'sin_conexion' ? (c ? <Etiqueta texto="Sin conexión activa" rol="neutra" /> : null)
@@ -104,7 +105,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children }: {
               href={x.destino ? rutaDe(org.id, x.destino) : undefined} />
           : <Cifra key={i} etiqueta="—" n={null} />)}
       </FilaCifras>
-      <section id="ahora" className="flex scroll-mt-20 flex-col gap-3" aria-labelledby={`ahora-${modulo}`}>
+      <section id="ahora" className="flex scroll-mt-20 flex-col gap-3" aria-labelledby={`ahora-${modulo}`} data-info="ahora">
         <div className="flex flex-wrap items-center gap-2">
           <h3 id={`ahora-${modulo}`} className="text-[17px] font-semibold">Ahora</h3>
           {filtro ? (
@@ -123,7 +124,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children }: {
       {children}
       {est?.checks.length ? (
         <section className="flex flex-col gap-3" aria-label="Revisado">
-          <h3 className="text-[17px] font-semibold">Revisado</h3>
+          <h3 className="text-[17px] font-semibold" data-info="revisado">Revisado</h3>
           <ChecksEnCero checks={est.checks} />
         </section>
       ) : null}

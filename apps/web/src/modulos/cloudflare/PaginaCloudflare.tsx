@@ -29,11 +29,11 @@ export default function PaginaCloudflare() {
       Ver incidente<ChevronRight className="size-4" /></Link> : null;
   };
   return (
-    <PantallaModulo modulo="cloudflare" proveedor="cloudflare">
+    <PantallaModulo modulo="cloudflare" proveedor="cloudflare" data-info="modulo-cloudflare">
       <section className="flex flex-col gap-3" aria-label="Tráfico en vivo">
-        <h3 className="text-[17px] font-semibold">Tráfico en vivo (5 min)</h3>
+        <h3 className="text-[17px] font-semibold" data-info="trafico-vivo">Tráfico en vivo (5 min)</h3>
         {ingesta ? null : (
-          <Etiqueta className="h-auto w-fit py-1.5 whitespace-normal"
+          <Etiqueta className="h-auto w-fit py-1.5 whitespace-normal" data-info="sensor-ingesta"
             texto="La detección en vivo necesita el sensor de ingesta de tu app; con solo el token de Cloudflare ves cifras cada 5 min" />
         )}
         {trafico.data ? <>
@@ -42,7 +42,7 @@ export default function PaginaCloudflare() {
         </> : trafico.isError ? <ErrorBloque error={trafico.error} onReintentar={() => trafico.refetch()} /> : <div className="h-52 rounded-xl border bg-card" />}
       </section>
       <section className="flex flex-col gap-3" aria-label="Modo blindaje">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2" data-info="modo-blindaje">
           <h3 className="text-[17px] font-semibold">Modo blindaje</h3>
           <Etiqueta texto={cx.isPending ? '—' : blindaje ? 'Activo' : 'No configurado'} rol={blindaje ? 'info' : 'neutra'} />
         </div>

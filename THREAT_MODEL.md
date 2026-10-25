@@ -120,6 +120,7 @@ flowchart LR
 |---|---|---|---|---|
 | T04 | Copiar un token cifrado a otra fila u otra org para usarlo allí | AES-256-GCM con datos asociados `vanguard\|v1\|org\|conn\|provider\|kind`: fuera de su fila, el descifrado falla | `packages/core/src/crypto.ts` (`aadFor`, `seal`, `open`). Prueba: «otra org u otra conexión lanza» en `crypto.test.ts` | hecho |
 | T05 | Inyección de prompts desde la evidencia para bajar una alerta o colar un comando en el prompt de corrección | Defensa por arquitectura, no por obediencia del modelo. Detalle en [6.2](#62-inyección-de-prompts-desde-la-evidencia) | `packages/core/src/untrusted.ts`, `apps/api/src/ia/claude.ts`, `packages/core/src/engine/edge.ts` | hecho. La marca `suspected_injection` al guardar cada hallazgo es parcial |
+| — | La IA del cliente, por el MCP, cambia el estado de un hallazgo o de la cola «Enviar a mi IA» | El MCP no tiene herramientas de escritura; la única escritura es telemetría fija `enviado → arreglando` al pedir la corrección. Detalle en [6.5](#65-el-mcp-de-vanguard-y-enviar-a-mi-ia) | `apps/api/src/mcp/vanguard.ts` (`marcarArreglando`), `supabase/migrations/0023_fix_requests.sql`. Prueba: «get_fix_prompt pasa SOLO la petición “enviado”…» en `apps/api/src/mcp/mcp.test.ts`; `supabase/tests/fix-requests.sql` | hecho |
 | — | El navegador escribe directamente en la base | `authenticated` sin `insert`, `update` ni `delete` en `public` y sin `select` directo; RLS en todas las tablas; las funciones `security definer` de `public` solo las ejecuta `service_role`, todas con `search_path` fijo | `supabase/migrations/0008_rls_retention.sql`, `0008h_revoke_public_authenticated.sql`; comprobación en `supabase/tests/rls.sql` | hecho |
 | — | Secreto que se cuela en una fila guardada | Cable trampa en la base: `check (not private.looks_like_secret(...))` en `findings`, `incidents`, `scan_runs`, `connections`, `webhook_events` y `wiki_runs` | `supabase/migrations/0001_base.sql` y siguientes | hecho |
 
@@ -155,6 +156,7 @@ flowchart LR
 
 | ID | Amenaza | Mitigación | Dónde | Estado |
 |---|---|---|---|---|
+| — | Un viewer o el anónimo de la demo manda hallazgos a la IA o cancela un envío | `requireAdmin` en E58 (POST y DELETE `…/findings/:id/fix-requests`); en la UI el botón sale apagado con «Modo demo: solo lectura». Las políticas de `fix_requests` dicen lo mismo (owner/admin no anónimo) por si algún día hay grants | `apps/api/src/rutas/fix-requests.ts`. Prueba: `fix-requests.test.ts` y la sección 5 de `supabase/tests/fix-requests.sql` | hecho |
 | T15 | Un viewer o un anónimo lanza auditorías, acciones o crea orgs | `requireAdmin` en cada ruta de escritura. `anonReadOnly` bloquea toda escritura anónima bajo `/api/orgs/:org/*`. Crear org exige cuenta con correo y como máximo 3 orgs por dueño. El prompt de corrección: el viewer solo recibe el que ya está guardado | `apps/api/src/mw/admin.ts`, `apps/api/src/mw/anon.ts`, `apps/api/src/rutas/orgs.ts`, `apps/api/src/rutas/findings.ts`. Prueba: «anónimo → 403 sin tocar la base» en `acceso.test.ts` | hecho |
 | T16 | Una sesión robada bloquea IPs en la zona del cliente | Ver [6.1](#61-uso-de-vanguard-para-atacar-a-terceros), «Bloqueos» | `apps/api/src/rutas/actions.ts`, `apps/api/src/actions/approvals.ts`, `apps/api/src/actions/block-ip.ts` | hecho. Excepción en la org de demo ([7](#7-riesgos-residuales)) |
 | T17 | SSRF: un `project_ref`, `zone_id` o repo manipulado hace que el Worker llame a otro host u otra ruta con el token | Formatos estrictos con zod (`zone_id` `^[a-f0-9]{32}$`; `repo_full_name` sin `.` ni `..` como nombre); `project_ref` normalizado a `^[a-z]{20}$`; `encodeURIComponent` por segmento. `assertAllowedUrl` antes de cada `fetch`: `https`, host exacto de la lista, sin usuario, contraseña ni puerto. Redirecciones manuales, solo al mismo host y como máximo 3. ≤ 40 subpeticiones por invocación | `packages/contracts/src/api.ts`, `apps/api/src/scans/supabase.ts` (`normalizarRef`), `packages/core/src/egress.ts`, `apps/api/src/lib/http.ts` (`pedir`), `apps/api/src/wiki/deps.ts` (`salidaGithub`). Pruebas en `egress.test.ts` y `http.test.ts` | hecho |
@@ -222,6 +224,19 @@ El producto corre en Workers Free y Supabase Free sin tarjeta. Free corta en vez
 
 **Lo que no resiste.** Las pimientas y `sb_secret_` viven juntas en los secretos del Worker y en el `.env` del equipo. Quien comprometa la cuenta de Cloudflare o el portátil del equipo tiene las dos mitades. La separación protege contra una fuga de la base, no contra eso.
 
+### 6.5 El MCP de VanGUARD y «Enviar a mi IA»
+
+**Amenaza.** La IA del cliente (Claude Code, Cursor…) habla con `/mcp` con un token `vgk_` y lee evidencia que viene de terceros. Si el MCP tuviera herramientas de escritura, una inyección en esa evidencia podría pedirle a la IA marcar hallazgos como corregidos, borrar la cola o tocar otra org.
+
+**Mitigación.**
+
+- **Solo lectura para la IA.** Las herramientas (`get_overview`, `get_repo_status`, `list_findings`, `get_finding`, `get_fix_prompt`, `list_fix_requests`, `list_incidents`) y los prompts (`resolver_hallazgo`, `resolver_criticos`, `resolver_enviados`) solo leen. No hay ninguna herramienta que escriba ni que reciba un estado como argumento (`apps/api/src/mcp/vanguard.ts`).
+- **Telemetría de estado, no escritura de la IA.** La cola `fix_requests` (`supabase/migrations/0023_fix_requests.sql`) la llena la web: «Enviar a mi IA» crea la petición (E58, `requireAdmin`: viewer y anónimo → 403). Cuando la IA pide la corrección de ese hallazgo (`get_fix_prompt` o el prompt `resolver_hallazgo`), el Worker hace una sola escritura fija: `enviado → arreglando` de la petición abierta de **ese** id, en la org **del token**, con el `mcp_token_id`. La IA no elige qué se escribe; lo peor que consigue pidiendo correcciones es que el distintivo diga «Arreglando». `corregido` no lo pone nadie desde el MCP: lo pone la base (trigger `vg_fix_request_cierre`) cuando el hallazgo deja de estar abierto por la auditoría o por «Marcar corregido».
+- **La base defiende las transiciones.** Trigger `vg_fix_request_transicion`: org, hallazgo y autor fijos; una petición cerrada no se reabre; como mucho una abierta por hallazgo (índice parcial único); FK compuesta `(finding_id, org_id)` a `findings`.
+- **El enlace profundo solo lleva el id.** `claude-cli://open?repo=…&q=/mcp__vanguard__resolver_hallazgo <uuid>` y `vscode://anthropic.claude-code/open?prompt=…` se arman con un UUID validado (`esId`) y un `owner/name` validado (`slugRepo`); nunca con el título ni la evidencia. Claude Code muestra la orden y espera a que el usuario pulse Enter (`apps/web/src/lib/mcp.ts`, `apps/web/src/seguridad/xss.test.tsx`).
+
+**Lo que no resiste.** Un token `vgk_` robado puede marcar como «Arreglando» las peticiones abiertas de su org (solo el distintivo; no cambia el hallazgo ni el puntaje). Se corta revocando el token (E29b).
+
 ---
 
 ## 7. Riesgos residuales
@@ -284,7 +299,6 @@ Planeado en el plan del equipo y **no** presente en `main` hoy:
 | Ruta `POST …/scans/:id/zip-result` (E23), que valida y guarda el resultado del ZIP | T14 | El lector del navegador ya está en `main`; esta ruta de la API no. El contrato (`ZipResult` en `packages/contracts/src/api.ts`) ya existe |
 | Edge Function `vg-codebase` (plan B del paso de repo) con `VG_EDGE_SECRET` | T21 | No existe `supabase/functions/` |
 | Webhook firmado de ElevenLabs y llamadas de voz | T01, T13 | Ni rutas ni código de voz |
-| Servidor MCP con claves `vgk_` | — | `/mcp` responde 404 |
 | `scripts/check-bundle.mjs` dentro del build | T10 | Hoy se comprobó a mano |
 | Regla de rate limit de la zona versionada en el repo (hoy está activa solo en la zona) y tope global de auditorías por día | T11, T20 | — |
 | Tope global de WhatsApp por hora | T13 | — |

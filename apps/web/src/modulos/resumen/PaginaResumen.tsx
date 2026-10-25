@@ -18,8 +18,10 @@ import { ErrorBloque } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
+import { BotonEnviarAMiIA, EstadoEnvioIA } from '@/modulos/hallazgos/EnviarAMiIA';
 import { DesdeAnterior } from '@/modulos/evolucion/DesdeAnterior';
-import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
+import { useConexiones, useEnvioIA, useEstadoModulo, useOverview } from '@/lib/consultas';
+import { repoParaArreglar } from '@/lib/mcp';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { cuando } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
@@ -35,6 +37,11 @@ const NOMBRE: Record<Module, string> = { supabase: 'Supabase', cloudflare: 'Clou
 function FilaAhora({ item, org, repo }: { item: AhoraItem; org: string; repo: string | null }) {
   const id = encodeURIComponent(item.id);
   const href = item.kind === 'incident' ? `/o/${org}/incidents/${id}` : `?finding=${id}`;   // el detalle se abre encima
+  // «Enviar a mi IA» en la fila: con un envío abierto, su distintivo en lugar del botón.
+  const { puedeEscribir } = useOrg();
+  const conexiones = useConexiones(org);
+  const envio = useEnvioIA(org, item.kind === 'finding' ? item.id : null);
+  const abierto = envio?.status === 'enviado' || envio?.status === 'arreglando';
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
       <Etiqueta texto={deMapa(NOMBRE, item.module, '—')} />
@@ -44,6 +51,8 @@ function FilaAhora({ item, org, repo }: { item: AhoraItem; org: string; repo: st
         <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(item.title)}</span>
         <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(item.resource)}</bdi></span>
       </div>
+      {item.kind === 'finding' ? (abierto ? <EstadoEnvioIA envio={envio} />
+        : <BotonEnviarAMiIA org={org} findingId={item.id} repo={repoParaArreglar(item.connection_id ?? null, conexiones.data)} puedeEscribir={puedeEscribir} compacto />) : null}
       <Link to={href} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">
         {item.kind === 'incident' ? 'Ver incidente' : 'Ver y corregir'}<ChevronRight className="size-4" />
       </Link>
@@ -117,7 +126,7 @@ export default function PaginaResumen() {
         <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} />
         <div className="flex flex-col items-start gap-2">
           <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
-            disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
+            disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
           {errorAuditar ? <span role="alert" className="max-w-xs text-sm text-mal">{errorAuditar}</span> : null}
           {o?.last_scan ? (
             <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}
@@ -127,22 +136,22 @@ export default function PaginaResumen() {
         </div>
       </section>
 
-      <BarraSegmentada tramos={[
+      <BarraSegmentada data-info="barra-severidad" tramos={[
         { etiqueta: 'Crítica', n: o?.counts.critical ?? null, rol: 'mal', fuerte: true }, { etiqueta: 'Alta', n: o?.counts.high ?? null, rol: 'mal' },
         { etiqueta: 'Media', n: o?.counts.medium ?? null, rol: 'aviso' }, { etiqueta: 'Baja', n: o?.counts.low ?? null, rol: 'cola' },
       ]} />
 
       <FilaCifras>
-        <Cifra etiqueta="Críticos abiertos" n={o?.counts.critical ?? null} rol="mal" href={o?.counts.critical ? '#ahora' : undefined} />
-        <Cifra etiqueta="Altos" n={o?.counts.high ?? null} rol="mal" href={o?.counts.high ? '#ahora' : undefined} />
-        <Cifra etiqueta="Incidentes abiertos" n={o?.open_incidents ?? null} rol="mal" href={o?.open_incidents ? `/o/${org.id}/incidents` : undefined} />
-        <Cifra etiqueta="Fuentes" n={o?.coverage.seen ?? null} de={o?.coverage.total}
+        <Cifra data-info="cifra-criticos" etiqueta="Críticos abiertos" n={o?.counts.critical ?? null} rol="mal" href={o?.counts.critical ? '#ahora' : undefined} />
+        <Cifra data-info="cifra-altos" etiqueta="Altos" n={o?.counts.high ?? null} rol="mal" href={o?.counts.high ? '#ahora' : undefined} />
+        <Cifra data-info="cifra-incidentes" etiqueta="Incidentes abiertos" n={o?.open_incidents ?? null} rol="mal" href={o?.open_incidents ? `/o/${org.id}/incidents` : undefined} />
+        <Cifra data-info="cifra-fuentes" etiqueta="Fuentes" n={o?.coverage.seen ?? null} de={o?.coverage.total}
           rol={o && o.coverage.seen === o.coverage.total ? 'bien' : 'neutra'} />
-        <Cifra etiqueta="Última auditoría" n={o?.last_scan ? 1 : null} valor={horaAud ?? diaAud} sub={horaAud ? diaAud : undefined} />
+        <Cifra data-info="cifra-ultima-auditoria" etiqueta="Última auditoría" n={o?.last_scan ? 1 : null} valor={horaAud ?? diaAud} sub={horaAud ? diaAud : undefined} />
       </FilaCifras>
 
       <section id="ahora" className="flex flex-col gap-3 scroll-mt-20" aria-labelledby="titulo-ahora">
-        <h3 id="titulo-ahora" className="text-[17px] font-semibold">Ahora</h3>
+        <h3 id="titulo-ahora" className="text-[17px] font-semibold" data-info="ahora">Ahora</h3>
         {!o ? <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>
           : o.ahora.length === 0
             ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender · revisado {cuando(q.dataUpdatedAt)}</div>

@@ -4,7 +4,7 @@ import {
   fixtures as fx, AlertPrefsIn, CodeReviewPut, CodeReviewQuery, GATE_CONTEXT, MAX_REPOS_GITHUB, McpTokenCreate, MergeGateAction, MergeGatePut, type McpTokenCreated, type McpTokenPublic, RepoFullName, ScanCreate, WikiRepoRef, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
   type AuditDelta, type CodeReview, type CodeReviewConfig, type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type DeltaLista, type EstadoModulo, type Evolution, type PerfRunExt,
   type MergeGateConfig, type MergeGateSaved, type Overview, type RespuestaEscritura,
-  type Finding, type Incident, type IncidentDetail, type MatrizHallazgos, type Me, type Module, type Org, type PermCheck, type ScanKind,
+  type Finding, type FixRequest, type Incident, type IncidentDetail, type MatrizHallazgos, type Me, type Module, type Org, type PermCheck, type ScanKind,
   type ScanRun, type TimelineItem, type WikiRun, type ZipFinding, type SimulateAttackKind, type SimulateAttackOut,
   type UnderAttackActivo, type UnderAttackMotivo, type UnderAttackOffer, type UnderAttackProposal,
 } from '@vanguard/contracts';
@@ -258,9 +258,54 @@ function patchHallazgo(org: string, id: string, body: unknown) {
   if (b.status === 'ignored' && (!b.reason || b.reason.trim().length < 3))
     falla(422, 'invalid_body', 'Explica por qué lo ignoras', { field_errors: { reason: ['Explica por qué lo ignoras'] } });
   if (b.status !== 'open' && b.status !== 'fixed' && b.status !== 'ignored') falla(422, 'invalid_body', 'Estado no válido');
+  const antes = f.status;
   f.status = b.status as Finding['status'];
   f.status_reason = b.status === 'ignored' ? b.reason!.trim() : null;
+  if (antes === 'open' && f.status !== 'open') cerrarEnvio(org, id, f.status === 'ignored' ? 'cancelado' : 'corregido');
   return structuredClone(f);
+}
+
+// Cola «Enviar a mi IA» (E58/E58b). La demo trae una en cada estado (fx.fixRequests); una nueva pasa sola de «enviado»
+// a «arreglando» a los 8 s, como si la IA del usuario pidiera la corrección por MCP. Cerrar un hallazgo la cierra
+// (trigger vg_fix_request_cierre de 0023).
+const ABIERTA_FX: readonly FixRequest['status'][] = ['enviado', 'arreglando'];
+const A_ARREGLANDO_MS = 8_000;
+const colas = new Map<string, FixRequest[]>();
+const colaDe = (org: string) => {
+  if (!colas.has(org)) colas.set(org, vacia(org) ? [] : structuredClone(fx.fixRequests as FixRequest[]));
+  const cola = colas.get(org)!;
+  for (const x of cola) if (x.status === 'enviado' && x.started_at === null && Date.now() - Date.parse(x.created_at) > A_ARREGLANDO_MS
+    && !(fx.fixRequests as FixRequest[]).some((d) => d.id === x.id)) Object.assign(x, { status: 'arreglando', started_at: new Date().toISOString() });
+  return cola;
+};
+function cerrarEnvio(org: string, findingId: string, status: 'corregido' | 'cancelado') {
+  for (const x of colaDe(org)) if (x.finding_id === findingId && ABIERTA_FX.includes(x.status))
+    Object.assign(x, { status, closed_at: new Date().toISOString() });
+}
+function listarEnvios(org: string): FixRequest[] {
+  const vistas = new Set<string>();
+  const orden = [...colaDe(org)].sort((a, b) => Number(ABIERTA_FX.includes(b.status)) - Number(ABIERTA_FX.includes(a.status))
+    || b.created_at.localeCompare(a.created_at));
+  return structuredClone(orden.filter((x) => !vistas.has(x.finding_id) && !!vistas.add(x.finding_id)));
+}
+function enviarAIA(org: string, id: string, body: unknown) {
+  if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura');
+  const f = hallazgo(org, id);
+  if (f.status !== 'open') falla(409, 'conflict', 'Este hallazgo ya no está abierto: no hay nada que mandar a tu IA', { reason: 'no_abierto' });
+  const client = (body as { client?: unknown } | undefined)?.client;
+  if (client !== undefined && client !== 'claude_code' && client !== 'vscode' && client !== 'copiar') falla(422, 'invalid_body', 'Cliente no válido');
+  const ya = colaDe(org).find((x) => x.finding_id === id && ABIERTA_FX.includes(x.status));
+  if (ya) return structuredClone(ya);
+  const nueva: FixRequest = { id: crypto.randomUUID(), finding_id: id, status: 'enviado', client: (client as FixRequest['client']) ?? null,
+    created_at: new Date().toISOString(), started_at: null, closed_at: null };
+  colaDe(org).push(nueva);
+  return structuredClone(nueva);
+}
+function cancelarEnvio(org: string, id: string) {
+  if (tipoSesionFalsa() === 'anonima') falla(403, 'forbidden', 'Modo demo: solo lectura');
+  hallazgo(org, id);
+  cerrarEnvio(org, id, 'cancelado');
+  return undefined;
 }
 
 async function promptFalso(org: string, id: string) {
@@ -1283,6 +1328,9 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r(`${ORG}\\/findings\\/([^/]+)`),      (m) => structuredClone(hallazgo(m[1]!, m[2]!))],
   ['PATCH', r(`${ORG}\\/findings\\/([^/]+)`),     (m, b) => patchHallazgo(m[1]!, m[2]!, b)],
   ['POST', r(`${ORG}\\/findings\\/([^/]+)\\/fix-prompt`), (m) => promptFalso(m[1]!, m[2]!)],
+  ['POST', r(`${ORG}\\/findings\\/([^/]+)\\/fix-requests`), (m, b) => enviarAIA(m[1]!, m[2]!, b)],
+  ['DELETE', r(`${ORG}\\/findings\\/([^/]+)\\/fix-requests`), (m) => cancelarEnvio(m[1]!, m[2]!)],
+  ['GET',  r(`${ORG}\\/fix-requests`),            (m) => listarEnvios(m[1]!)],
   ['GET',  r(`${ORG}\\/incidents`),               (m, _b, q) => listarIncidentes(m[1]!, q)],
   ['POST', r(`${ORG}\\/incidents\\/simulate`),    (m, b) => simularFalso(m[1]!, b)],
   ['GET',  r(`${ORG}\\/incidents\\/([^/]+)`),     (m) => structuredClone(incidente(m[1]!, m[2]!))],

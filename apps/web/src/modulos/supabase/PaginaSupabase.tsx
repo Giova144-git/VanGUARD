@@ -3,7 +3,7 @@ import { PantallaModulo } from '@/componentes/vg/PantallaModulo';
 
 export default function PaginaSupabase() {
   return (
-    <PantallaModulo modulo="supabase" proveedor="supabase">
+    <PantallaModulo modulo="supabase" proveedor="supabase" data-info="modulo-supabase">
       <BotonRevisar kind="supabase" titulo="Revisar Supabase ahora" descripcion="Advisors, RLS, políticas y funciones sin freno" />
     </PantallaModulo>
   );

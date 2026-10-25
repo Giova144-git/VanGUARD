@@ -256,7 +256,7 @@ function SinAuditorias() {
     <Vacio icono={TrendingUp} titulo="Aún no hay auditorías en este periodo" texto="Cada auditoría que termine queda aquí."
       accion={<div className="flex flex-col items-center gap-2">
         <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={lanzar.isPending}
-          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA}>Auditar todo</BotonAccion>
+          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
         {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
       </div>} />
   );

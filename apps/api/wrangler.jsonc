@@ -64,5 +64,26 @@
     { "name": "RL_INGEST", "namespace_id": "1003", "simple": { "limit": 300, "period": 10 } },
     // Respuestas de E31 a un mismo teléfono (VERIFICAR con código malo): cada respuesta gasta cupo de WhatsApp.
     { "name": "RL_WA", "namespace_id": "1004", "simple": { "limit": 3, "period": 60 } }
-  ]
+  ],
+
+  // ── Worker Previews (rama develop → `wrangler preview -c apps/api/wrangler.jsonc --name develop` en Workers Builds).
+  // Las vistas previas NO heredan nada de arriba salvo assets y compatibilidad: lo que necesitan va aquí. Los secretos
+  // se cargan aparte en el panel (Previews Base → Variables and Secrets). VG_ENV distinto de production deja las
+  // acciones en dry_run (ni Cloudflare ni botones de WhatsApp). Sin cola ni VOZ_URL: una vista previa no encola
+  // trabajos en vg-jobs de producción ni manda el botón de llamada; crear auditorías en la vista previa falla a propósito.
+  // Límites con namespaces propios para no gastar los de producción. Usa la base de datos de producción.
+  "previews": {
+    "observability": { "enabled": true },
+    "vars": {
+      "VG_ENV": "preview",
+      "APP_ORIGIN": "https://officialvanguard.com",
+      "KAPSO_DISPLAY_NUMBER": "12058432279"
+    },
+    "ratelimits": [
+      { "name": "RL_API", "namespace_id": "2001", "simple": { "limit": 300, "period": 60 } },
+      { "name": "RL_COSTLY", "namespace_id": "2002", "simple": { "limit": 10, "period": 60 } },
+      { "name": "RL_INGEST", "namespace_id": "2003", "simple": { "limit": 300, "period": 10 } },
+      { "name": "RL_WA", "namespace_id": "2004", "simple": { "limit": 3, "period": 60 } }
+    ]
+  }
 }

@@ -1,0 +1,59 @@
+# VanGUARD: Guardia, la voz que avisa de un ataque. Basado en el agent.toml del starter de Kapso.
+#
+# VanGUARD corre con VOICE_PROVIDER=gemini (Gemini Live, Google AI Studio): usa [agent], [gemini],
+# [limits], [greetings] y [outbound]. Las secciones [voice], [asr], [turn] y [privacy] son de
+# ElevenLabs; se quedan porque el cargador del starter las exige, pero con Gemini no se usan.
+
+[agent]
+name = "VanGUARD Guardia"
+assistant_name = "Guardia"
+language = "es"
+prompt_file = "prompt.md"
+business_file = "business.json"
+dev_calendar_file = "dev-calendar.json"
+llm = "gpt-4.1"
+temperature = 0.2
+max_tokens = 200
+tags = ["vanguard", "ataque", "espanol"]
+
+[voice]
+voice_id = "SAz9YHcvj6GT2YYXdXww"
+tts_model = "eleven_v4_turbo"
+speed = 1.0
+stability = 0.5
+expressive_mode = false
+
+[asr]
+provider = "scribe_realtime"
+keywords = ["VanGUARD", "Guardia", "Cloudflare", "IP", "bloquear"]
+
+[turn]
+turn_timeout = 8
+silence_end_call_timeout = 15
+turn_eagerness = "normal"
+
+[limits]
+# Llamadas cortas: el servidor corta también con MAX_SESSION_SECONDS (90 en Railway).
+max_duration_seconds = 80
+concurrency_limit = 1
+daily_limit = 10
+
+[privacy]
+record_audio = false
+retention_days = 1
+
+[gemini]
+# Modelo de audio nativo de la Live API (plan gratis de Google AI Studio). Comprobar el nombre con
+# GET https://generativelanguage.googleapis.com/v1beta/models (los que tienen bidiGenerateContent).
+model = "gemini-2.5-flash-native-audio-preview-09-2025"
+# Voz prediseñada de Gemini (Kore, Aoede, Puck, Charon...).
+voice = "Kore"
+
+[greetings]
+# {tipo}, {host}, {ip}, {eventos} y {severidad} llegan con la llamada (outbound.CallContext).
+inbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Te llamé hace un momento por {tipo} contra {host}. ¿Qué quieres saber?"
+outbound = "Hola, soy {assistant}, la asistente de IA de VanGUARD.{recording} Te llamo porque detectamos {tipo} contra {host}, desde {ip}. Te mandé por WhatsApp el botón para bloquearla. ¿Te explico qué está pasando?"
+recording_notice = "Esta llamada se graba."
+
+[outbound]
+permission_request = "VanGUARD quiere poder llamarte por WhatsApp solo cuando detecte un ataque contra tu sitio, para explicarte qué pasa en menos de un minuto."

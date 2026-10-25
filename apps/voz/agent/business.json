@@ -1,0 +1,22 @@
+{
+  "_comment": "VanGUARD no reserva citas: este archivo solo da el nombre y la zona horaria. CALENDAR=local satisface el arranque del starter; el agente de VanGUARD no expone herramientas de calendario.",
+  "business_name": "VanGUARD",
+  "timezone": "America/Caracas",
+  "description": "Panel de seguridad para startups que viven en la nube.",
+  "hours": "",
+  "address": "",
+  "directions": "",
+  "website": "https://officialvanguard.com",
+  "policies": [],
+  "services": [
+    {
+      "id": "",
+      "cal_event_type_id": null,
+      "notes": ""
+    }
+  ],
+  "booking": {
+    "horizon_days": 30,
+    "ask_for_email": false
+  }
+}

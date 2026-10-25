@@ -1,0 +1,313 @@
+"""HTTP surface.
+
+At startup with KAPSO_REGISTER_WEBHOOK=1, the server makes itself the number's Meta webhook in
+Kapso when the number has none (register_webhook).
+
+Public (expose through your HTTPS ingress):
+  GET  /healthz              -> {"ok": true}; no configuration details
+  POST /webhooks/whatsapp    -> Kapso-signed Meta Calling webhook (raw-body HMAC, 1 MB cap)
+
+Operator (bearer OPERATOR_TOKEN; returns 404 when the token is unset):
+  GET  /operator/                         console page (contains no secrets)
+  GET  /operator/api/state                readiness, voice provider, recording state, active calls, event log, artifact notices
+  POST /operator/api/browser-call         {sdp} -> SDP answer; test the agent from a browser
+  POST /operator/api/calls/{ref}/hangup   end a browser or outbound call
+  POST /operator/api/outbound/permission  {recipient}: may this server call the person?
+  POST /operator/api/outbound/permission-request  {recipient}: ask the person to allow calls
+  POST /operator/api/outbound/call        {recipient}: call a person who allowed calls
+"""
+
+import asyncio
+from contextlib import asynccontextmanager
+import hashlib
+import hmac
+import json
+from pathlib import Path
+import re
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+import httpx
+from pydantic import BaseModel, ConfigDict, Field
+
+from .agent_config import load_spec
+from .bridge import ElevenSession, make_connection
+from .calls import CallManager, NotReady
+from .config import load_settings
+from .events import EventLog
+from .outbound import OutboundError
+from .private import private_dir, prune_local_artifacts
+from .provider import SetupError, ensure_webhook
+from .recording import RecordingUnknown
+
+STATIC = Path(__file__).parent / "static"
+MAX_WEBHOOK_BYTES = 1_000_000
+PRUNE_INTERVAL_SECONDS = 3600
+SIGNATURE = re.compile(r"^[0-9a-fA-F]{64}$")
+PAGE_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; media-src 'self' blob: mediastream:; connect-src 'self'; "
+                               "frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store",
+}
+
+
+class Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Offer(Strict):
+    sdp: str = Field(min_length=10, max_length=100_000)
+
+
+class Recipient(Strict):
+    recipient: str = Field(min_length=5, max_length=40)
+
+
+class AttackCall(Recipient):
+    """VanGUARD: the outbound call carries the incident's short, already redacted fields."""
+    context: dict[str, str] | None = None
+
+
+def verify_signature(secret, raw, header):
+    if not SIGNATURE.match(header or ""):
+        return False
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header.lower())
+
+
+async def read_capped(request):
+    """The raw request body, refused above MAX_WEBHOOK_BYTES before it is all read."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(413, "Webhook too large")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > MAX_WEBHOOK_BYTES:
+            raise HTTPException(413, "Webhook too large")
+    return bytes(raw)
+
+
+def prune_once(settings, log):
+    try:
+        removed = prune_local_artifacts(settings.data_dir, settings.capture_retention_days, settings.capture_max_count)
+    except OSError as error:
+        log.add("local_prune_failed_" + type(error).__name__)
+        return
+    if any(removed.values()):
+        log.add("local_artifacts_pruned", captures=removed["captures"], vendor=removed["vendor"])
+
+
+async def register_webhook(settings, log, status, transport=None):
+    """KAPSO_REGISTER_WEBHOOK=1 (set for Railway): point the number's Meta webhook at this server
+    when the number has none. An existing webhook is never replaced. The outcome is in `status`
+    for the console and in the event log; the server starts either way."""
+    if not (settings.kapso_api_key and settings.phone_number_id and settings.webhook_secret and settings.public_domain):
+        status["state"] = "missing_settings"
+    else:
+        url = f"https://{settings.public_domain}/webhooks/whatsapp"
+        try:
+            with httpx.Client(timeout=20, follow_redirects=False, transport=transport) as client:
+                status["state"] = await asyncio.to_thread(ensure_webhook, settings, url, client)
+        except (SetupError, httpx.HTTPError, ValueError):
+            status["state"] = "failed"
+    log.add("kapso_webhook_" + status["state"])
+
+
+async def prune_periodically(settings, log, interval=PRUNE_INTERVAL_SECONDS):
+    """Local retention without waiting for the next call: at startup, then every hour."""
+    while True:
+        await asyncio.to_thread(prune_once, settings, log)
+        await asyncio.sleep(interval)
+
+
+def open_calendar(settings, spec):
+    """The tools' calendar: Cal.com for real bookings, the local SQLite book only when CALENDAR=local
+    (development). None when neither is configured; then no call starts (Settings.agent_missing)."""
+    if settings.calendar == "calcom":
+        from .calcom import CalComCalendar
+        return CalComCalendar(settings.data_dir / "calendar.sqlite3", spec.business, settings.cal_api_key)
+    if settings.calendar == "local":
+        from .store import AppointmentStore
+        return AppointmentStore(settings.data_dir / "appointments.sqlite3", spec.business, spec.dev_calendar_path)
+    return None
+
+
+def create_app(settings=None, spec=None, store=None, session_factory=ElevenSession,
+               connection_factory=make_connection, kapso_factory=None, recording_reader=None, platform_transport=None):
+    settings = settings or load_settings()
+    spec = spec or load_spec(settings.agent_config_path)
+    # DATA_DIR holds bookings, captures and provider downloads: 0700 before anything is written.
+    private_dir(settings.data_dir)
+    store = store or open_calendar(settings, spec)
+    log = EventLog()
+    manager = CallManager(settings, spec, store, log, session_factory=session_factory,
+                          connection_factory=connection_factory, kapso_factory=kapso_factory,
+                          recording_reader=recording_reader)
+
+    kapso_webhook = {"state": None}  # set by register_webhook when KAPSO_REGISTER_WEBHOOK=1
+
+    @asynccontextmanager
+    async def lifespan(app):
+        pruner = asyncio.create_task(prune_periodically(settings, log))
+        if settings.agent_ready:
+            manager.spawn(manager.recording.warm())
+        if settings.register_webhook:
+            manager.spawn(register_webhook(settings, log, kapso_webhook, platform_transport))
+        try:
+            yield
+        finally:
+            pruner.cancel()
+            await asyncio.gather(pruner, return_exceptions=True)
+            await manager.shutdown()
+
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.manager, app.state.log, app.state.settings = manager, log, settings
+    if settings.allowed_hosts:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+
+    @app.get("/healthz")
+    async def health():
+        return {"ok": True}
+
+    @app.post("/webhooks/whatsapp")
+    async def webhook(request: Request):
+        if not settings.webhook_secret:
+            raise HTTPException(503, "Webhook secret is not configured")
+        raw = await read_capped(request)
+        # Verify the exact bytes before parsing anything.
+        if not verify_signature(settings.webhook_secret, raw, request.headers.get("x-webhook-signature")):
+            raise HTTPException(401, "Invalid signature")
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            raise HTTPException(400, "Body is not JSON") from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("entry", []), list):
+            raise HTTPException(400, "Unexpected webhook shape")
+        try:
+            counts = await manager.receive(payload)
+        except NotReady:
+            # Kapso will retry; the call keeps ringing until then or until the caller gives up.
+            raise HTTPException(503, "Server is not configured to answer calls") from None
+        return counts
+
+    def operator(request: Request):
+        if not settings.operator_enabled:
+            raise HTTPException(404)
+        header = request.headers.get("authorization", "")
+        scheme, _, token = header.partition(" ")
+        if scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), settings.operator_token.encode()):
+            raise HTTPException(401, "Operator token required", headers={"WWW-Authenticate": "Bearer"})
+
+    def operator_page_enabled():
+        if not settings.operator_enabled:
+            raise HTTPException(404)
+
+    page = APIRouter(prefix="/operator", dependencies=[Depends(operator_page_enabled)])
+
+    @page.get("/")
+    async def console():
+        return FileResponse(STATIC / "index.html", headers=PAGE_HEADERS)
+
+    @page.get("/app.js")
+    async def console_script():
+        return FileResponse(STATIC / "app.js", media_type="text/javascript", headers=PAGE_HEADERS)
+
+    @page.get("/console.css")
+    async def console_styles():
+        return FileResponse(STATIC / "console.css", media_type="text/css", headers=PAGE_HEADERS)
+
+    api = APIRouter(prefix="/operator/api", dependencies=[Depends(operator)])
+
+    def voice_status():
+        """Which provider a browser call would talk to. Names only; never a key."""
+        grok = settings.voice_provider == "grok"
+        gemini = settings.voice_provider == "gemini"
+        setup_step = None  # what the console asks for next: "api_key", then "create_agent" (ElevenLabs)
+        if not settings.dev_agent_ws_url:
+            key = settings.xai_api_key if grok else settings.gemini_api_key if gemini else settings.elevenlabs_api_key
+            if not key:
+                setup_step = "api_key"
+            elif not (grok or gemini) and not settings.elevenlabs_agent_id:
+                setup_step = "create_agent"
+        own = spec.grok if grok else spec.gemini if gemini else None
+        return {"provider": settings.voice_provider,
+                "label": "Grok Voice" if grok else "Gemini Live" if gemini else "ElevenLabs Agents",
+                "model": own["model"] if own else None, "voice": own["voice"] if own else None,
+                "offline_fake_agent": bool(settings.dev_agent_ws_url), "setup_step": setup_step,
+                "problem": log.provider_problem}
+
+    @api.get("/state")
+    async def state():
+        calls = manager.snapshot()
+        whatsapp_missing = [name for name, value in (("KAPSO_API_KEY", settings.kapso_api_key),
+                                                     ("WHATSAPP_PHONE_NUMBER_ID", settings.phone_number_id),
+                                                     ("WHATSAPP_WEBHOOK_SECRET", settings.webhook_secret)) if not value]
+        return {"calls_ready": settings.calls_ready, "agent_ready": settings.agent_ready,
+                "agent_missing": settings.agent_missing(),  # setting names only, never values
+                "voice": voice_status(), "calendar": settings.calendar or None,
+                "whatsapp_missing": whatsapp_missing, "kapso_webhook": kapso_webhook["state"],
+                "local_capture": settings.local_capture,
+                "recording": manager.recording.status(),
+                "max_concurrent_calls": settings.max_concurrent_calls, "busy": manager.busy(),
+                "calls": calls, "recent_calls": log.recent_calls({call["ref"] for call in calls}),
+                "events": list(log.events), "native_artifact_events": list(manager.artifacts)}
+
+    @api.post("/browser-call")
+    async def browser_call(offer: Offer):
+        if not settings.agent_ready:
+            raise HTTPException(503, "Missing: " + ", ".join(settings.agent_missing()))
+        try:
+            ref, answer = await manager.start_browser_call(offer.sdp)
+        except RecordingUnknown:
+            raise HTTPException(503, "Could not read the agent's recording setting; no call started") from None
+        except RuntimeError as error:
+            if str(error) == "busy":
+                raise HTTPException(409, "Already at MAX_CONCURRENT_CALLS") from None
+            raise HTTPException(502, "Could not start the voice connection") from None
+        except Exception:
+            raise HTTPException(502, "Could not start the voice connection") from None
+        return {"ref": ref, "type": answer["type"], "sdp": answer["sdp"]}
+
+    @api.post("/calls/{ref}/hangup")
+    async def hangup(ref: str):
+        if not re.fullmatch(r"(browser|call)-[0-9a-f]{16}", ref):
+            raise HTTPException(422, "Invalid call reference")
+        if not await manager.hang_up(ref):
+            raise HTTPException(404, "No active call with that reference")
+        return {"ended": True}
+
+    @api.post("/outbound/permission")
+    async def permission(body: Recipient):
+        try:
+            return await manager.outbound.permission(body.recipient)
+        except OutboundError as error:
+            raise HTTPException(error.status, str(error)) from None
+        except Exception as error:
+            raise HTTPException(502, f"Permission check failed: {type(error).__name__}") from None
+
+    @api.post("/outbound/permission-request")
+    async def permission_request(body: Recipient):
+        try:
+            return await manager.outbound.request_permission(body.recipient)
+        except OutboundError as error:
+            raise HTTPException(error.status, str(error)) from None
+        except Exception as error:
+            raise HTTPException(502, f"Permission check failed: {type(error).__name__}") from None
+
+    @api.post("/outbound/call")
+    async def outbound_call(body: AttackCall):
+        try:
+            return await manager.outbound.start(body.recipient, body.context)
+        except OutboundError as error:
+            raise HTTPException(error.status, str(error)) from None
+
+    app.include_router(page)
+    app.include_router(api)
+
+    @app.exception_handler(asyncio.TimeoutError)
+    async def timeout(request, error):
+        return JSONResponse({"detail": "Timed out"}, status_code=504)
+
+    return app

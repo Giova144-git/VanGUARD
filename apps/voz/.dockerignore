@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.git
+.venv
+data
+build
+dist
+tests
+scripts/*
+!scripts/check-system-ca.sh
+**/__pycache__
+.pytest_cache

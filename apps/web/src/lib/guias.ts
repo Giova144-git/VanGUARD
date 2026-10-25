@@ -61,9 +61,10 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Antes de gastar nada te decimos cuánto costará. Si ese mismo commit ya tiene wiki, verla es gratis.',
     'Lo que escribe la IA se muestra como texto: nunca ejecutamos nada de lo que traiga el documento.',
   ] },
-  performance: { titulo: '¿Cómo leer este módulo?', pasos: [
-    'Medimos tu web con Lighthouse (el mismo de PageSpeed Insights) y la comparamos con la medición anterior.',
-    'Si una métrica empeora frente a la anterior, la marcamos en ámbar para que sepas qué cambio la causó.',
+  performance: { titulo: '¿Cómo leer este módulo?', pasos: [   // los tres pasos de S10 §10.10
+    'Primero, tu zona de Cloudflare conectada: así sabemos que el dominio es tuyo y solo medimos tus webs.',
+    'Pulsa «Medir ahora»: Lighthouse (el mismo de PageSpeed Insights) mide 3 veces y guardamos la mediana.',
+    'Mira qué empeoró frente a la medición anterior (en ámbar) y copia el arreglo para tu IA.',
   ] },
   audit: { titulo: '¿Cómo funciona la auditoría?', pasos: [
     'Un botón revisa todo tu ecosistema por pasos: Supabase, Cloudflare y tu repo.',

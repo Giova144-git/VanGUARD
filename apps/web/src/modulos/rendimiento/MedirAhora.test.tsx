@@ -4,9 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { QueryClient, QueryClientProvider, type QueryKey } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, type Query, type QueryKey } from '@tanstack/react-query';
 import { fixtures as fx, ScanAccepted, type PerfRunExt, type ScanRun } from '@vanguard/contracts';
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
+import { useScan } from '@/lib/consultas';
 import { ApiError } from '@/lib/errores';
 import { TEXTO_ROL } from '@/lib/severidad';
 import PaginaAuditoria from '@/modulos/auditoria/PaginaAuditoria';
@@ -184,7 +185,7 @@ describe('Medir ahora · bandera por 404', () => {
   it('E24 (perf/runs) en 404: no se pinta', () => {
     const html = pintar(<PaginaRendimiento />, { datos: conRuns(undefined).slice(0, 2), error: [['org', ORG, 'perf'], new ApiError(404, 'not_found', 'Ruta inexistente')] });
     expect(html).toContain('Puntaje móvil');
-    expect(html).not.toContain('Medir ahora');
+    expect(html).not.toContain('aria-labelledby="t-medir"');
   });
 
   it('E11 en 404: medir() lo dice y desde entonces no se pinta nada en esa org', async () => {
@@ -230,5 +231,22 @@ describe('Auditoría de una medición (kind lighthouse)', () => {
     expect(html).toContain('Volver a Rendimiento');
     expect(html).not.toContain('Reintentar auditoría');
     expect(ver(run({ status: 'failed', step: null, error: null }))).toContain('La medición falló');
+  });
+});
+
+describe('Auditoría de una medición · sondeo', () => {
+  // refetchInterval es una función de la consulta: se evalúa como haría QueryObserver (igual que idor.test.tsx).
+  function intervalo(datos: Partial<ScanRun>) {
+    const qc = new QueryClient();
+    qc.setQueryData(['org', ORG, 'scan', SCAN], { ...fx.scanRunning, id: SCAN, ...datos });
+    const Sonda = () => { useScan(ORG, SCAN); return null; };
+    renderToStaticMarkup(<QueryClientProvider client={qc}><Sonda /></QueryClientProvider>);
+    const q = qc.getQueryCache().find({ queryKey: ['org', ORG, 'scan', SCAN], exact: true })!;
+    return ((q.options as { refetchInterval: (q: Query) => number | false }).refetchInterval)(q);
+  }
+  it('una medición en curso se mira cada 2 s; una auditoría, cada 10 s; terminada, nada', () => {
+    expect(intervalo({ kind: 'lighthouse', status: 'running' })).toBe(2_000);
+    expect(intervalo({ kind: 'full_audit', status: 'running' })).toBe(10_000);
+    expect(intervalo({ kind: 'lighthouse', status: 'succeeded' })).toBe(false);
   });
 });

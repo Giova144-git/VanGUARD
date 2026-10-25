@@ -4,19 +4,24 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ChevronRight, ShieldCheck, TrendingUp } from 'lucide-react';
-import type { Evolution, EvolutionPoint } from '@vanguard/contracts';
+import type { Evolution, EvolutionPoint, EvolutionReview, PorSeveridad } from '@vanguard/contracts';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { Etiqueta } from '@/componentes/vg/Etiqueta';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { ErrorBloque, Vacio } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
-import { useEvolucion } from '@/lib/consultas';
+import { sinBidi } from '@/lib/bidi';
+import { useConexiones, useEvolucion } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
-import { cifras, etiquetaVersion, horas, porSeveridad, serieCambios, seriePuntaje, signo, tipoAuditoria, totalMatriz } from '@/lib/evolucion';
-import { miles } from '@/lib/formato';
+import {
+  NOTA_FOTO_PUSH, SEVERIDADES, cifras, etiquetaVersion, horas, lineaFoto, porSeveridad, serieCambios, seriePuntaje, signo, tipoAuditoria,
+  totalFila, totalMatriz,
+} from '@/lib/evolucion';
+import { cuando, miles } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
+import { severidad } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { GraficaCambios, GraficaPuntaje, Leyenda } from './Graficas';
 
@@ -161,6 +166,45 @@ function Contenido({ evo }: { evo: Evolution }) {
   );
 }
 
+// Pushes y PR del periodo, el más reciente arriba: sus nuevos y, en un push, la foto de Codebase (lineaFoto). «Ver» abre la
+// fila en Codebase. El commit es hex validado por el contrato; aun así va saneado y en <bdi>.
+const peor = (n: PorSeveridad) => SEVERIDADES.find((s) => (n[s] ?? 0) > 0) ?? null;
+function Revisiones({ reviews }: { reviews: EvolutionReview[] }) {
+  const org = useOrg();
+  const conexiones = useConexiones(org.id);
+  const variosRepos = (conexiones.data ?? []).filter((c) => c.provider === 'github' && c.kind === 'read').length >= 2;
+  if (!reviews.length) return null;
+  const filas = [...reviews].reverse();
+  return (
+    <Seccion id="t-revisiones" titulo="Revisiones de código">
+      <ul aria-label="Revisiones de código">
+        {filas.map((r) => {
+          const n = totalFila(r.new);
+          const s = severidad(peor(r.new));
+          const linea = lineaFoto({ event: r.event, counts: r.new, delta: r.delta }, variosRepos);
+          return (
+            <li key={r.review_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b py-3 last:border-b-0">
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="flex flex-wrap items-center gap-2 text-[15px]">
+                  <span className="tabular-nums">{cuando(r.at)}</span>
+                  <span className="font-mono text-[13px]"><bdi dir="ltr">{sinBidi(r.head_sha7)}</bdi></span>
+                  <span className="text-muted-foreground">{r.event === 'push' ? 'Push' : `PR #${r.pr_number ?? '—'}`}</span>
+                  <Etiqueta texto={n ? `${n} ${n === 1 ? 'nuevo' : 'nuevos'} · peor: ${s.etiqueta}` : 'Limpio'} rol={n ? s.rol : 'bien'} />
+                  {r.partial ? <Etiqueta texto="Parcial" rol="aviso" /> : null}
+                </span>
+                {linea ? <span className="text-[13px] text-muted-foreground">{linea}</span> : null}
+              </div>
+              <Link to={`/o/${org.id}/codebase?revision=${encodeURIComponent(r.review_id)}`} className="inline-flex h-11 items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4">
+                Ver<ChevronRight className="size-4" /></Link>
+            </li>
+          );
+        })}
+      </ul>
+      {reviews.some((r) => r.event === 'push' && r.delta) ? <p className="text-[12.5px] text-texto-3">{NOTA_FOTO_PUSH}</p> : null}
+    </Seccion>
+  );
+}
+
 // 0 versiones en el periodo: «Auditar todo» (apagado para el viewer y el anónimo de la demo).
 function SinAuditorias() {
   const org = useOrg();
@@ -205,6 +249,7 @@ export default function PaginaEvolucion() {
           {/* Datos viejos con un fallo al refrescar: se quedan, con el error encima. */}
           {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
           {evo.points.length ? <Contenido evo={evo} /> : <SinAuditorias />}
+          <Revisiones reviews={evo.reviews} />
         </>}
       {pronto ? null : (
         <div className="flex flex-col gap-1 text-[13px] text-texto-3">

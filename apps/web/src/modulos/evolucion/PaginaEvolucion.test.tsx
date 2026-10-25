@@ -30,7 +30,7 @@ function pintar(datos: Evolution | ApiError, org: OrgActual = ADMIN) {
       <OrgDePrueba org={org}><PaginaEvolucion /></OrgDePrueba>
     </MemoryRouter></QueryClientProvider>);
 }
-const texto = (html: string) => html.replace(/<[^>]+>/g, '');
+const texto = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&quot;/g, '"');
 
 describe('PaginaEvolucion', () => {
   it('404 (E52 aún sin desplegar): «La evolución llega pronto», sin rojo ni periodo', () => {
@@ -72,6 +72,24 @@ describe('PaginaEvolucion', () => {
     const html = pintar(EVO);
     expect(html).toMatch(/role="img" aria-label="Nuevos y corregidos por auditoría: jue\.? 22 · 14:02 0 nuevos y 2 corregidos, vie\.? 23 · 14:04 1 nuevos y 2 corregidos, [^"]+ 7 nuevos y 2 corregidos"/);
     expect(texto(html)).toContain('Corregidos (hacia abajo)');
+  });
+
+  it('revisiones de código: la más reciente arriba, con sus nuevos, la foto del push y el enlace a la fila en Codebase', () => {
+    const pr = { ...EVO.reviews[0]!, review_id: 'c4000000-0000-4000-8000-0000000000aa', event: 'pull_request' as const, pr_number: 7, head_sha7: 'b0b0b0b',
+      at: '2026-10-24T20:00:00.000Z', partial: true, delta: null };
+    const html = pintar({ ...EVO, reviews: [...EVO.reviews, pr] });
+    const t = texto(html);
+    expect(t).toContain('Revisiones de código');
+    expect(t).toContain('PR #7');
+    expect(t).toContain('Parcial');
+    expect(t).toContain('1 nuevo · peor: Crítica');
+    expect(t).toContain('Limpio');
+    expect(t).toContain('1 nuevo · 7 siguen abiertos · 0 corregidos desde el push anterior');
+    expect(t).toContain('3 siguen abiertos en Codebase · desde el próximo push verás los corregidos');
+    expect(t).toContain('Entre dos pushes, "corregido" es lo que alguien marcó');
+    expect(t.indexOf('PR #7')).toBeLessThan(t.indexOf('a41c9d2'));
+    for (const r of EVO.reviews) expect(html).toContain(`/o/${ORG}/codebase?revision=${r.review_id}`);
+    expect(html).toContain('<bdi dir="ltr">a41c9d2</bdi>');
   });
 
   it('con la gráfica recortada el título dice «últimas N auditorías»', () => {

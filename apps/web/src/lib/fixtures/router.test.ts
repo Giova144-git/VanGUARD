@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixtures as fx, AlertPrefs, CodeReviewSaved, CodeReviewState, Finding, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
+import { fixtures as fx, AlertPrefs, CodeReviewSaved, CodeReviewState, Finding, MergeGateSaved, ScanRun, type ConnectionCreated, type EstadoModulo, type WikiRun } from '@vanguard/contracts';
 import type { ApiError } from '../errores';
 import { fixtureFetch, simularAtaque } from './router';
 
@@ -331,10 +331,10 @@ describe('ZIP analizado en el navegador (E11 zip y E23)', () => {
 });
 
 describe('revisión de código (E45, E46, E48, E49; asignaciones/revision-codigo.md §6.3)', () => {
-  it('la demo arranca conectada con sus dos revisiones y el hallazgo del push se abre con ?finding=', async () => {
+  it('la demo arranca conectada con sus revisiones (el PR #7 del bloqueo encima) y el hallazgo del push se abre con ?finding=', async () => {
     const s = CodeReviewState.parse(await pedir(`/api/orgs/${DEMO}/code-review`));
     expect(s).toMatchObject({ available: true, config: { state: 'connected' } });
-    expect(s.recent).toHaveLength(2);
+    expect(s.recent.map((r) => r.id)).toEqual(fx.codeReviewStateBloqueo.recent.map((r) => r.id));
     expect(await pedir<Finding>(`/api/orgs/${DEMO}/findings/${fx.hallazgoRevision.id}`)).toMatchObject({ rule_id: 'CB_SECRET_STRIPE_LIVE' });
   });
 
@@ -458,5 +458,89 @@ describe('varias codebases · conexiones, revisión por repo y auditoría (§6.5
     expect(hallazgos.length).toBeGreaterThan(0);
     expect(hallazgos.every((a) => a.connection_id !== undefined)).toBe(true);
     expect(o.ahora.filter((a) => a.kind === 'incident').every((a) => a.connection_id === undefined)).toBe(true);
+  });
+});
+
+// Bloqueo de merge con críticos (bloqueo-merge-criticos.md §6.5 y anexo de cierre de PR). Al final: cambia el estado
+// del bloqueo de la demo y da de alta su token de estados.
+describe('bloqueo de merge (E45 con gate, E53, E54)', () => {
+  const CONN_GITHUB = fx.connections.find((c) => c.provider === 'github')!.id;
+  const PR = fx.codeReviewStateBloqueo.recent[0]!.id;
+  const LIMPIA = fx.codeReviewState.recent[1]!.id;
+  const leer = (q = '') => pedir<CodeReviewState>(`/api/orgs/${DEMO}/code-review${q}`);
+  const bloqueo = (body: unknown) => pedir<MergeGateSaved>(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', body);
+  const accion = (id: string, body: unknown) => pedir(`/api/orgs/${DEMO}/code-review/reviews/${id}/gate`, 'POST', body);
+  const BASE = { enabled: true, min_severity: 'critical' };
+
+  it('la demo trae codeReviewStateBloqueo con el anexo (cerrar PR) y el PR #7 cerrado; el 2.º repo, sin gate', async () => {
+    const s = CodeReviewState.parse(await leer());
+    expect(s.config?.gate).toMatchObject({ ...fx.codeReviewStateBloqueo.config.gate, close_pr: true, can_close_pr: true });
+    expect(s.recent[0]!.gate).toMatchObject({ state: 'failure', blocking: 1, pr_action: 'closed' });
+    expect((await leer(`?connection_id=${fx.conexionGithub2.id}`)).config?.gate).toBeUndefined();
+  });
+
+  it('E53 y E54: el anónimo de la demo no puede escribir (403)', async () => {
+    sesion.tipo = 'anonima';
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', BASE)).toMatchObject({ status: 403 });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 403 });
+  });
+
+  it('E53 con token: token clásico y permisos de más dan 422; uno bueno publica la prueba ✗ y aparece en Conexiones', async () => {
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', { ...BASE, statuses_pat: 'ghp_tokenclasicodegithub0000' })).toMatchObject({ status: 422, code: 'key_rejected' });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', { ...BASE, statuses_pat: 'github_pat_con_contents_00000000' }))
+      .toMatchObject({ status: 422, details: { reason: 'excess_scope', excess_permissions: ['contents', 'administration'] } });
+    const r = MergeGateSaved.parse(await bloqueo({ ...BASE, statuses_pat: 'github_pat_estados_de_la_demo_k9Qz' }));
+    expect(r).toMatchObject({ probe_sha: fx.mergeGateSaved.probe_sha, probe_state: 'failure', gate: { state: 'unchecked', can_close_pr: true } });
+    expect(JSON.stringify(r)).not.toContain('github_pat_');
+    const cx = await pedir<{ id: string; provider: string; kind: string; meta: Record<string, unknown> }[]>(`/api/orgs/${DEMO}/connections`);
+    expect(cx.find((c) => c.provider === 'github' && c.kind === 'action')).toMatchObject({ id: fx.mergeGateSaved.gate.statuses_connection.id, meta: { branch: 'main' } });
+    // Otro token rota el de la MISMA conexión.
+    const otro = MergeGateSaved.parse(await bloqueo({ ...BASE, statuses_pat: 'github_pat_estados_nuevo_de_la_demo' }));
+    expect(otro.gate.statuses_connection).toMatchObject({ id: r.gate.statuses_connection!.id, last4: 'demo' });
+  });
+
+  it('E54: dar por bueno y deshacer el PR #7, reabrirlo una vez; lo limpio o ajeno no se toca', async () => {
+    expect(await accion(PR, { op: 'override', reason: 'Clave de prueba' })).toEqual({ ok: true, resultado: 'encolado' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ state: 'success', override_at: expect.any(String) });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'override', reason: 'Otra vez' })).toMatchObject({ status: 409, details: { reason: 'nada_que_aprobar' } });
+    await accion(PR, { op: 'revert' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ state: 'failure', override_at: null });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 409, details: { reason: 'sin_override' } });
+    await accion(PR, { op: 'reopen_pr' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ pr_action: 'reopened', state: 'failure' });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'reopen_pr' })).toMatchObject({ status: 409 });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${LIMPIA}/gate`, 'POST', { op: 'override', reason: 'Limpia' })).toMatchObject({ status: 409 });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'republish' })).toMatchObject({ status: 409, details: { reason: 'p1' } });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${NADA}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 404 });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'override', reason: 'x' })).toMatchObject({ status: 422 });
+  });
+
+  it('apagado: E45 dice off y E54 da 409; con la revisión apagada, off y E53 da 409 sin_revision', async () => {
+    expect((await bloqueo({ ...BASE, enabled: false })).gate.state).toBe('off');
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 409, details: { reason: 'apagado' } });
+    expect((await bloqueo(BASE)).gate.state).toBe('unchecked');
+    await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: CONN_GITHUB, enabled: false });
+    expect((await leer()).config?.gate?.state).toBe('off');
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/gate`, 'PUT', BASE)).toMatchObject({ status: 409, details: { reason: 'sin_revision' } });
+    await pedir(`/api/orgs/${DEMO}/code-review`, 'PUT', { connection_id: CONN_GITHUB, enabled: true });
+    expect((await leer()).config?.gate?.state).toBe('unchecked');
+  });
+
+  it('quitar el token de estados en Conexiones deja el bloqueo pidiendo otro (needs_token)', async () => {
+    const cx = await pedir<{ id: string; provider: string; kind: string }[]>(`/api/orgs/${DEMO}/connections`);
+    const est = cx.find((c) => c.provider === 'github' && c.kind === 'action')!;
+    expect(await pedir<{ checks: { permission: string }[] }>(`/api/orgs/${DEMO}/connections/${est.id}/test`, 'POST', {})).toMatchObject({ checks: [{ permission: 'statuses:read' }] });
+    await pedir(`/api/orgs/${DEMO}/connections/${est.id}`, 'DELETE');
+    expect((await leer()).config?.gate).toMatchObject({ state: 'needs_token', statuses_connection: null });
+  });
+
+  it('una org nueva con su repo: gate apagado en E45; encender sin token → needs_token; con token, prueba «pendiente»', async () => {
+    const s = await pedir<CodeReviewState>(`/api/orgs/${nueva}/code-review`);
+    expect(s.config?.gate).toMatchObject({ enabled: false, state: 'off', statuses_connection: null });
+    const sin = MergeGateSaved.parse(await pedir(`/api/orgs/${nueva}/code-review/gate`, 'PUT', BASE));
+    expect(sin).toMatchObject({ gate: { state: 'needs_token' }, probe_sha: null, probe_state: null, checks: [] });
+    const con = MergeGateSaved.parse(await pedir(`/api/orgs/${nueva}/code-review/gate`, 'PUT', { ...BASE, statuses_pat: 'github_pat_estados_org_nueva_000000' }));
+    expect(con).toMatchObject({ gate: { state: 'unchecked', close_pr: true }, probe_state: 'pending' });
+    expect(con.probe_sha).toMatch(/^[0-9a-f]{40}$/);
   });
 });

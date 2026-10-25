@@ -11,6 +11,9 @@ export const PERMISOS: Record<string, string> = {
   bot_read: 'Zone · Bot Management · Read', firewall_edit: 'Zone · Firewall Services · Edit',
   // GitHub (fine-grained)
   'metadata:read': 'Metadata · Read-only', 'contents:read': 'Contents · Read-only', 'dependabot_alerts:read': 'Dependabot alerts · Read-only',
+  // GitHub, token de escritura del bloqueo de merge (E53; anexo de cierre de PR)
+  'statuses:write': 'Commit statuses · Read and write', 'statuses:read': 'Commit statuses · Read-only',
+  'pull_requests:write': 'Pull requests · Read and write', 'issues:write': 'Issues · Read and write',
 };
 
 export const nombrePermiso = (codigo: string) => (Object.hasOwn(PERMISOS, codigo) ? PERMISOS[codigo]! : codigo);

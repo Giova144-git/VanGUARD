@@ -1,8 +1,8 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, AlertPrefsIn, CodeReviewPut, CodeReviewQuery, MAX_REPOS_GITHUB, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, RepoFullName, ScanCreate, WikiRepoRef, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
-  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type Overview,
+  fixtures as fx, AlertPrefsIn, CodeReviewPut, CodeReviewQuery, GATE_CONTEXT, MAX_REPOS_GITHUB, McpTokenCreate, MergeGateAction, MergeGatePut, type McpTokenCreated, type McpTokenPublic, RepoFullName, ScanCreate, WikiRepoRef, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
+  type CodeReview, type CodeReviewConfig, type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type MergeGateConfig, type MergeGateSaved, type Overview, type RespuestaEscritura,
   type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
   type WikiRun, type ZipFinding,
 } from '@vanguard/contracts';
@@ -184,8 +184,9 @@ function conectarFalso(org: string, body: unknown): ConnectionCreated {
 function probarFalso(org: string, id: string) {
   const c = listaDe(org).find((x) => x.id === id) ?? falla(404, 'not_found', 'Esa conexión no existe');
   c.last_checked_at = new Date().toISOString();
+  // GitHub kind 'action' es el token de estados del bloqueo de merge: E9 lo sondea leyendo estados, sin escribir.
   const checks = c.provider === 'ingest' ? [] : c.kind === 'action'
-    ? [{ permission: 'firewall_edit', ok: true, required: true }] : CHECKS[c.provider];
+    ? [{ permission: c.provider === 'github' ? 'statuses:read' : 'firewall_edit', ok: true, required: true }] : CHECKS[c.provider];
   return { ok: checks.every((k) => k.ok || k.required === false), checks, checked_at: c.last_checked_at };
 }
 
@@ -199,6 +200,13 @@ function quitarFalso(org: string, id: string) {
   if (i < 0) falla(404, 'not_found', 'Esa conexión no existe');
   const [c] = lista.splice(i, 1);
   for (const [h, id] of huellasDe(org)) if (id === c!.id) huellasDe(org).delete(h);   // su token se puede volver a usar
+  // Bloqueo de merge (§2.8 y varias §2.6.6): quitar la GitHub de lectura de un repo quita también su token de estados;
+  // quitar el token de estados deja el bloqueo pidiendo otro.
+  if (c!.provider === 'github' && c!.kind === 'read') {
+    const t = lista.findIndex((x) => x.provider === 'github' && x.kind === 'action' && nombreGh(x) === nombreGh(c!));
+    if (t >= 0) { lista.splice(t, 1); sinTokenDeEstados(org); }
+  }
+  if (c!.provider === 'github' && c!.kind === 'action') sinTokenDeEstados(org);
   const url = REVOCAR[c!.provider];
   return new Response(null, { status: 204, headers: url ? { 'x-vg-revoke-url': url } : {} });
 }
@@ -622,11 +630,133 @@ function revisionDe(org: string, gh: ConnectionPublic) {
   const k = `${org}:${gh.id}`;
   if (!revisiones.has(k)) {
     const demo = !vacia(org);
-    const estado = demo && gh.id === CONN_REVISION ? fx.codeReviewState : demo && gh.id === fx.conexionGithub2.id ? fx.codeReviewStateRepo2
+    const estado = demo && gh.id === CONN_REVISION ? estadoBloqueoDemo() : demo && gh.id === fx.conexionGithub2.id ? fx.codeReviewStateRepo2
       : { available: true, reason: null, config: null, recent: [] };
     revisiones.set(k, { consultas: 0, estado: structuredClone(estado as CodeReviewState) });
   }
   return revisiones.get(k)!;
+}
+
+// ── Bloqueo de merge con críticos (E45 con gate, E53, E54; bloqueo-merge-criticos.md §6.5) ──────────────────────────
+// La demo arranca con codeReviewStateBloqueo (gate `unchecked`, el PR #7 con ✗). El anexo de cierre de PR va aquí: el
+// contrato lo trae opcional y sus fixtures no lo usan; el token de la demo tiene permiso de pull requests y el PR #7 quedó
+// cerrado por VanGUARD. La conexión de estados no está en `connections` hasta guardar un token con E53 (como el fixture).
+function estadoBloqueoDemo(): CodeReviewState {
+  const s = structuredClone(fx.codeReviewStateBloqueo as CodeReviewState);
+  if (s.config?.gate) Object.assign(s.config.gate, { close_pr: true, can_close_pr: true });
+  for (const r of s.recent) if (r.gate && r.event === 'pull_request' && r.gate.state === 'failure') Object.assign(r.gate, { pr_action: 'closed', pr_close_error: null });
+  return s;
+}
+const GATE_APAGADO = { enabled: false, min_severity: 'critical', state: 'off', context: GATE_CONTEXT, statuses_connection: null,
+  protection: null, last_error: null, close_pr: false, can_close_pr: false } satisfies MergeGateConfig;
+const estadosGh = (org: string) => listaDe(org).find((c) => c.provider === 'github' && c.kind === 'action');
+// El repo del bloqueo (varias §2.6, punto 3): el del token de estados si lo hay; si no, el principal. Solo su config
+// trae `gate` en E45; en las demás pestañas no viene y el FRONT no pinta la sección.
+function repoBloqueo(org: string): ConnectionPublic | undefined {
+  const t = estadosGh(org);
+  return t ? lecturasGh(org).find((c) => nombreGh(c) === nombreGh(t)) : githubDe(org);
+}
+// Como E45: `off` con la revisión o el bloqueo apagados; `needs_token` sin token activo; `error` con last_error; si no,
+// `unchecked` (P0 no lee la protección).
+function estadoGate(cfg: CodeReviewConfig, g: MergeGateConfig): MergeGateConfig['state'] {
+  if (!cfg.enabled || !g.enabled) return 'off';
+  if (g.statuses_connection?.status !== 'active') return 'needs_token';
+  return g.last_error ? 'error' : 'unchecked';
+}
+// La config tal como la ve el FRONT: con `gate` solo en el repo del bloqueo (sembrado apagado la primera vez).
+function vistaConfig(org: string, gh: ConnectionPublic, cfg: CodeReviewConfig | null): CodeReviewConfig | null {
+  if (!cfg) return null;
+  const copia = structuredClone(cfg);
+  if (gh.id !== repoBloqueo(org)?.id) { delete copia.gate; return copia; }
+  cfg.gate ??= structuredClone(GATE_APAGADO);
+  copia.gate = { ...structuredClone(cfg.gate), state: estadoGate(cfg, cfg.gate) };
+  return copia;
+}
+function sinTokenDeEstados(org: string) {
+  for (const [k, v] of revisiones) if (k.startsWith(`${org}:`) && v.estado.config?.gate) v.estado.config.gate.statuses_connection = null;
+}
+const REPOS_DEL_PRODUCTO = new Set(['platanus-hack/platanus-hack-26-ve-team-22', 'giova144-git/vanguard']);
+const shaFalso = () => [...crypto.getRandomValues(new Uint8Array(20))].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+// E53. Con statuses_pat: guarda prefijo (github_pat_), mismo token que el de lectura, permisos de más (en fixtures, un
+// token que contenga «admin» o «contents», para ensayar el 422) y alta o rotación de la MISMA conexión de estados. La
+// prueba de la demo cae en el push de las 19:20Z con la clave: ✗ (mergeGateSaved); en otra org, «pendiente».
+function guardarBloqueo(org: string, body: unknown): MergeGateSaved {
+  exigirAdmin();
+  const b = MergeGatePut.safeParse(body);
+  if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
+  const { enabled, min_severity, statuses_pat, close_pr } = b.data;
+  const gh = repoBloqueo(org) ?? falla(404, 'not_found', 'Conecta primero tu repo de GitHub');
+  if (gh.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
+  const cfg = revisionDe(org, gh).estado.config;
+  if (!cfg?.enabled) return falla(409, 'conflict', 'Activa primero “Revisar cada push”', { reason: 'sin_revision' });
+  if (enabled && REPOS_DEL_PRODUCTO.has(nombreGh(gh)))
+    falla(409, 'conflict', 'No actives el bloqueo en el repo desde el que se despliega VanGUARD: si VanGUARD falla, no podrías fusionar su propio arreglo', { reason: 'repo_del_producto' });
+  const g = (cfg.gate ??= structuredClone(GATE_APAGADO));
+  let checks: PermCheck[] = [], probe_sha: string | null = null, probe_state: MergeGateSaved['probe_state'] = null;
+  if (statuses_pat !== undefined) {
+    const t = statuses_pat.trim();
+    guardaFalsa(t);
+    if (!t.startsWith('github_pat_')) falla(400, 'invalid_body', 'Usa un token fine-grained (github_pat_…)', { field_errors: { statuses_pat: ['Debe empezar por github_pat_'] } });
+    const duena = huellasDe(org).get(huella(t));
+    if (duena && lecturasGh(org).some((c) => c.id === duena)) falla(422, 'key_rejected', 'Usa un token nuevo, solo con Commit statuses', { reason: 'same_token' });
+    if (/admin|contents/i.test(t))
+      falla(422, 'key_rejected', 'Ese token tiene permisos de más (Contents, Administration). Crea uno con solo Commit statuses: Read and write', { reason: 'excess_scope', excess_permissions: ['contents', 'administration'] });
+    const ahora = new Date().toISOString(), expira = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    let est = estadosGh(org);
+    if (est) Object.assign(est, { status: 'active', last4: t.slice(-4), expires_at: expira, last_checked_at: ahora, last_error: null });
+    else {
+      est = { id: esDemo(org) ? fx.mergeGateSaved.gate.statuses_connection.id : crypto.randomUUID(), provider: 'github', kind: 'action',
+        label: `GitHub · estados · ${nombreRepoGh(gh)}`.slice(0, 80), status: 'active', last4: t.slice(-4), scopes: ['statuses:write', 'pull_requests:write'],
+        meta: { repo_full_name: gh.meta.repo_full_name, repo_id: gh.meta.repo_id, branch: cfg.branch, purpose: 'commit_statuses' },
+        capabilities: { statuses: true, pull_requests: true }, expires_at: expira, last_checked_at: ahora, last_error: null };
+      listaDe(org).push(est);
+    }
+    huellasDe(org).set(huella(t), est.id);
+    if (!g.can_close_pr) g.close_pr = true;            // encendido por defecto cuando el token llega con el permiso
+    Object.assign(g, { statuses_connection: { id: est.id, status: 'active', last4: est.last4, expires_at: expira }, last_error: null, can_close_pr: true });
+    checks = [{ permission: 'statuses:write', ok: true, required: true }, { permission: 'pull_requests:write', ok: true, required: false }];
+    probe_sha = esDemo(org) ? fx.mergeGateSaved.probe_sha : shaFalso();
+    probe_state = esDemo(org) ? fx.mergeGateSaved.probe_state : 'pending';
+  }
+  Object.assign(g, { enabled, min_severity });
+  if (close_pr !== undefined) g.close_pr = close_pr && g.can_close_pr !== false;
+  return { gate: vistaConfig(org, gh, cfg)!.gate!, checks, probe_sha, probe_state };
+}
+const nombreRepoGh = (c: ConnectionPublic) => String(c.meta.repo_full_name ?? '');
+
+// E54 (§6.5): override → ✓ «Aprobado a mano» al momento (el BACK lo encola); revert → vuelve el ✗ (o el error de una
+// revisión incompleta); reopen_pr → el PR queda «reabierto»; republish es P1 (409).
+function accionBloqueo(org: string, id: string, body: unknown): RespuestaEscritura {
+  exigirAdmin();
+  const b = MergeGateAction.safeParse(body);
+  if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
+  let r: CodeReview | undefined, cfg: CodeReviewConfig | null = null;
+  for (const [k, v] of revisiones) {
+    if (!k.startsWith(`${org}:`)) continue;
+    r = v.estado.recent.find((x) => x.id === id);
+    if (r) { cfg = v.estado.config; break; }
+  }
+  if (!r) return falla(404, 'not_found', 'Esa revisión no existe');
+  if (!cfg?.enabled || !cfg.gate?.enabled) falla(409, 'conflict', 'El bloqueo está apagado', { reason: 'apagado' });
+  const g = r.gate, ahora = new Date().toISOString();
+  switch (b.data.op) {
+    case 'override':
+      if (!g || g.override_at || (g.state !== 'failure' && g.state !== 'error')) falla(409, 'conflict', 'Esta revisión no tiene nada que aprobar', { reason: 'nada_que_aprobar' });
+      Object.assign(g!, { override_at: ahora, state: 'success', published_at: ahora });
+      break;
+    case 'revert':
+      if (!g?.override_at) falla(409, 'conflict', 'No había ninguna aprobación que deshacer', { reason: 'sin_override' });
+      Object.assign(g!, { override_at: null, state: (g!.blocking ?? 0) > 0 ? 'failure' : 'error', published_at: ahora });
+      break;
+    case 'reopen_pr':
+      if (g?.pr_action !== 'closed') falla(409, 'conflict', 'Ese pull request no está cerrado por VanGUARD', { reason: 'no_cerrado' });
+      g!.pr_action = 'reopened';
+      break;
+    default:
+      falla(409, 'conflict', '«Publicar de nuevo» llega pronto', { reason: 'p1' });
+  }
+  return { ok: true, resultado: 'encolado' };
 }
 // Sin connection_id, la principal (B0): la activa más antigua; si ninguna está activa, la más antigua. Con él, esa
 // conexión GitHub de lectura de la org en cualquier estado (ajena o inexistente → undefined).
@@ -649,7 +779,7 @@ function verRevision(org: string, q: URLSearchParams): CodeReviewState {
   if (c?.enabled && c.state === 'waiting_ping' && ++r.consultas >= 3) {
     Object.assign(c, { state: 'connected', last_ping_at: new Date().toISOString(), hook_events: ['pull_request', 'push'] });
   }
-  const copia = structuredClone(r.estado);
+  const copia = { ...structuredClone(r.estado), config: vistaConfig(org, gh, r.estado.config) };
   if (copia.config && tipoSesionFalsa() === 'anonima') copia.config.webhook_url = null;   // la URL solo la ve un admin
   return copia;
 }
@@ -689,7 +819,7 @@ function guardarRevision(org: string, body: unknown): CodeReviewSaved {
     c.enabled = enabled;
     c.state = !enabled ? 'off' : c.last_ping_at ? 'connected' : 'waiting_ping';
   }
-  return { config: structuredClone(r.estado.config), webhook_secret: secreto };
+  return { config: vistaConfig(org, gh, r.estado.config)!, webhook_secret: secreto };
 }
 
 // Preferencias de avisos (E48/E49). whatsapp_ready_contacts sale de los contactos (WhatsApp activado y verificados).
@@ -841,6 +971,8 @@ const rutas: [string, RegExp, H][] = [
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
   ['GET',  r(`${ORG}\\/code-review`),             (m, _b, q) => verRevision(m[1]!, q)],
   ['PUT',  r(`${ORG}\\/code-review`),             (m, b) => guardarRevision(m[1]!, b)],
+  ['PUT',  r(`${ORG}\\/code-review\\/gate`),       (m, b) => guardarBloqueo(m[1]!, b)],
+  ['POST', r(`${ORG}\\/code-review\\/reviews\\/([^/]+)\\/gate`), (m, b) => accionBloqueo(m[1]!, m[2]!, b)],
   ['GET',  r(`${ORG}\\/alert-prefs`),             (m) => verPrefs(m[1]!)],
   ['PUT',  r(`${ORG}\\/alert-prefs`),             (m, b) => guardarPrefs(m[1]!, b)],
   ['POST', r(`${ORG}\\/notifications\\/test`),    (m, b) => probarCanal(m[1]!, b)],

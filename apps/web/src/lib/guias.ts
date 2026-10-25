@@ -33,6 +33,20 @@ export const GUIAS_CONEXION: Record<Provider, { nombre: string; titulo: string; 
   ] },
 };
 
+// Segundo token de GitHub, el de escritura del bloqueo de merge (bloqueo-merge-criticos.md §1.3 y §6.1; anexo de cierre
+// de PR): publica el check «VanGUARD» y cierra los PR con críticos. Lo crea el DUEÑO del repo: en una cuenta personal un
+// colaborador no puede. El permiso va por su nombre en la URL (write incluye read; Metadata entra sola) y Repository
+// access no se puede prellenar. `owner` llega ya validado (o null: el enlace sale sin target_name).
+export const GUIA_ESTADOS_GITHUB = {
+  quien: 'Lo crea el dueño del repo en GitHub (o un miembro de la organización dueña, con aprobación si la org la exige). Un colaborador no puede crear este tipo de token para un repo ajeno.',
+  crear: 'Crea un token solo para esto: el enlace abre GitHub con los permisos ya marcados y 30 días de caducidad.',
+  acceso: 'En Repository access elige «Only select repositories» y marca solo',
+  permisos: 'Comprueba que tiene Commit statuses y Pull requests en Read and write (Metadata: Read-only viene sola). Opcional: Issues: Read and write, para «Crear issue» desde el WhatsApp. Si tiene Contents o Administration, lo rechazamos.',
+  enlace: (owner: string | null) => 'https://github.com/settings/personal-access-tokens/new?name=VanGUARD+estados'
+    + '&description=Estados+de+commit+y+cierre+de+PR+para+VanGUARD&expires_in=30&statuses=write&pull_requests=write'
+    + (owner ? `&target_name=${encodeURIComponent(owner)}` : ''),
+};
+
 export type Guia = { titulo: string; pasos: string[] };
 
 export const GUIAS: Record<IdNav, Guia> = {

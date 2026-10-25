@@ -266,7 +266,7 @@ function Corrida({ id }: { id: string }) {
                 <ChapaSeveridad severity={f.severity} />
                 <ChipRepo repo={repoDe(f.connection_id)} />
                 {nuevos.has(f.id) ? <Etiqueta texto="Nuevo" rol="info" /> : null}
-                <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex min-w-0 flex-1 basis-full flex-col sm:basis-auto">
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>
                 </div>

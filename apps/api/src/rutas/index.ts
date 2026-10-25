@@ -17,6 +17,7 @@ import { traffic } from './traffic.ts';
 import { wiki } from './wiki.ts';
 import { health } from './health.ts';
 import { ia } from './ia.ts';
+import { mcpTokens } from './mcp-tokens.ts';
 import { me } from './me.ts';
 import { orgs } from './orgs.ts';
 
@@ -39,6 +40,7 @@ rutas.route('/', incidents);
 rutas.route('/', actions);
 rutas.route('/', wiki);
 rutas.route('/', exportRuta);
+rutas.route('/', mcpTokens);
 rutas.route('/', perf);
 rutas.route('/', revision);
 rutas.route('/', ia);

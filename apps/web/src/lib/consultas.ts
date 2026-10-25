@@ -2,7 +2,7 @@
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AiUsage, AlertPrefs, CodeReviewState, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
+  AiUsage, AlertPrefs, CodeReviewState, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   type Module, type Severity,
 } from '@vanguard/contracts';
 import { z } from 'zod';
@@ -122,6 +122,12 @@ export const useTrafico = (org: string) => useQuery({
 export const useExportMd = (org: string) => useQuery({
   queryKey: ['org', org, 'export', 'md'], staleTime: 60_000, refetchIntervalInBackground: false,
   queryFn: async () => (await api<Response>(`/api/orgs/${org}/export?format=md`, { crudo: true })).text(),
+});
+
+// Tokens MCP (E29b): solo admin; para el viewer no se llama. Nunca traen el token, solo sus 4 últimos caracteres.
+export const useTokensMcp = (org: string, habilitado: boolean) => useQuery({
+  queryKey: ['org', org, 'mcp'], enabled: habilitado, refetchIntervalInBackground: false,
+  queryFn: () => api(`/api/orgs/${org}/mcp-tokens`, { esquema: z.array(McpTokenPublic) }),
 });
 
 // Contactos: solo admin (E26). Para el viewer no se llama: el bloque dice que solo los ve un administrador.

@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { ApiError as ApiErrorBody, Overview, Severity } from '@vanguard/contracts';
 import { score } from '@vanguard/core';
 import type { AppEnv } from '../env.ts';
-import { dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
+import { cumpleFiltros, dbDoble, eqDe, type Op, type Resp } from '../test/db-doble.ts';
 
 const estado = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('../lib/db.ts', () => ({ db: () => estado.client }));
@@ -102,5 +102,37 @@ describe('#21 · E5 cuenta todo lo abierto, no las 10 filas de «ahora»', () =>
     tabla = (op) => (op.table === 'findings' && op.head && sevDe(op) === 'low' ? { error: { code: 'PGRST000' } } : undefined);
     r = await pedir();
     expect(r.status).toBe(500);
+  });
+});
+
+// ── «Medir ahora» no es una auditoría: last_scan sale de la última auditoría, no de la medición más nueva ─────────────
+describe('E5 · last_scan salta las mediciones de Rendimiento (kind lighthouse)', () => {
+  const AUDITORIA = '5a1c0000-0000-4000-8000-0000000000a1';
+  const MEDICION = '5a1c0000-0000-4000-8000-0000000000a2';
+  const scansDe = () => [
+    { id: MEDICION, org_id: ORG, kind: 'lighthouse', status: 'succeeded', created_at: '2026-10-24T12:00:00+00:00',
+      finished_at: '2026-10-24T12:00:50+00:00' },
+    { id: AUDITORIA, org_id: ORG, kind: 'full_audit', status: 'succeeded', created_at: '2026-10-24T10:00:00+00:00',
+      finished_at: '2026-10-24T10:05:00+00:00' },
+  ];
+
+  it('una medición más nueva que la auditoría no se vuelve «Última auditoría» (ni marca «Audita todo»)', async () => {
+    tabla = (op) => {
+      if (op.table !== 'scan_runs' || op.columns !== 'id, status, finished_at') return undefined;
+      const casan = scansDe().filter((s) => cumpleFiltros(s, op)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return { data: casan[0] ?? null };
+    };
+    const b = Overview.parse(await (await pedir()).json());
+    expect(b.last_scan).toEqual({ id: AUDITORIA, status: 'succeeded', finished_at: '2026-10-24T10:05:00.000Z' });
+    const op = doble.ops.find((o) => o.table === 'scan_runs' && o.columns === 'id, status, finished_at')!;
+    expect(op.filters).toContainEqual(['kind', 'neq', 'lighthouse']);
+  });
+
+  it('sin auditorías, solo mediciones → last_scan null', async () => {
+    tabla = (op) => {
+      if (op.table !== 'scan_runs' || op.columns !== 'id, status, finished_at') return undefined;
+      return { data: scansDe().filter((s) => s.kind === 'lighthouse' && cumpleFiltros(s, op))[0] ?? null };
+    };
+    expect(Overview.parse(await (await pedir()).json()).last_scan).toBeNull();
   });
 });

@@ -61,7 +61,9 @@ export const primerPaso = (kind: ScanKind): Paso => (pasosDe(kind)[0] ?? 'puntaj
 
 const PROGRESO: Record<Paso, number> = { supabase: 30, cloudflare: 45, repo: 75, zip: 75, psi: 85, puntaje: 90, resumen_ia: 95 };
 // zip: 1 como repo (el ZIP ya no se abre en el servidor, F-18: el paso solo habla con la base y con OSV).
-export const REINTENTOS: Record<Paso, number> = { supabase: 2, cloudflare: 2, repo: 1, zip: 1, psi: 1, puntaje: 1, resumen_ia: 1 };
+// psi: 2 con espera base de 20 s (R_PSI de §10.2: 20 y 40 s, más que la regla general por los 429 de PSI).
+export const REINTENTOS: Record<Paso, number> = { supabase: 2, cloudflare: 2, repo: 1, zip: 1, psi: 2, puntaje: 1, resumen_ia: 1 };
+const ESPERA_BASE_S: Partial<Record<Paso, number>> = { psi: 20 };
 const TRANSITORIO = new Set(['unavailable', 'timeout', 'rate_limited']);
 // Proveedor de la conexión que usa cada paso de fuente (el mismo que pasa a conexionActiva): ante un 401 sin
 // connection_id (p. ej. pasoSupabase lo lanza después de withSecret), guarded revoca esa conexión.
@@ -234,7 +236,7 @@ export async function guarded(env: CloudflareBindings, m: Message<JobMsg>, b: Ms
     const code = e instanceof ProviderError ? e.code : 'error';
     if (TRANSITORIO.has(code) && m.attempts <= REINTENTOS[paso]) {
       log('warn', 'paso.reintento', { paso, code, intento: m.attempts });
-      m.retry({ delaySeconds: 10 * 2 ** (m.attempts - 1) });
+      m.retry({ delaySeconds: (ESPERA_BASE_S[paso] ?? 10) * 2 ** (m.attempts - 1) });
       return;
     }
     log('warn', 'paso.fallo', { paso, code, name: (e as Error)?.name });

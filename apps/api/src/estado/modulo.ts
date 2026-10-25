@@ -125,7 +125,9 @@ async function estadoProveedor(env: CloudflareBindings, orgId: string, m: Provee
   const provs = m === 'cloudflare' ? ['cloudflare', 'ingest'] : [PROVEEDOR[m]];
   const [fs, sc, cx] = await Promise.all([
     consultaHallazgos(admin, orgId, m),
-    admin.from('scan_runs').select('steps, coverage, finished_at').eq('org_id', orgId).order('created_at', { ascending: false }).limit(20),
+    // Sin las mediciones de Rendimiento (kind lighthouse): ni dan la hora ni sacan de las 20 a las auditorías.
+    admin.from('scan_runs').select('steps, coverage, finished_at').eq('org_id', orgId).neq('kind', 'lighthouse')
+      .order('created_at', { ascending: false }).limit(20),
     admin.from('connections').select('id, provider, kind, status, last_error').eq('org_id', orgId).in('provider', provs).limit(20),
   ]);
   const scans = (sc.data ?? []) as Scan[];

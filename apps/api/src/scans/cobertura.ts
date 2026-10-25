@@ -38,7 +38,8 @@ export async function escribirDetalleModulo(env: CloudflareBindings, m: { scan_r
 // Cobertura (§15.9, total = 4): un módulo cuenta como «visto» si su última lectura fue correcta. Nunca verde sin mirar.
 // Supabase: paso supabase correcto en la última auditoría que lo intentó (o salud sb_service_ok de db en 5 min, siempre
 // que haya un paso supabase correcto en 7 días); Cloudflare: paso cloudflare correcto o cf_req_5m en 10 min;
-// Codebase: paso repo/zip correcto; Rendimiento: un perf_runs de los últimos 7 días (la fila sembrada cuenta).
+// Codebase: paso repo/zip correcto; Rendimiento: un perf_runs correcto (sin runtime_error) de los últimos 7 días (la
+// fila sembrada cuenta). Las mediciones (scan_runs kind lighthouse) no entran en las 20 auditorías: no tienen esos pasos.
 const MODULOS: Module[] = ['supabase', 'cloudflare', 'codebase', 'performance'];
 const PASO: Record<Exclude<Module, 'performance'>, ScanStep['name'][]> = { supabase: ['supabase'], cloudflare: ['cloudflare'], codebase: ['repo', 'zip'] };
 const DIA_MS = 86_400_000;
@@ -56,9 +57,10 @@ export async function calcularCobertura(env: CloudflareBindings, orgId: string, 
   const admin = db(env);
   const hace = (ms: number) => new Date(ahora.getTime() - ms).toISOString();
   const [{ data: scans }, { count: perf }, { count: sbOk }, { count: cfReq }] = await Promise.all([
-    admin.from('scan_runs').select('steps').eq('org_id', orgId).gte('created_at', hace(7 * DIA_MS))
+    admin.from('scan_runs').select('steps').eq('org_id', orgId).neq('kind', 'lighthouse').gte('created_at', hace(7 * DIA_MS))
       .order('created_at', { ascending: false }).limit(20),
-    admin.from('perf_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).gte('created_at', hace(7 * DIA_MS)),
+    admin.from('perf_runs').select('id', { count: 'exact', head: true }).eq('org_id', orgId).is('runtime_error', null)
+      .gte('created_at', hace(7 * DIA_MS)),
     admin.from('metric_samples').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('metric', 'sb_service_ok')
       .eq('value', 1).eq('labels->>service', 'db').gte('ts', hace(5 * 60_000)),
     admin.from('metric_samples').select('id', { count: 'exact', head: true }).eq('org_id', orgId).eq('metric', 'cf_req_5m')

@@ -32,7 +32,9 @@ export async function armarOverview(env: CloudflareBindings, orgId: string, rid:
       admin.from('incidents').select('id, rule_ids, severity, title, resource').eq('org_id', orgId).in('status', ['open', 'ack'])
         .order('severity_rank', { ascending: false }).limit(10),
       admin.from('incidents').select('id', { count: 'exact', head: true }).eq('org_id', orgId).in('status', ['open', 'ack']),
-      admin.from('scan_runs').select('id, status, finished_at').eq('org_id', orgId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      // La última AUDITORÍA: una medición de Rendimiento («Medir ahora», kind lighthouse) no lo es.
+      admin.from('scan_runs').select('id, status, finished_at').eq('org_id', orgId).neq('kind', 'lighthouse')
+        .order('created_at', { ascending: false }).limit(1).maybeSingle(),
       calcularCobertura(env, orgId),
       env.IA_CORTE === '1' ? Promise.resolve({ data: { enabled: false, level: 'off' }, error: null })
         : admin.rpc('vg_ai_status', { p_org: orgId }),

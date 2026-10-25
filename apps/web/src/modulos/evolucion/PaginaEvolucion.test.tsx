@@ -101,6 +101,14 @@ describe('PaginaEvolucion', () => {
     expect(texto(html)).not.toContain('de toda la organización');   // con «Todo» no hace falta decirlo
   });
 
+  it('incidentes por día: solo con alguno en el periodo; el aviso nombra solo los días con incidentes', () => {
+    const html = pintar(EVO);
+    expect(texto(html)).toContain(`Incidentes por día · últimos 30 días`);
+    expect(texto(html)).toContain(`${fx.incidents.length} incidentes en el periodo`);
+    expect(html).toMatch(/role="img" aria-label="Incidentes por día: \d\d-\d\d [^;"]+"/);   // un solo día con incidentes
+    expect(texto(pintar({ ...EVO, incidents: [] }))).not.toContain('Incidentes por día');
+  });
+
   it('con la gráfica recortada el título dice «últimas N auditorías»', () => {
     expect(texto(pintar({ ...EVO, points: EVO.points.slice(-3), truncated: true }))).toContain('Puntaje por auditoría · últimas 3 auditorías');
   });
@@ -115,7 +123,7 @@ describe('PaginaEvolucion', () => {
   });
 
   it('1 punto con foto: cifras y «Con la próxima auditoría verás qué cambió», sin gráfica', () => {
-    const uno = { ...EVO, points: [{ ...EVO.points[1]! }], totals: { ...EVO.totals, versions: 1, snapshots: 1 } };
+    const uno = { ...EVO, points: [{ ...EVO.points[1]! }], incidents: [], totals: { ...EVO.totals, versions: 1, snapshots: 1 } };
     const t = texto(pintar(uno));
     expect(t).toContain('Con la próxima auditoría verás qué cambió');
     expect(t).toContain('Abiertos al cerrarla11');

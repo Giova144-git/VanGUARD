@@ -2,7 +2,7 @@
 // sin animación, sin la capa de accesibilidad de Recharts y un contenedor role="img" cuyo aria-label resume los datos.
 // Ejes y avisos solo con fechas y números: nunca títulos ni recursos de hallazgos.
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { PuntoPuntaje, serieAbiertos, serieCambios } from '@/lib/evolucion';
+import type { PuntoPuntaje, serieAbiertos, serieCambios, serieIncidentes } from '@/lib/evolucion';
 
 export const EJE = { fill: 'var(--texto-3)', fontSize: 12 };
 export const AVISO = { background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--foreground)' };
@@ -74,10 +74,14 @@ export const LEYENDA_PILA = PILA.map(([, n, c]): [string, string] => [n, c]);
 type FilaPila = { k: string; x: string; critical: number; high: number; medium: number; low: number };
 const resumenPila = (p: FilaPila) => PILA.map(([k, n]) => `${p[k]} ${n.toLowerCase()}`).join(', ');
 
-function Pila({ datos, titulo }: { datos: FilaPila[]; titulo: string }) {
+const total = (p: FilaPila) => PILA.reduce((a, [k]) => a + p[k], 0);
+// `soloConDatos`: el aviso de lectores de pantalla nombra solo las barras con algo (90 días serían 90 frases).
+function Pila({ datos, titulo, soloConDatos }: { datos: FilaPila[]; titulo: string; soloConDatos?: boolean }) {
   const fecha = porId(datos.map((p) => ({ id: p.k, x: p.x })));
+  const nombradas = soloConDatos ? datos.filter((p) => total(p) > 0) : datos;
+  const resumen = nombradas.length ? nombradas.map((p) => `${p.x} ${resumenPila(p)}`).join('; ') : 'ninguno';
   return (
-    <div className="h-56 w-full" role="img" aria-label={`${titulo}: ${datos.map((p) => `${p.x} ${resumenPila(p)}`).join('; ')}`}>
+    <div className="h-56 w-full" role="img" aria-label={`${titulo}: ${resumen}`}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={datos} margin={{ top: 8, right: 12, bottom: 0, left: -16 }} accessibilityLayer={false}>
           <CartesianGrid stroke="var(--border)" vertical={false} />
@@ -93,4 +97,9 @@ function Pila({ datos, titulo }: { datos: FilaPila[]; titulo: string }) {
 
 export function GraficaAbiertos({ serie }: { serie: ReturnType<typeof serieAbiertos> }) {
   return <Pila datos={serie.map((p) => ({ ...p, k: p.id }))} titulo="Abiertos por severidad" />;
+}
+
+// Incidentes (ataques) por día de Caracas en que empezaron; un día por barra, los días sin incidentes en 0.
+export function GraficaIncidentes({ serie }: { serie: ReturnType<typeof serieIncidentes> }) {
+  return <Pila datos={serie.map((d) => ({ ...d, k: d.dia }))} titulo="Incidentes por día" soloConDatos />;
 }

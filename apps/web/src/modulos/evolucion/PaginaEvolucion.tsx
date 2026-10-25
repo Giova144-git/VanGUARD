@@ -16,14 +16,14 @@ import { useConexiones, useEvolucion } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import {
   MODULOS_FOTO, NOTA_FOTO_PUSH, SEVERIDADES, cifras, etiquetaVersion, horas, lineaFoto, nombreModulo, porSeveridad, serieAbiertos,
-  serieCambios, seriePuntaje, signo, tipoAuditoria, totalFila, totalMatriz, type FiltroModulo,
+  serieCambios, serieIncidentes, seriePuntaje, signo, tipoAuditoria, totalFila, totalMatriz, type FiltroModulo,
 } from '@/lib/evolucion';
 import { cuando, miles } from '@/lib/formato';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { severidad } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
-import { GraficaAbiertos, GraficaCambios, GraficaPuntaje, LEYENDA_PILA, Leyenda } from './Graficas';
+import { GraficaAbiertos, GraficaCambios, GraficaIncidentes, GraficaPuntaje, LEYENDA_PILA, Leyenda } from './Graficas';
 
 type Dias = 7 | 30 | 90;
 const PERIODOS: [Dias, string][] = [[7, '7 días'], [30, '30 días'], [90, '90 días']];
@@ -184,6 +184,19 @@ function Contenido({ evo }: { evo: Evolution }) {
   );
 }
 
+// Ataques del periodo por día (P1, D4). Sin ninguno no se pinta: los días en 0 no dicen nada. No se parte por módulo.
+function Incidentes({ evo }: { evo: Evolution }) {
+  const total = evo.incidents.reduce((a, d) => a + totalFila(d.counts), 0);
+  if (!total) return null;
+  return (
+    <Seccion id="t-incidentes" titulo={`Incidentes por día · últimos ${evo.days} días`}>
+      <GraficaIncidentes serie={serieIncidentes(evo.incidents, evo.days)} />
+      <Leyenda items={LEYENDA_PILA} />
+      <p className="text-[12.5px] text-texto-3">{total} {total === 1 ? 'incidente' : 'incidentes'} en el periodo, por el día (hora de Caracas) en que empezó cada uno.</p>
+    </Seccion>
+  );
+}
+
 // Pushes y PR del periodo, el más reciente arriba: sus nuevos y, en un push, la foto de Codebase (lineaFoto). «Ver» abre la
 // fila en Codebase. El commit es hex validado por el contrato; aun así va saneado y en <bdi>.
 const peor = (n: PorSeveridad) => SEVERIDADES.find((s) => (n[s] ?? 0) > 0) ?? null;
@@ -267,6 +280,7 @@ export default function PaginaEvolucion() {
           {/* Datos viejos con un fallo al refrescar: se quedan, con el error encima. */}
           {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
           {evo.points.length ? <Contenido evo={evo} /> : <SinAuditorias />}
+          <Incidentes evo={evo} />
           <Revisiones reviews={evo.reviews} />
         </>}
       {pronto ? null : (

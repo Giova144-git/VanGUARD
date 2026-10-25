@@ -37,6 +37,7 @@ from .calls import CallManager, NotReady
 from .config import load_settings
 from .events import EventLog
 from .outbound import OutboundError
+from . import turn
 from .private import private_dir, prune_local_artifacts
 from .provider import SetupError, ensure_webhook
 from .recording import RecordingUnknown
@@ -151,6 +152,9 @@ def create_app(settings=None, spec=None, store=None, session_factory=ElevenSessi
     @asynccontextmanager
     async def lifespan(app):
         pruner = asyncio.create_task(prune_periodically(settings, log))
+        if settings.hf_token:
+            # VanGUARD: TURN relay for hosts that block UDP (turn.py).
+            manager.spawn(turn.refresh_forever(settings.hf_token, log))
         if settings.agent_ready:
             manager.spawn(manager.recording.warm())
         if settings.register_webhook:

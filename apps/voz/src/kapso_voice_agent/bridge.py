@@ -31,6 +31,7 @@ from websockets.exceptions import ConnectionClosedOK
 from .agent_config import CALL_CONTEXT_DEFAULTS
 from .business import WEEKDAYS
 from .capture import LocalCapture
+from . import turn
 from .tools import TOOLS, ToolRunner
 
 SAMPLE_RATE = 16000
@@ -69,7 +70,8 @@ def provider_problem(error):
 
 
 def make_connection(ice_json):
-    servers = [IceServer(**row) for row in json.loads(ice_json)]
+    # VanGUARD: plus the TURN relay servers from turn.py (empty without HF_TOKEN).
+    servers = [IceServer(**row) for row in json.loads(ice_json) + turn.current()]
     # Pipecat's own connect timeout cancels its peer-connection close halfway, and every later
     # close then waits forever. AgentSession ends a call that never connects well before this.
     return SmallWebRTCConnection(ice_servers=servers, connection_timeout_secs=CONNECT_TIMEOUT_SECONDS * 4)

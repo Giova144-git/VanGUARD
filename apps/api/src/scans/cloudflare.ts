@@ -64,6 +64,11 @@ async function zona(token: string, zoneId: string): Promise<{ z: Zona } | { erro
       return { error: sondeoFallido('rechazado', c, { faltan: ['zone_read'],
         mensaje: 'El token no ve esta zona: en el paso 2 elige Specific zone → tu dominio' }) };
     }
+    if (code === 'invalid') {
+      // 400 (7003 «Could not route»): ese Zone ID no es una zona; lo típico es pegar el Account ID. Nunca «no respondió».
+      return { error: sondeoFallido('rechazado', c, { faltan: ['zone_read'], motivo: 'zone_not_found',
+        mensaje: 'Ese Zone ID no es una zona de Cloudflare (¿pegaste el Account ID?). Si no tienes dominio propio, conecta el sitio por URL.' }) };
+    }
     return { error: sondeoFallido('caido', c, { mensaje: 'Cloudflare no respondió. Vuelve a intentarlo en un minuto.' }) };
   }
 }

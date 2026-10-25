@@ -288,6 +288,16 @@ describe('E8 · Cloudflare en modo sitio', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('modo zona con un Zone ID que no es zona (400 de Cloudflare) → 422 que lo dice, nunca 502 «no respondió»', async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ errors: [{ code: 7003 }] }), { status: 400 }));
+    const r = await post({ provider: 'cloudflare', zone_id: ZONA, read_token: CF_LECTURA });
+    expect(r.status).toBe(422);
+    const e = await error(r);
+    expect(e.code).toBe('provider_rejected');
+    expect(e.message).toContain('¿pegaste el Account ID?');
+    expect(e.details?.reason).toBe('zone_not_found');
+  });
+
   it('URL de VanGUARD, IP o http → 422 con field_errors.url; nada se guarda', async () => {
     for (const url of ['https://officialvanguard.com', 'https://203.0.113.7', 'http://mi-app.pages.dev']) {
       const r = await post({ provider: 'cloudflare', mode: 'url', url });

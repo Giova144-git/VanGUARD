@@ -77,13 +77,22 @@ export async function probarCloudflareSitio(token: string | null, s: Sitio): Pro
   } catch (e) {
     const c = codigo(e);
     const checks: PermCheck[] = [{ permission: 'account_read', ok: false, required: true, error_code: c }];
-    if (c === 'unauthorized') return sondeoFallido('rechazado', checks, { motivo: 'unauthorized', mensaje: 'Cloudflare no reconoce este token' });
-    if (c !== 'forbidden') return sondeoFallido('caido', checks, { mensaje: 'Cloudflare no respondió. Vuelve a intentarlo en un minuto.' });
+    // 401, o 400 (Cloudflare da 400 «Invalid request headers» a un token mal copiado): no se guarda. Nunca «no respondió».
+    if (c === 'unauthorized' || c === 'invalid') {
+      return sondeoFallido('rechazado', checks, { motivo: 'unauthorized',
+        mensaje: 'Cloudflare rechaza este token. Cópialo de nuevo, o deja el campo vacío para revisar el sitio solo por HTTP.' });
+    }
+    if (c !== 'forbidden' && c !== 'not_found') {
+      return sondeoFallido('caido', checks, { mensaje: 'Cloudflare no respondió al comprobar el token. Vuelve a intentarlo en un minuto, o conecta el sitio sin token.' });
+    }
   }
   const sinConfig = (mensaje: string, checks: PermCheck[]): Sondeo => ({ ...base, estado: 'ok', mensaje,
     checks: [{ permission: 'site_http', ok: true, required: true }, ...checks],
     capabilities: { site_http: true, config_read: false }, meta: meta({ account_id: cuenta }) });
-  if (!cuenta) return sinConfig('El token no ve ninguna cuenta: revisamos el sitio solo por HTTP', []);
+  if (!cuenta) {
+    return sinConfig('El token no ve ninguna cuenta: dale Account · Cloudflare Pages · Read y Account · Workers Scripts · Read. '
+      + 'Mientras, revisamos el sitio solo por HTTP.', [{ permission: 'account_read', ok: false, error_code: 'forbidden' }]);
+  }
 
   let proyecto = s.project;
   let kind = s.kind;
@@ -112,6 +121,10 @@ export async function probarCloudflareSitio(token: string | null, s: Sitio): Pro
   } catch (e) {
     const c = codigo(e);
     const permiso = kind === 'pages' ? 'pages_read' : 'workers_scripts_read';
-    return sinConfig('El token no ve ese proyecto: revisamos el sitio solo por HTTP', [{ permission: permiso, ok: false, error_code: c }]);
+    const nombre = kind === 'pages' ? 'Account · Cloudflare Pages · Read' : 'Account · Workers Scripts · Read';
+    const mensaje = c === 'forbidden' ? `Al token le falta el permiso ${nombre}: revisamos el sitio solo por HTTP.`
+      : c === 'not_found' ? `El token no ve ese proyecto (${proyecto ?? s.host}): revisamos el sitio solo por HTTP.`
+      : 'Cloudflare no respondió al leer el proyecto: revisamos el sitio solo por HTTP. Pulsa «Probar» más tarde.';
+    return sinConfig(mensaje, [{ permission: permiso, ok: false, error_code: c }]);
   }
 }

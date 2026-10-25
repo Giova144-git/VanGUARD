@@ -56,6 +56,34 @@ describe('probarCloudflareSitio', () => {
     rutas['/accounts?per_page=5'] = () => new Response('{}', { status: 401 });
     expect(await probarCloudflareSitio(TOKEN, pages)).toMatchObject({ estado: 'rechazado', motivo: 'unauthorized' });
   });
+  it('el alta en producción daba «Cloudflare no respondió»: un 400 del token es rechazo, no caída', async () => {
+    rutas['/accounts?per_page=5'] = () => new Response(JSON.stringify({ errors: [{ code: 6003 }] }), { status: 400 });
+    const s = await probarCloudflareSitio(TOKEN, pages);
+    expect(s.estado).toBe('rechazado');
+    expect(s.mensaje).toContain('Cloudflare rechaza este token');
+  });
+  it('403 del proyecto dice qué permiso falta; 404 «el token no ve ese proyecto»; 5xx no tumba el alta', async () => {
+    rutas[`/accounts/${CUENTA}/pages/projects/mi-app`] = () => new Response('{}', { status: 403 });
+    let s = await probarCloudflareSitio(TOKEN, pages);
+    expect(s).toMatchObject({ estado: 'ok', meta: { config_read: false } });
+    expect(s.mensaje).toContain('Account · Cloudflare Pages · Read');
+    expect(s.checks).toContainEqual({ permission: 'pages_read', ok: false, error_code: 'forbidden' });
+    rutas[`/accounts/${CUENTA}/pages/projects/mi-app`] = () => new Response('{}', { status: 404 });
+    s = await probarCloudflareSitio(TOKEN, pages);
+    expect(s.mensaje).toContain('El token no ve ese proyecto (mi-app)');
+    rutas[`/accounts/${CUENTA}/pages/projects/mi-app`] = () => new Response('{}', { status: 503 });
+    expect((await probarCloudflareSitio(TOKEN, pages)).estado).toBe('ok');
+    // Un Worker: su permiso propio.
+    const w = clasificarSitio('https://api.acme.workers.dev') as typeof pages;
+    rutas[`/accounts/${CUENTA}/workers/scripts/api/settings`] = () => new Response('{}', { status: 403 });
+    expect((await probarCloudflareSitio(TOKEN, w)).mensaje).toContain('Account · Workers Scripts · Read');
+  });
+  it('sin token, aunque el sitio esté caído, el alta no pide nada', async () => {
+    fetchMock.mockImplementation(async () => { throw new TypeError('red'); });
+    expect((await probarCloudflareSitio(null, pages)).estado).toBe('ok');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('dominio propio: lo busca en los dominios de Pages y de Workers de la cuenta', async () => {
     const propio = clasificarSitio('https://tienda.acme.com') as typeof pages;
     rutas[`/accounts/${CUENTA}/pages/projects?per_page=50`] = () => new Response(JSON.stringify({ result: [{ name: 'otra', domains: [] }] }));

@@ -77,9 +77,10 @@ function Acciones({ i, org, puedeEscribir }: { i: IncidentDetail; org: string; p
         ? <BloquearIp key={i.id} org={org} incidentId={i.id} ip={i.resource.slice(3)} ejecutada={ejecutada} puedeEscribir={puedeEscribir} />
         : conexiones.isPending ? <div className="h-14" aria-busy="true" />   // sin saber si hay blindaje: hueco fijo, no el CTA equivocado (L7)
         : <ActivarBlindaje titulo="Activa el Modo blindaje para bloquear desde aquí" />) : null}
-      {/* Solo ante una inundación (o con el modo ya activo); si E55 aún no existe en el BACK, no pinta nada. */}
+      {/* Solo ante una inundación (o con el modo ya activo); si E55 aún no existe en el BACK, no pinta nada. Su clave no
+          repite la de BloquearIp: dos hermanos con la misma clave se duplican u omiten al cambiar el de al lado. */}
       {i.rule_ids.includes('CF_IP_FLOOD') || bajoAtaque
-        ? <BajoAtaque key={i.id} org={org} incidentId={i.id} puedeEscribir={puedeEscribir} ejecutada={bajoAtaque} /> : null}
+        ? <BajoAtaque key={`bajo-ataque:${i.id}`} org={org} incidentId={i.id} puedeEscribir={puedeEscribir} ejecutada={bajoAtaque} /> : null}
       <BotonSimularWhatsApp org={org} incidentId={i.id} />
     </section>
   );

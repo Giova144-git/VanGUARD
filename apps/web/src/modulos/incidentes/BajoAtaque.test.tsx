@@ -9,10 +9,35 @@ import { fixtures as fx, IncidentDetail, UnderAttackOffer, type ActionPublic } f
 import { OrgDePrueba, type OrgActual } from '@/app/guardas';
 import { ApiError } from '@/lib/errores';
 import { useBajoAtaque } from '@/lib/mutaciones';
-import { BajoAtaque } from './BajoAtaque';
+import { BajoAtaque, vivoDe } from './BajoAtaque';
 import { Propuesta } from './BloquearIp';
 import PaginaIncidente from './PaginaIncidente';
 
+// renderToStaticMarkup no mira las claves, pero el cliente sí: dos hermanos con la misma duplican u omiten hijos al
+// cambiar el de al lado. Se apuntan al crear cada elemento (el JSX de los módulos pasa por estos runtimes).
+const claves = vi.hoisted(() => {
+  const repetidas: unknown[] = [];
+  const revisar = (props: unknown) => {
+    const hijos = (props as { children?: unknown } | null)?.children;
+    if (!Array.isArray(hijos)) return;
+    const vistas = new Set<unknown>();
+    for (const h of hijos) {
+      const k = h !== null && typeof h === 'object' ? (h as { key?: unknown }).key : null;
+      if (k == null) continue;
+      if (vistas.has(k)) repetidas.push(k); else vistas.add(k);
+    }
+  };
+  return { repetidas, revisar };
+});
+vi.mock('react/jsx-dev-runtime', async (importOriginal) => {
+  const r = await importOriginal<typeof import('react/jsx-dev-runtime')>();
+  return { ...r, jsxDEV: (...a: Parameters<typeof r.jsxDEV>) => { claves.revisar(a[1]); return r.jsxDEV(...a); } };
+});
+vi.mock('react/jsx-runtime', async (importOriginal) => {
+  const r = await importOriginal<typeof import('react/jsx-runtime')>();
+  return { ...r, jsx: (...a: Parameters<typeof r.jsx>) => { claves.revisar(a[1]); return r.jsx(...a); },
+    jsxs: (...a: Parameters<typeof r.jsxs>) => { claves.revisar(a[1]); return r.jsxs(...a); } };
+});
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
 vi.mock('@/lib/supabase-doble', () => ({ tipoSesionFalsa: () => 'correo' }));
 // La API va al router de fixtures de verdad (cero red); api() de producción no se carga.
@@ -91,6 +116,10 @@ describe('BajoAtaque · bandera del servidor y motivos de E55', () => {
     expect(html).toContain('Copiar pasos para hacerlo a mano');
     expect(html).toContain(`href="/o/${ORG}/connections"`);
     expect(html).not.toContain('Activar modo bajo ataque');
+    // A 375 px el texto no cabe en una línea (≈ 340 px en mono mayúsculas en una tarjeta de ≈ 267): el botón parte línea.
+    const boton = html.match(/<button[^>]*>(?:(?!<\/button>).)*Copiar pasos para hacerlo a mano/)?.[0] ?? '';
+    expect(boton).toContain('whitespace-normal');
+    expect(boton).not.toContain('whitespace-nowrap');
   });
 
   it('en_curso, host_protegido, fuera_de_zona y sin_host: una línea con el motivo, sin botón', () => {
@@ -126,6 +155,46 @@ describe('BajoAtaque · bandera del servidor y motivos de E55', () => {
     const ejecutada: ActionPublic = { id: ACTIVO.action_id, kind: 'under_attack_on', target: ACTIVO.target, status: 'executed',
       created_at: ACTIVO.created_at, undone_at: null, expires_at: ACTIVO.expires_at, approval_id: null };
     expect(tarjeta(ADMIN, OFERTA, ejecutada)).toContain('Desactivar ahora');
+  });
+
+  it('host, zona, objetivo y pasos con <script> y U+202E salen escapados, con el control a la vista y en <bdi dir="ltr">', () => {
+    const MALO = '‮evil<script>alert(1)</script>.com';
+    const VISTO = '⟨U+202E⟩evil&lt;script&gt;alert(1)&lt;/script&gt;.com';
+    const activo = { ...ACTIVO, target: MALO };
+    const pinturas = [
+      tarjeta(ADMIN, { ...OFERTA, hostname: MALO }),
+      tarjeta(ADMIN, { ...OFERTA, ofrece: false, motivo: 'fuera_de_zona', scopes: [], zone_name: MALO }),
+      tarjeta(ADMIN, { ...OFERTA, activo }),
+      tarjeta(ADMIN, { ...OFERTA, activo: { ...activo, retirada_fallida: true }, copiar: MALO }),
+    ];
+    for (const html of pinturas) {
+      expect(html).not.toContain('<script');
+      expect(html).not.toContain('‮');
+      expect(html).toContain(`<bdi dir="ltr">${VISTO}</bdi>`);
+    }
+  });
+});
+
+describe('vivoDe: qué cuenta como modo activo', () => {
+  const local = { id: ACTIVO.action_id, host: ACTIVO.target, en: ACTIVO.created_at, expira: ACTIVO.expires_at, fallida: false };
+  const ejecutada: ActionPublic = { id: 'ac000000-0000-4000-8000-000000000009', kind: 'under_attack_on', target: ACTIVO.target,
+    status: 'executed', created_at: ACTIVO.created_at, undone_at: null, expires_at: ACTIVO.expires_at, approval_id: null };
+
+  it('el activo de E55 manda sobre todo lo demás', () => {
+    expect(vivoDe({ ...OFERTA, activo: ACTIVO }, 0, { f: 'hecho', vivo: { ...local, id: 'otro' }, canje: 1 }, ejecutada)).toMatchObject({ id: ACTIVO.action_id });
+  });
+
+  it('lo confirmado en esta pestaña vale hasta que E55 se relee; releída sin activo (ya retirado), no queda «lo estamos retirando»', () => {
+    expect(vivoDe(OFERTA, 999, { f: 'hecho', vivo: local, canje: 1_000 }, undefined)).toEqual(local);
+    expect(vivoDe(OFERTA, 1_001, { f: 'hecho', vivo: local, canje: 1_000 }, undefined)).toBeNull();
+  });
+
+  it('el under_attack_on del incidente refrescado no pisa una vista abierta después de su created_at', () => {
+    const p = fx.underAttackProposal;
+    const t = Date.parse(ejecutada.created_at);
+    expect(vivoDe(OFERTA, 0, { f: 'vista', p, desde: t + 1 }, ejecutada)).toBeNull();
+    expect(vivoDe(OFERTA, 0, { f: 'vista', p, desde: t - 1 }, ejecutada)).toMatchObject({ id: ejecutada.id });
+    expect(vivoDe(OFERTA, 0, { f: 'reposo' }, ejecutada)).toMatchObject({ id: ejecutada.id, fallida: false });
   });
 });
 
@@ -179,22 +248,39 @@ describe('BajoAtaque · recorrido con el router de fixtures', () => {
     expect(tarjeta(ADMIN, qc)).toContain('Activar modo bajo ataque');
   }, 15_000);
 
-  it('el incidente muestra la tarjeta bajo «Bloquear IP» y la acción como «Modo bajo ataque»', () => {
-    const i = IncidentDetail.parse({ ...fx.incidentDetail, status: 'mitigated', acked_at: fx.incidentDetail.started_at, acked_via: 'whatsapp',
-      actions: [{ id: ACTIVO.action_id, kind: 'under_attack_on', target: ACTIVO.target, status: 'executed', created_at: ACTIVO.created_at,
-        undone_at: null, expires_at: ACTIVO.expires_at, approval_id: null }],
-      timeline: [...fx.incidentDetail.timeline, { t: ACTIVO.created_at, ms: 660_000, kind: 'action_executed', label: 'Modo bajo ataque activo' }] });
+  // El incidente entero, con la oferta de E55 en la caché (o su error) y las conexiones de la demo (hay Modo blindaje).
+  function pagina(i: IncidentDetail, oferta?: UnderAttackOffer | ApiError) {
     const qc = nuevaCache();
     qc.setQueryData(['org', ORG, 'incident', INC], i);
     qc.setQueryData(['org', ORG, 'connections'], fx.connections);
-    qc.setQueryData(clave(), { ...OFERTA, activo: ACTIVO });
-    const html = renderToStaticMarkup(
+    if (oferta instanceof ApiError) qc.getQueryCache().build(qc, { queryKey: clave() }).setState({ status: 'error', error: oferta, fetchStatus: 'idle' });
+    else if (oferta) qc.setQueryData(clave(), oferta);
+    claves.repetidas.length = 0;
+    return renderToStaticMarkup(
       <QueryClientProvider client={qc}>
         <MemoryRouter initialEntries={[`/o/${ORG}/incidents/${INC}`]}>
           <OrgDePrueba org={ADMIN}><Routes><Route path="/o/:orgId/incidents/:incidentId" element={<PaginaIncidente />} /></Routes></OrgDePrueba>
         </MemoryRouter>
       </QueryClientProvider>,
     );
+  }
+  const acciones = (html: string) => html.match(/<section[^>]*aria-label="Acciones">[\s\S]*?<\/section>/)?.[0];
+
+  it('con E55 en 404 la sección Acciones queda igual que en un incidente sin inundación (ni título ni hueco)', () => {
+    const conInundacion = pagina(IncidentDetail.parse(fx.incidentDetail), new ApiError(404, 'not_found', 'Ruta inexistente'));
+    const sin = pagina(IncidentDetail.parse({ ...fx.incidentDetail, rule_ids: fx.incidentDetail.rule_ids.filter((r) => r !== 'CF_IP_FLOOD') }));
+    expect(acciones(conInundacion)).toBeTruthy();
+    expect(acciones(conInundacion)).toBe(acciones(sin));
+    expect(conInundacion).not.toMatch(/bajo ataque/i);
+  });
+
+  it('el incidente muestra la tarjeta bajo «Bloquear IP» y la acción como «Modo bajo ataque»', () => {
+    const i = IncidentDetail.parse({ ...fx.incidentDetail, status: 'mitigated', acked_at: fx.incidentDetail.started_at, acked_via: 'whatsapp',
+      actions: [{ id: ACTIVO.action_id, kind: 'under_attack_on', target: ACTIVO.target, status: 'executed', created_at: ACTIVO.created_at,
+        undone_at: null, expires_at: ACTIVO.expires_at, approval_id: null }],
+      timeline: [...fx.incidentDetail.timeline, { t: ACTIVO.created_at, ms: 660_000, kind: 'action_executed', label: 'Modo bajo ataque activo' }] });
+    const html = pagina(i, { ...OFERTA, activo: ACTIVO });
+    expect(claves.repetidas).toEqual([]);                                  // BloquearIp y BajoAtaque no comparten clave
     expect(html.indexOf('Bloquear esta IP')).toBeGreaterThan(-1);
     expect(html.indexOf('Desactivar ahora')).toBeGreaterThan(html.indexOf('Bloquear esta IP'));
     expect(html).toContain('Visto por WhatsApp');

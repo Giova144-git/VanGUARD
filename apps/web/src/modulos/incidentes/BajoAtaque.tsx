@@ -43,6 +43,8 @@ const RAZON: Record<string, string> = {
 // El resultado ocupa el sitio del botón de 56 px que sustituye, como en BloquearIp; en móvil parte línea.
 const RESULTADO = 'h-auto min-h-14 min-w-0 shrink flex-wrap gap-x-2 gap-y-0.5 px-4 py-2 text-base font-semibold [&_svg]:size-5';
 const NOTA = 'text-[12.5px] text-muted-foreground';
+// «Copiar pasos para hacerlo a mano» no cabe en una línea a 375 px: el botón parte línea en vez de desbordar la tarjeta.
+const PARTE = 'h-auto max-w-full whitespace-normal py-2 text-center';
 
 // error o aviso de RespuestaEscritura: llega como dato, no como ApiError (que ya sanea su message).
 const motivo = (m: unknown, respaldo: string) => (typeof m === 'string' ? sinBidi(m) : respaldo);
@@ -70,11 +72,22 @@ type Fase =
   | { f: 'reposo'; error?: string; copiar?: string }
   | { f: 'simulando' }
   | { f: 'vista' | 'escribiendo'; p: UnderAttackProposal; desde: number; error?: string }
-  | { f: 'hecho'; vivo: Vivo }
+  | { f: 'hecho'; vivo: Vivo; canje: number }          // canje: cuándo salió el confirm (para saber si E55 ya se releyó)
   | { f: 'deshecho'; en: string };
 
 const deOferta = (a: NonNullable<UnderAttackOffer['activo']>): Vivo =>
   ({ id: a.action_id, host: a.target, en: a.created_at, expira: a.expires_at, fallida: a.retirada_fallida });
+
+// Modo vivo del host. E55 manda; lo que acaba de confirmar esta pestaña solo vale mientras E55 no se relea después del
+// canje (si no, tras retirarlo housekeeping seguiría «lo estamos retirando» para siempre). Si no, el que trae el incidente
+// refrescado (otra pestaña, o el WhatsApp cuando el BACK tenga su botón), que no pisa una vista abierta antes. leidaEn es
+// el dataUpdatedAt de E55. Exportada para las pruebas.
+export function vivoDe(o: UnderAttackOffer | undefined, leidaEn: number, fase: Fase, ejecutada: ActionPublic | undefined): Vivo | null {
+  if (o?.activo) return deOferta(o.activo);
+  if (fase.f === 'hecho' && leidaEn < fase.canje) return fase.vivo;
+  if (!ejecutada || ((fase.f === 'vista' || fase.f === 'escribiendo') && Date.parse(ejecutada.created_at) < fase.desde)) return null;
+  return { id: ejecutada.id, host: ejecutada.target, en: ejecutada.created_at, expira: ejecutada.expires_at, fallida: false };
+}
 
 export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada }: {
   org: string; incidentId: string; puedeEscribir: boolean; ejecutada: ActionPublic | undefined;
@@ -95,12 +108,8 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada }: {
   const dentro = () => !!raiz.current?.contains(document.activeElement);
 
   const o = q.data;
-  // Modo vivo del host: el de E55 manda; si aún no llegó, el que acaba de confirmar esta pestaña o el que trae el incidente
-  // refrescado (otra pestaña, o el WhatsApp cuando el BACK tenga su botón); este último no pisa una vista abierta antes.
   const vista = fase.f === 'vista' || fase.f === 'escribiendo';
-  const vivo: Vivo | null = o?.activo ? deOferta(o.activo) : fase.f === 'hecho' ? fase.vivo
-    : ejecutada && !(vista && Date.parse(ejecutada.created_at) < fase.desde)
-      ? { id: ejecutada.id, host: ejecutada.target, en: ejecutada.created_at, expira: ejecutada.expires_at, fallida: false } : null;
+  const vivo = vivoDe(o, q.dataUpdatedAt, fase, ejecutada);
   const pantalla = fase.f === 'deshecho' ? 'deshecho' : vivo ? 'hecho' : vista ? 'vista' : 'reposo';
 
   useEffect(() => {
@@ -130,14 +139,16 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada }: {
     if (fase.f !== 'vista' || !/^\d{6}$/.test(codigo)) return;
     const { p, desde } = fase;
     const c = codigo;
+    const canje = Date.now();
     setCodigo('');                                                      // el código no se queda en el estado
     setFase({ f: 'escribiendo', p, desde });
     try {
       const r = await b.confirmar(p.approval_id, c);
       if (r.ok && r.action_id) {
         const en = r.en ?? new Date().toISOString();
+        const t = Date.parse(en);                                       // api() en producción no impone el esquema
         enfocar.current = true;
-        setFase({ f: 'hecho', vivo: { id: r.action_id, host: p.target, en, expira: new Date(Date.parse(en) + p.ttl_s * 1000).toISOString(), fallida: false } });
+        setFase({ f: 'hecho', canje, vivo: { id: r.action_id, host: p.target, en, expira: Number.isFinite(t) ? new Date(t + p.ttl_s * 1000).toISOString() : null, fallida: false } });
       } else setFase({ f: 'vista', p, desde, error: motivo(r.error ?? r.aviso, 'No pudimos activarlo') });
     } catch (e) {
       if (esApiError(e) && e.status === 409) { void b.refrescar(); enfocar.current = true; setFase({ f: 'reposo', error: e.message }); }
@@ -245,7 +256,7 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada }: {
       </span>
       {soloLectura}
       {fase.f === 'reposo' && fase.error ? <span role="alert" className="text-sm text-mal">{fase.error}</span> : null}
-      {fase.f === 'reposo' && fase.copiar ? <BotonCopiar valor={fase.copiar} texto="Copiar pasos para hacerlo a mano" /> : null}
+      {fase.f === 'reposo' && fase.copiar ? <BotonCopiar valor={fase.copiar} texto="Copiar pasos para hacerlo a mano" className={cn(PARTE, 'min-h-11')} /> : null}
     </div>
   );
 
@@ -257,7 +268,7 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada }: {
         el panel de Cloudflare.
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        {o.copiar ? <BotonCopiar valor={o.copiar} texto="Copiar pasos para hacerlo a mano" tam="grande" /> : null}
+        {o.copiar ? <BotonCopiar valor={o.copiar} texto="Copiar pasos para hacerlo a mano" tam="grande" className={cn(PARTE, 'min-h-14')} /> : null}
         <Button asChild variant="fantasma" size="grande"><Link to={`/o/${org}/connections`}><Cable />Ir a Conexiones</Link></Button>
       </div>
     </div>

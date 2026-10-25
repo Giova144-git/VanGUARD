@@ -1,6 +1,6 @@
 import {
-  archivoCompacto, envDelDiff, LIM_DIFF, parsearDiff, secretosDelDiff, tituloEnvSubido, tituloSecreto, type ArchivoCompacto,
-  type ArchivoDiff,
+  archivoCompacto, bloqueantes, envDelDiff, LIM_BLOQUEO, LIM_DIFF, parsearDiff, secretosDelDiff, superaBloqueo,
+  tituloEnvSubido, tituloSecreto, type ArchivoCompacto, type ArchivoDiff, type Ignorado, type UmbralBloqueo,
 } from '@vanguard/core';
 import { fingerprint } from '@vanguard/core/crypto';
 import type { MsgRevision } from '../jobs.ts';
@@ -16,6 +16,7 @@ import { aFila, claveDeRepo, PARECE_SECRETO, type Borrador, type Fila } from '..
 import { recortar } from '../scans/repo-paso.ts';
 import { codigoGithub, ghHeaders, leerAcotado } from '../scans/repo.ts';
 import type { RespuestaCola } from '../wiki/pasos.ts';
+import { cierreEstadoDlq, pasoEstado } from './estado.ts';
 
 // Revisión de código en cada push y PR (asignaciones/revision-codigo.md §2): mensajes {kind:'review'} de vg-jobs. Paso
 // 'diff' (§2.2–2.5): claim CAS → config y conexión (el repo sale de connections.meta, nunca del payload) → compare
@@ -26,7 +27,9 @@ import type { RespuestaCola } from '../wiki/pasos.ts';
 // 403 con límite, 5xx, red, plazo) se reintenta 2 veces y después la revisión queda failed con su código; lo que agota
 // la CPU llega a la DLQ (failed/dlq).
 // Subpeticiones (§2.7): claim 1 + config y conexión 2 + PAT y llaves ≤ 6 + compare ≤ 4 + last_error 'token' ≤ 1 +
-// vg_review_findings 1 (+1 de rescate si la base rechaza el lote, 23514) + foto del push 1 + encolar 1 ≤ 18 de 40.
+// vg_review_findings 1 (+1 de rescate si la base rechaza el lote, 23514) + foto del push 1 + encolar 1 ≤ 18 de 40. Con
+// el bloqueo de merge encendido (bloqueo-merge-criticos.md §2.5): + ignorados ≤ 1 + gate_* 1 (+1 de rescate, 23514) +
+// encolar 'estado' 1 ≤ 22. Con el bloqueo apagado, ni una más.
 
 export const LIM_REVISION: Readonly<{ diffBytes: number; archivos: number; bytesAnadidos: number; filas: number }> =
   Object.freeze({ diffBytes: 1_000_000, archivos: LIM_DIFF.archivos, bytesAnadidos: LIM_DIFF.bytesAnadidos, filas: 200 });
@@ -57,6 +60,7 @@ export async function pasoRevision(env: CloudflareBindings, m: MsgRevision, inte
   const paso: string = m.paso;
   if (paso === 'diff') return pasoDiff(env, m, intento);
   if (paso === 'aviso') return avisarRevision(env, m, intento);
+  if (paso === 'estado') return pasoEstado(env, m, intento);
   log('warn', 'revision.paso_desconocido', { review: m.review_id });
   return 'ack';
 }
@@ -110,6 +114,13 @@ async function reclamar(env: CloudflareBindings, m: MsgRevision, intento: number
 
 const encolarAviso = (env: CloudflareBindings, m: MsgRevision) =>
   env.JOBS_Q.send({ v: 1, kind: 'review', org_id: m.org_id, review_id: m.review_id, paso: 'aviso' });
+/** Encola el paso 'estado' (revision/estado.ts) de esa revisión. Lo usan también E54 y la DLQ. */
+export const encolarEstado = (env: CloudflareBindings, orgId: string, reviewId: string) =>
+  env.JOBS_Q.send({ v: 1, kind: 'review', org_id: orgId, review_id: reviewId, paso: 'estado' });
+
+// Lo que el paso sabe del bloqueo de merge: `encendido` solo tras leer la config con gate_enabled = true. fallar() solo
+// encola 'estado' entonces: los fallos de antes (sha_invalido, sin_config) no publican y el check queda en «Expected».
+type Bloqueo = { encendido: boolean; umbral: UmbralBloqueo };
 
 // Foto de Codebase de un push (0015; asignaciones/evolucion-entre-revisiones.md §2.2): abiertos de toda la org, los que
 // siguen y los corregidos desde la foto del push anterior; E45 y E52 la leen de code_reviews.delta. Mejor esfuerzo: nunca
@@ -132,24 +143,47 @@ async function fotoPush(admin: ReturnType<typeof db>, m: MsgRevision) {
 
 // No se pudo reclamar: ya la hizo otra entrega. Un push done vuelve a pedir su foto (cubre la entrega que cayó entre
 // vg_review_findings y la foto; si ya está, la RPC la devuelve: +1 subpetición, solo en una reentrega). Si quedó done con
-// el aviso pendiente (vg_review_findings cerró pero falló encolar el aviso), se reencola el aviso; si no, nada más.
+// el aviso pendiente (vg_review_findings cerró pero falló encolar el aviso), se reencola el aviso. Con el bloqueo
+// encendido, también 'estado' si la revisión cerró (done con gate_blocking, o failed) y no se publicó nada ni se anotó
+// por qué: un fallo al encolar no deja el PR sin estado (bloqueo-merge-criticos.md §2.5; E47 limpia gate_* al reabrir,
+// así que vale también tras un «Redeliver»).
 async function yaReclamada(env: CloudflareBindings, m: MsgRevision, intento: number): Promise<RespuestaCola> {
-  const { data, error } = await db(env).from('code_reviews').select('status, alert_state, event')
+  const admin = db(env);
+  const { data, error } = await admin.from('code_reviews')
+    .select('status, alert_state, event, config_id, gate_blocking, gate_state, gate_error')
     .eq('id', m.review_id).eq('org_id', m.org_id).maybeSingle();
   if (error) return { retry: escalonado(intento) };
   const f = obj(data);
-  if (f.status === 'done' && f.event === 'push') await fotoPush(db(env), m);
+  if (f.status === 'done' && f.event === 'push') await fotoPush(admin, m);
+  let hecho = false;
   if (f.status === 'done' && f.alert_state === 'pending') {
     try { await encolarAviso(env, m); } catch { return { retry: escalonado(intento) }; }
     log('info', 'revision.aviso_reencolado', { review: m.review_id, intento });
-    return 'ack';
+    hecho = true;
   }
-  log('info', 'revision.repetida', { review: m.review_id, status: typeof f.status === 'string' ? f.status : null, intento });
+  const sinPublicar = f.gate_state == null && f.gate_error == null
+    && (f.status === 'failed' || (f.status === 'done' && typeof f.gate_blocking === 'number'));
+  if (sinPublicar && typeof f.config_id === 'string') {
+    const { data: cfg, error: ec } = await admin.from('code_review_configs').select('gate_enabled')
+      .eq('id', f.config_id).eq('org_id', m.org_id).maybeSingle();
+    if (ec) return { retry: escalonado(intento) };
+    if (obj(cfg).gate_enabled === true) {
+      try { await encolarEstado(env, m.org_id, m.review_id); } catch { return { retry: escalonado(intento) }; }
+      log('info', 'revision.estado_reencolado', { review: m.review_id, intento });
+      hecho = true;
+    }
+  }
+  if (!hecho) {
+    log('info', 'revision.repetida', { review: m.review_id, status: typeof f.status === 'string' ? f.status : null, intento });
+  }
   return 'ack';
 }
 
-// failed con su código, solo sobre una revisión running de esa org. Si no se puede escribir, retry.
-async function fallar(env: CloudflareBindings, m: MsgRevision, code: string, intento: number): Promise<RespuestaCola> {
+// failed con su código, solo sobre una revisión running de esa org. Si no se puede escribir, retry. Con el bloqueo
+// encendido (ya leído), encola 'estado' para publicar `error` (mejor esfuerzo: si no sale, yaReclamada no lo ve porque
+// el mensaje se confirma; el check queda en «Expected», que también bloquea).
+async function fallar(env: CloudflareBindings, m: MsgRevision, code: string, intento: number,
+  bloqueo?: Bloqueo): Promise<RespuestaCola> {
   const error_code = CODIGO.test(code) ? code : 'error';
   const { error } = await db(env).from('code_reviews').update({ status: 'failed', error_code, finished_at: new Date().toISOString() })
     .eq('id', m.review_id).eq('org_id', m.org_id).eq('status', 'running');
@@ -158,6 +192,11 @@ async function fallar(env: CloudflareBindings, m: MsgRevision, code: string, int
     return { retry: escalonado(intento) };
   }
   log('warn', 'revision.fallida', { review: m.review_id, error_code, intento });
+  if (bloqueo?.encendido) {
+    try { await encolarEstado(env, m.org_id, m.review_id); } catch {
+      log('warn', 'revision.estado_sin_encolar', { review: m.review_id, intento, fallida: true });
+    }
+  }
   return 'ack';
 }
 
@@ -199,8 +238,9 @@ async function pasoDiff(env: CloudflareBindings, m: MsgRevision, intento: number
     return { retry: escalonado(intento) };
   }
   if (!rev) return yaReclamada(env, m, intento);
+  const bloqueo: Bloqueo = { encendido: false, umbral: 'critical' };
   try {
-    return await revisar(env, m, rev, intento);
+    return await revisar(env, m, rev, intento, bloqueo);
   } catch (e) {
     const code = e instanceof ProviderError ? e.code : 'error';
     const reintentable = TRANSITORIO.has(code) || !(e instanceof ProviderError);   // lo desconocido (llaves, base) también
@@ -208,27 +248,63 @@ async function pasoDiff(env: CloudflareBindings, m: MsgRevision, intento: number
       log('warn', 'revision.reintento', { review: m.review_id, code, name: (e as Error)?.name, intento });
       return { retry: escalonado(intento) };
     }
-    return fallar(env, m, code, intento);
+    return fallar(env, m, code, intento, bloqueo);
   }
 }
 
-async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevision, intento: number): Promise<RespuestaCola> {
+// Lo que bloquea (bloqueo-merge-criticos.md §2.2 y §2.5), antes de vg_review_findings: candidatas ≥ umbral de las filas
+// ya ocultadas → los ignored de la org con esas reglas (1 subpetición, solo si hay candidatas) → bloqueantes() de core →
+// gate_blocking (las de `fuera` que pasan el umbral se suman sin más filtro) y gate_findings (≤ 20, finding_id null, ya
+// redactados como new_findings). CAS sobre la running de esa org; un 23514 (cable trampa de la base) se repite con
+// gate_findings vacío y solo el número. Un fallo de la base reintenta (la revisión sigue running).
+async function calcularBloqueo(env: CloudflareBindings, m: MsgRevision, filas: readonly Fila[], fuera: readonly Borrador[],
+  umbral: UmbralBloqueo): Promise<number> {
+  const admin = db(env);
+  const candidatas = filas.filter((f) => superaBloqueo(f.severity, umbral));
+  let ignorados: Ignorado[] = [];
+  if (candidatas.length) {
+    const { data, error } = await admin.from('findings').select('dedupe_key, rule_id, fp:evidence->>fingerprint_short')
+      .eq('org_id', m.org_id).eq('status', 'ignored').in('rule_id', [...new Set(candidatas.map((f) => f.rule_id))]).limit(500);
+    if (error) throw new ProviderError('unavailable');
+    ignorados = ((Array.isArray(data) ? data : []) as Record<string, unknown>[]).map((g) => ({
+      dedupe_key: String(g.dedupe_key ?? ''), rule_id: String(g.rule_id ?? ''),
+      fp: typeof g.fp === 'string' && g.fp ? g.fp : null }));
+  }
+  const bl = bloqueantes(candidatas, ignorados, umbral);
+  const gate_blocking = bl.length + fuera.filter((b) => superaBloqueo(b.severity, umbral)).length;
+  const gate_findings = bl.slice(0, LIM_BLOQUEO.filas).map((f) => ({ finding_id: null, rule_id: f.rule_id,
+    severity: f.severity, title: f.title, resource: f.resource }));
+  const escribir = (findings: unknown[]) => admin.from('code_reviews').update({ gate_blocking, gate_findings: findings })
+    .eq('id', m.review_id).eq('org_id', m.org_id).eq('status', 'running');
+  let { error } = await escribir(gate_findings);
+  if (error?.code === '23514') {
+    log('warn', 'TRIPWIRE', { review: m.review_id, gate: true });
+    ({ error } = await escribir([]));
+  }
+  if (error) throw new ProviderError('unavailable');
+  return gate_blocking;
+}
+
+async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevision, intento: number,
+  bloqueo: Bloqueo): Promise<RespuestaCola> {
   const t0 = Date.now();
   const admin = db(env);
   if (!SHA.test(rev.base_sha) || !SHA.test(rev.head_sha)) return fallar(env, m, 'sha_invalido', intento);
-  const { data: cfg, error: ec } = await admin.from('code_review_configs').select('id, connection_id, enabled')
-    .eq('id', rev.config_id).eq('org_id', m.org_id).maybeSingle();
+  const { data: cfg, error: ec } = await admin.from('code_review_configs')
+    .select('id, connection_id, enabled, gate_enabled, gate_min').eq('id', rev.config_id).eq('org_id', m.org_id).maybeSingle();
   if (ec) throw new ProviderError('unavailable');
   if (!cfg) return fallar(env, m, 'sin_config', intento);
   // Apagada entre el webhook y este paso: ni findings ni WhatsApp (el aviso solo existe si este paso cierra en pending).
   if (cfg.enabled !== true) return fallar(env, m, 'desactivada', intento);
+  bloqueo.encendido = cfg.gate_enabled === true;
+  bloqueo.umbral = cfg.gate_min === 'high' ? 'high' : 'critical';
   const { data: conn, error: en } = await admin.from('connections').select('id, status, meta')
     .eq('id', cfg.connection_id).eq('org_id', m.org_id).eq('provider', 'github').eq('kind', 'read').maybeSingle();
   if (en) throw new ProviderError('unavailable');
-  if (!conn) return fallar(env, m, 'no_connection', intento);
-  if (conn.status !== 'active') return fallar(env, m, 'conexion_inactiva', intento);
+  if (!conn) return fallar(env, m, 'no_connection', intento, bloqueo);
+  if (conn.status !== 'active') return fallar(env, m, 'conexion_inactiva', intento, bloqueo);
   const repo = String(obj(conn.meta).repo_full_name ?? '');
-  if (!NOMBRE_REPO.test(repo)) return fallar(env, m, 'repo_invalido', intento);
+  if (!NOMBRE_REPO.test(repo)) return fallar(env, m, 'repo_invalido', intento, bloqueo);
 
   let leido: Leido;
   try {
@@ -242,11 +318,11 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
       log('warn', 'revision.reintento', { review: m.review_id, code: 'sin_credencial', intento });
       return { retry: escalonado(intento) };
     }
-    return fallar(env, m, 'sin_credencial', intento);
+    return fallar(env, m, 'sin_credencial', intento, bloqueo);
   }
   if (leido.tipo === 'fallo') {
     if (leido.token) await marcarToken(env, m.org_id, String(cfg.id));
-    return fallar(env, m, leido.code, intento);
+    return fallar(env, m, leido.code, intento, bloqueo);
   }
 
   // 406/422: RPC sin filas, parcial con diff_grande (avisa como incompleta; la UI propone la auditoría completa).
@@ -274,6 +350,8 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
   const fork = rev.alert_reason === 'fork';
   const p_meta = { files_changed: p.archivos.length, lines_added: anadidas, partial: motivo !== null,
     error_code: motivo ?? (oc.ocultas ? 'tripwire' : null), ...(fork ? { sin_aviso: 'fork' } : {}) };
+  // Bloqueo de merge: lo que bloquea se escribe ANTES de cerrar (la RPC no lo calcula: no es counts).
+  const bloquean = bloqueo.encendido ? await calcularBloqueo(env, m, oc.filas, fuera, bloqueo.umbral) : null;
   const llamar = (rows: Fila[], meta: typeof p_meta) => admin.rpc('vg_review_findings',
     { p_org: m.org_id, p_review: rev.id, p_rows: rows, p_write: rev.event === 'push', p_meta: meta });
   let r = await llamar(oc.filas, p_meta);
@@ -281,7 +359,7 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
     // La base vio un secreto que el cable trampa en JS no vio (deriva de la regex): todas las filas ocultas, sin descartar.
     log('warn', 'TRIPWIRE', { review: m.review_id, lote: oc.filas.length });
     r = await llamar(await Promise.all(oc.filas.map(ocultarFila)), { ...p_meta, error_code: p_meta.error_code ?? 'tripwire' });
-    if (r.error?.code === '23514') return fallar(env, m, 'tripwire', intento);
+    if (r.error?.code === '23514') return fallar(env, m, 'tripwire', intento, bloqueo);
   }
   if (r.error) throw new ProviderError('unavailable');
   const res = obj(r.data);
@@ -289,32 +367,42 @@ async function revisar(env: CloudflareBindings, m: MsgRevision, rev: FilaRevisio
     log('info', 'revision.cas_perdido', { review: m.review_id, intento });   // ya no estaba running: otra entrega la cerró
     return 'ack';
   }
-  // La foto va antes de encolar el aviso (y, con el bloqueo de merge, antes del paso 'estado'): el aviso y E45 ya la
-  // encuentran. Un PR no escribe hallazgos y no hace foto.
+  // La foto va antes de encolar el aviso y el paso 'estado' del bloqueo de merge: el aviso y E45 ya la encuentran. Un PR
+  // no escribe hallazgos y no hace foto.
   if (rev.event === 'push') await fotoPush(admin, m);
-  // Tras cerrar: si encolar falla, la reentrega no puede reclamarla (está done) y yaReclamada reencola el aviso.
+  // Tras cerrar: si encolar falla, la reentrega no puede reclamarla (está done) y yaReclamada reencola el aviso (y el
+  // estado, si aún no se publicó).
   if (res.alert_state === 'pending') {
     try { await encolarAviso(env, m); } catch {
       log('warn', 'revision.aviso_sin_encolar', { review: m.review_id, intento });
       return { retry: escalonado(intento) };
     }
   }
+  if (bloqueo.encendido) {
+    try { await encolarEstado(env, m.org_id, m.review_id); } catch {
+      log('warn', 'revision.estado_sin_encolar', { review: m.review_id, intento });
+      return { retry: escalonado(intento) };
+    }
+  }
   log('info', 'revision.fin', { review: m.review_id, evento: rev.event, sha7: rev.head_sha.slice(0, 7), ms: Date.now() - t0,
     archivos: p.archivos.length, anadidas, filas: oc.filas.length, omitidas: fuera.length, ocultas: oc.ocultas,
     nuevos: res.nuevos ?? null, parcial: p_meta.partial, error_code: p_meta.error_code, fork,
-    alert_state: res.alert_state ?? null, intento });
+    alert_state: res.alert_state ?? null, bloquean, intento });
   return 'ack';
 }
 
 // ── DLQ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 'diff' agotado (CPU o lo que reventó sin decidir): failed/dlq si sigue queued o running. Si ya cerró done con el aviso
 // pendiente y lo que no salió fue encolar el aviso, ese aviso queda not_sent/dlq. 'aviso' agotado: not_sent/dlq. Solo
-// sobre filas de esa org; si no se puede escribir, retry.
+// sobre filas de esa org; si no se puede escribir, retry. Bloqueo de merge: 'estado' agotado → gate_error 'dlq'
+// (revision/estado.ts); 'diff' agotado → además encola 'estado' para publicar `error` (mejor esfuerzo; con el bloqueo
+// apagado, ese paso hace ack sin escribir nada).
 export async function cierreRevisionDlq(env: CloudflareBindings, m: MsgRevision): Promise<RespuestaCola> {
   const admin = db(env);
   const filas = () => admin.from('code_reviews');
   const noEnviado = { alert_state: 'not_sent', alert_reason: 'dlq' };
   const paso: string = m.paso;
+  if (paso === 'estado') return cierreEstadoDlq(env, m);
   const errores = paso === 'aviso'
     ? [(await filas().update(noEnviado).eq('id', m.review_id).eq('org_id', m.org_id).eq('alert_state', 'pending')).error]
     : (await Promise.all([
@@ -326,6 +414,11 @@ export async function cierreRevisionDlq(env: CloudflareBindings, m: MsgRevision)
   if (error) {
     log('error', 'revision.dlq_error', { review: m.review_id, paso, code: error.code ?? null });
     return { retry: 10 };
+  }
+  if (paso === 'diff') {
+    try { await encolarEstado(env, m.org_id, m.review_id); } catch {
+      log('warn', 'revision.estado_sin_encolar', { review: m.review_id, dlq: true });
+    }
   }
   log('warn', 'revision.dlq', { review: m.review_id, paso });
   return 'ack';

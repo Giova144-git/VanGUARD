@@ -105,7 +105,9 @@ export const herramientas: Herramienta[] = [
       const admin = db(c.env);
       const org = orgDe(c);
       const [cx, fs, rv, estado] = await Promise.all([
-        admin.from('connections').select('label, status, meta, last_checked_at').eq('org_id', org).eq('provider', 'github').limit(5),
+        // Solo las de lectura: el token de acciones del bloqueo (kind 'action', 0016) no es otro repo conectado.
+        admin.from('connections').select('label, status, meta, last_checked_at').eq('org_id', org).eq('provider', 'github')
+          .eq('kind', 'read').limit(5),
         admin.from('findings').select(COLUMNAS_LISTA).eq('org_id', org).eq('module', 'codebase').eq('status', 'open')
           .order('severity_rank', { ascending: false }).order('confirmed', { ascending: false }).limit(200),
         admin.from('code_reviews').select('event, branch, pr_number, head_sha, status, partial, files_changed, counts, max_severity, created_at, finished_at')

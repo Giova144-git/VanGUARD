@@ -566,3 +566,82 @@ describe('E7, E9 y E10', () => {
     });
   });
 });
+
+// Bloqueo de merge (asignaciones/bloqueo-merge-criticos.md §2.8 y pruebas B4 de §10.5; varias-codebases.md §2.6).
+describe('E8, E9 y E10 con el token de acciones de GitHub', () => {
+  const ACC = 'c0000000-0000-4000-8000-000000000006';
+  const lecturaGh = (o: Record<string, unknown> = {}) => fila({ provider: 'github', kind: 'read', label: 'GitHub · acme/tienda',
+    meta: { repo_full_name: 'acme/tienda', repo_id: 42, default_branch: 'main' }, ...o });
+  const accionGh = (o: Record<string, unknown> = {}) => fila({ id: ACC, provider: 'github', kind: 'action',
+    label: 'GitHub · estados · acme/tienda', meta: { repo_full_name: 'acme/tienda', repo_id: 42, branch: 'release/v1' },
+    capabilities: { statuses: true, pull_requests: true }, ...o });
+  const peticion = (ruta: string, method: string, env: Partial<CloudflareBindings> = {}) =>
+    app.request(`https://officialvanguard.com/api/orgs/${ORG}/connections${ruta}`, { method,
+      headers: { authorization: 'Bearer ana' } }, envDoble(env).env);
+
+  // varias-codebases.md §2.6, punto 2: el 409 «Ya hay un repo conectado» ya no existe; la lista del tope y los duplicados
+  // (§2.1) solo lee las de lectura, así que la conexión de estados no cuenta (lo prueba también «varios repos por org»).
+  it('E8 lee solo las de lectura para el tope y los duplicados: la de estados no es un repo conectado', async () => {
+    // Como Postgres con el .eq('kind'): sin ese filtro, la de estados (acme/tienda, activa) daría 409 repo_duplicado.
+    tabla = (op) => (op.table === 'connections' && op.action === 'select'
+      ? { data: [accionGh()].filter((f) => eqDe(op, 'kind') === undefined || f.kind === eqDe(op, 'kind')) } : undefined);
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 404 }));
+    const r = await post({ provider: 'github', repo_full_name: 'acme/tienda', pat: PAT_GH });
+    expect(r.status).toBe(422);   // llegó al sondeo de GitHub: ni repo_duplicado ni tope_repos por el token de estados
+    const lista = doble.ops.find((o) => o.table === 'connections' && o.action === 'select')!;
+    expect([eqDe(lista, 'org_id'), eqDe(lista, 'provider'), eqDe(lista, 'kind'), lista.head]).toEqual([ORG, 'github', 'read',
+      undefined]);
+  });
+
+  it('E9 con GitHub action: no llama a probarGithub (Contents) y sondea los estados de meta.branch; 401 → revoked', async () => {
+    tabla = (op) => (op.table === 'connections' && op.action === 'select' ? { data: accionGh() } : undefined);
+    cred.withSecret.mockImplementation(async (_e: unknown, _a: unknown, _c: unknown, fn: (t: string) => Promise<unknown>) => fn(PAT_GH));
+    fetchMock.mockImplementation(async () => new Response('{"state":"pending"}', { status: 200 }));
+    let r = await peticion(`/${ACC}/test`, 'POST');
+    expect(ConnectionTest.parse(await r.json())).toMatchObject({ ok: true,
+      checks: [{ permission: 'statuses:read', ok: true, required: true }] });
+    expect(fetchMock.mock.calls.map(([u]) => String(u)))
+      .toEqual(['https://api.github.com/repos/acme/tienda/commits/release%2Fv1/status']);
+    expect(cred.withSecret.mock.calls[0]![2]).toEqual({ orgId: ORG, connectionId: ACC, provider: 'github', kind: 'action' });
+    const up = () => doble.ops.filter((o) => o.table === 'connections' && o.action === 'update');
+    expect(up()[0]!.payload).toMatchObject({ status: 'active', last_error: null });
+    expect('capabilities' in (up()[0]!.payload as object)).toBe(false);   // no pisa pull_requests de E53
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 401 }));
+    r = await peticion(`/${ACC}/test`, 'POST');
+    expect(ConnectionTest.parse(await r.json()).ok).toBe(false);
+    expect(up()[1]!.payload).toMatchObject({ status: 'revoked', last_error: 'unauthorized' });
+    fetchMock.mockImplementation(async () => new Response('{}', { status: 404 }));
+    await peticion(`/${ACC}/test`, 'POST');
+    expect(up()[2]!.payload).toMatchObject({ status: 'error' });
+  });
+
+  it('E10 de la conexión de estados no consulta `actions` aunque haya un «Bloquear IP» propuesto en la org', async () => {
+    tabla = (op) => {
+      if (op.table === 'connections' && op.action === 'select') return { data: accionGh() };
+      if (op.table === 'actions') return { data: [{ id: 'a9' }] };
+      return undefined;
+    };
+    const r = await peticion(`/${ACC}`, 'DELETE', { VG_ENV: 'production', APP_ORIGIN: 'https://officialvanguard.com' });
+    expect(r.status).toBe(204);
+    expect(doble.ops.some((o) => o.table === 'actions')).toBe(false);
+    expect(r.headers.get('x-vg-revoke-url')).toBe('https://github.com/settings/personal-access-tokens');
+  });
+
+  it('E10 de la GitHub de lectura borra también la de estados de su mismo repo; la de otro repo no', async () => {
+    let estados = accionGh();
+    tabla = (op) => {
+      if (op.table !== 'connections' || op.action !== 'select') return undefined;
+      return eqDe(op, 'kind') === 'action' ? { data: [estados] } : { data: lecturaGh() };
+    };
+    expect((await peticion(`/${CONN}`, 'DELETE')).status).toBe(204);
+    let borrados = doble.ops.filter((o) => o.action === 'delete').map((o) => [eqDe(o, 'id'), eqDe(o, 'org_id')]);
+    expect(borrados).toEqual([[CONN, ORG], [ACC, ORG]]);
+    const q = doble.ops.find((o) => o.table === 'connections' && eqDe(o, 'kind') === 'action')!;
+    expect([eqDe(q, 'org_id'), eqDe(q, 'provider')]).toEqual([ORG, 'github']);
+    doble.ops.length = 0;
+    estados = accionGh({ meta: { repo_full_name: 'acme/otro', repo_id: 99, branch: 'main' } });
+    expect((await peticion(`/${CONN}`, 'DELETE')).status).toBe(204);
+    borrados = doble.ops.filter((o) => o.action === 'delete').map((o) => [eqDe(o, 'id'), eqDe(o, 'org_id')]);
+    expect(borrados).toEqual([[CONN, ORG]]);
+  });
+});

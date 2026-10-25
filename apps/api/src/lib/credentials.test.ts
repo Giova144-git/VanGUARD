@@ -2,7 +2,7 @@
 // la firma con el secreto viejo deja de verificar y la del nuevo verifica, aunque la clave vieja siguiera en la caché del
 // isolate (va por config + iv). Las llaves salen de deriveKeys con bytes fijos; nada de red ni de base.
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { b64, deriveKeys, newWebhookSecret, type Keys } from '@vanguard/core/crypto';
+import { b64, deriveKeys, fingerprint, newWebhookSecret, open, type Box, type Keys } from '@vanguard/core/crypto';
 import { ApiError } from './errors.ts';
 
 const llaves = vi.hoisted(() => ({ keys: null as unknown, llamadas: 0 }));
@@ -66,8 +66,9 @@ describe('secreto del webhook: sellar, verificar y rotar', () => {
   });
 });
 
-// «Reconectar» (asignaciones/varias-codebases.md §2.1): rotarSecretoConexion sella con el id EXISTENTE y llama a
-// vg_rotate_secret. El token sellado se abre con withSecret de ESA conexión (mismo AAD); con otro id, no.
+// rotarSecretoConexion: una sola función para el «Reconectar» de E8 (asignaciones/varias-codebases.md §2.1) y el token de
+// acciones de GitHub de E53 (bloqueo-merge-criticos.md §2.8 y prueba B4 de §10.5). Sella con el id EXISTENTE y llama a
+// vg_rotate_secret. El token sellado se abre con withSecret de ESA conexión (mismo AAD); con otro id u otro kind, no.
 describe('rotarSecretoConexion', () => {
   const CONN = 'c0aa0000-0000-4000-8000-000000000001';
   const ctx = { orgId: ORG, connectionId: CONN, provider: 'github' as const, kind: 'read' as const };
@@ -110,12 +111,31 @@ describe('rotarSecretoConexion', () => {
       .rejects.toThrow();
   });
 
+  it('token de acciones (kind action): AAD de la misma conexión y kind, huella exacta, last4 y capacidades', async () => {
+    const accion = { ...ctx, connectionId: 'c0000000-0000-4000-8000-000000000006', kind: 'action' as const };
+    const d = doble(null);
+    await rotarSecretoConexion(env, d.admin, accion, TOKEN, { scopes: ['statuses:write'], capabilities: { statuses: true },
+      expiresAt: '2026-11-23T20:00:00.000Z' });
+    const { name, args } = d.llamadas[0]!;
+    expect(name).toBe('vg_rotate_secret');
+    expect(args).toMatchObject({ p_org: ORG, p_conn: accion.connectionId, p_last4: TOKEN.slice(-4),
+      p_scopes: ['statuses:write'], p_capabilities: { statuses: true }, p_expires_at: '2026-11-23T20:00:00.000Z' });
+    const secreto = args.p_secret as { sealed: Box; kid: string; fingerprint: string };
+    expect(secreto.fingerprint).toBe(await fingerprint(llaves.keys as Keys, ORG, TOKEN));
+    expect(JSON.stringify(args)).not.toContain(TOKEN);
+    expect(await open(llaves.keys as Keys, secreto.sealed, accion)).toBe(TOKEN);
+    await expect(open(llaves.keys as Keys, secreto.sealed, { ...accion, kind: 'read' })).rejects.toThrow();
+    await expect(open(llaves.keys as Keys, secreto.sealed, { ...accion, connectionId: CFG })).rejects.toThrow();
+  });
+
   it('23505 (ese PAT ya está en otra conexión de la org) → 409; P0002 → 404; otro → 500 sin el mensaje de Postgres', async () => {
-    const casos = [['23505', 409, 'Ese token ya está conectado en esta organización.'], ['P0002', 404, 'Conexión no encontrada'],
-      ['08006', 500, 'No se pudo guardar la conexión.']] as const;
-    for (const [code, status, texto] of casos) {
+    const casos = [['23505', 'conflict', 409, 'Ese token ya está conectado en esta organización.'],
+      ['P0002', 'not_found', 404, 'Conexión no encontrada'],
+      ['08006', 'internal', 500, 'No se pudo guardar la conexión.']] as const;
+    for (const [code, error, status, texto] of casos) {
       const e = await rotarSecretoConexion(env, doble({ code }).admin, ctx, TOKEN, sondeo).catch((x: unknown) => x);
       expect(e, code).toBeInstanceOf(ApiError);
+      expect((e as ApiError).code).toBe(error);
       expect((e as ApiError).status).toBe(status);
       expect((e as ApiError).message).toBe(texto);
       expect((e as ApiError).details).toBeUndefined();   // el 409 del mismo token va sin reason, como en el alta

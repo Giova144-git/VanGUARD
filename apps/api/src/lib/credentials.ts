@@ -18,11 +18,13 @@ export async function createConnectionWithSecret(env: CloudflareBindings, admin:
   if (error) throw new ApiError('internal', 'No se pudo guardar la conexión.');   // nunca error.message
 }
 
-/** «Reconectar» sin perder historial (asignaciones/varias-codebases.md §2.1): sella el token con el connection_id
- *  EXISTENTE en el AAD y llama a vg_rotate_secret (0003), que deja la conexión active con last4, scopes, capabilities y
- *  expires_at nuevos. Mismo id: se conservan hallazgos, config de revisión y meta. Lo usan E8 y E53
- *  (bloqueo-merge-criticos.md): una sola función para los dos. El mismo PAT de otra conexión de la org choca con el
- *  único (org_id, fingerprint) igual que en el alta. */
+/** Cambiar el token de una conexión SIN cambiar su id: «Reconectar» sin perder historial en E8
+ *  (asignaciones/varias-codebases.md §2.1) y el token de acciones de GitHub en E53 (bloqueo-merge-criticos.md §2.8); una
+ *  sola función para los dos. Sella el token nuevo con el AAD de la MISMA conexión (org, id existente, proveedor, kind)
+ *  y llama a vg_rotate_secret (0003), que deja la conexión active con last4, scopes, capabilities y expires_at nuevos.
+ *  Mismo id: se conservan hallazgos, config de revisión y meta. 23505 (el mismo PAT de otra conexión de la org choca con
+ *  el único (org_id, fingerprint), igual que en el alta) → conflict; P0002 (la conexión no tiene secreto) → not_found;
+ *  nunca error.message. */
 export async function rotarSecretoConexion(env: CloudflareBindings, admin: SupabaseClient, ctx: SecretCtx, token: string,
   c: { scopes: string[]; capabilities: Record<string, boolean>; expiresAt: string | null }) {
   const keys = await getKeys(env, admin, await activeKid(admin));

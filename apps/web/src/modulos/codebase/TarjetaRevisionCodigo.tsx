@@ -15,6 +15,7 @@ import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { Interruptor } from '@/componentes/vg/Interruptor';
 import { SectorPlegable } from '@/componentes/vg/SectorPlegable';
 import { useOrg } from '@/app/guardas';
+import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
 import { sinBidi } from '@/lib/bidi';
 import { usePrefsAvisos, useRevisionCodigo } from '@/lib/consultas';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
@@ -295,7 +296,8 @@ function Detalle({ r, conHallazgo, children }: { r: CodeReview; conHallazgo: (id
         <>
           <ul className="flex flex-col gap-2" aria-label="Hallazgos nuevos de esta revisión">
             {r.findings.map((f, i) => (
-              <li key={`${f.rule_id}-${f.resource}-${i}`} className="flex flex-wrap items-center gap-2">
+              <li key={`${f.rule_id}-${f.resource}-${i}`} className="flex flex-wrap items-center gap-2"
+                {...(f.finding_id ? marcaHallazgo({ ...f, id: f.finding_id, module: 'codebase' }) : {})}>
                 <ChapaSeveridad severity={f.severity} />
                 {f.finding_id && esId(f.finding_id)
                   ? <Link to={conHallazgo(f.finding_id)} className="text-[15px] font-medium underline underline-offset-4">{sinBidi(f.title)}</Link>

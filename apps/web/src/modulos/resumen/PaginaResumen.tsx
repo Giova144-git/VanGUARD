@@ -12,6 +12,7 @@ import { Cifra, FilaCifras } from '@/componentes/vg/Cifra';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { ChipRepo } from '@/componentes/vg/ChipRepo';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
+import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
 import { MarcasContador } from '@/componentes/vg/MarcasContador';
 import { PuntajeBlindaje } from '@/componentes/vg/PuntajeBlindaje';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
@@ -43,7 +44,9 @@ function FilaAhora({ item, org, repo }: { item: AhoraItem; org: string; repo: st
   const envio = useEnvioIA(org, item.kind === 'finding' ? item.id : null);
   const abierto = envio?.status === 'enviado' || envio?.status === 'arreglando';
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
+    // Clic derecho sobre un hallazgo: «Info» de ESE problema y «Enviar a mi IA» (vigia/MenuContextual.tsx).
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0"
+      {...(item.kind === 'finding' ? marcaHallazgo({ ...item, status: 'open' }) : {})}>
       <Etiqueta texto={deMapa(NOMBRE, item.module, '—')} />
       <ChapaSeveridad severity={item.severity} />
       <ChipRepo repo={repo} />

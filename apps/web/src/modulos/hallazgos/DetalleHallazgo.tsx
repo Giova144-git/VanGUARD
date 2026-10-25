@@ -11,6 +11,7 @@ import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
 import { ChipRepo } from '@/componentes/vg/ChipRepo';
 import { FichaFila } from '@/componentes/vg/FichaFila';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
+import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
 import { SOLO_LECTURA } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useEnvioIA, useHallazgo } from '@/lib/consultas';
@@ -81,7 +82,7 @@ export function DetalleHallazgo({ org, id, puedeEscribir }: { org: string; id: s
 
   return (
     <article className="flex flex-col gap-5">
-      <header className="flex flex-col gap-2">
+      <header className="flex flex-col gap-2" {...marcaHallazgo(f)}>
         <div className="flex flex-wrap gap-2">
           <ChapaSeveridad severity={f.severity} />
           <Etiqueta texto={deMapa(MODULO, f.module, '—')} />

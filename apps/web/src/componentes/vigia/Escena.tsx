@@ -10,7 +10,8 @@
 // cambia el texto (sin saltar). Uno normal interrumpe el recorrido o el menú; uno `discreto` nunca interrumpe nada: si
 // hay un recorrido o un mensaje abierto, se ignora (es un comentario de fondo, no vale la pena perder el paso).
 // `callar` solo cierra lo dicho con `decir`: no toca recorridos ni menús.
-// Los textos son fijos (tours.ts y lib/guias.ts): nunca pinta datos del servidor. Todas las esperas pasan por `pausa`,
+// Los textos son fijos (tours.ts y lib/guias.ts); solo la «Info» de un problema cita su recurso, ya saneado en
+// info-hallazgos.ts, y todo se pinta como texto, nunca como HTML. Todas las esperas pasan por `pausa`,
 // que se limpia al desmontar, y cada acción nueva invalida las anteriores (`vez`).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useLocation, useNavigate } from 'react-router';
@@ -45,7 +46,7 @@ const objetivoDe = (d: Dicho): Element | null =>
 const estiloPixel = (p: Pixel, x: number | string, y: number | string) =>
   ({ left: x, top: y, width: p.t, height: p.t, '--dx': `${p.dx}px`, '--dy': `${p.dy}px`, '--d': `${p.d}ms` }) as CSSProperties;
 
-function Burbuja({ m, caja, evitar, alHablar }: { m: Mensaje; caja: Caja; evitar: Caja | null; alHablar: (h: boolean) => void }) {
+export function Burbuja({ m, caja, evitar, alHablar }: { m: Mensaje; caja: Caja; evitar: Caja | null; alHablar: (h: boolean) => void }) {
   const el = useRef<HTMLDivElement>(null);
   // Los dichos discretos (esperas largas, cambian cada pocos segundos) salen enteros: no se escriben letra a letra.
   const entero = calmado() || !!m.discreto;

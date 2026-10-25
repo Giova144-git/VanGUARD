@@ -7,7 +7,9 @@ import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useM
 import type { Pose } from './formas';
 import type { IdTour, PasoTour } from './tours';
 
-/** Lo que Vigía dice sin recorrido: una burbuja corta, opcionalmente señalando algo. Textos fijos, nunca del servidor. */
+/** Lo que Vigía dice sin recorrido: una burbuja corta, opcionalmente señalando algo. Textos fijos; la única excepción es
+ *  la «Info» de un problema (info-hallazgos.ts), que cita su recurso: recortado, en una línea, con los controles bidi a
+ *  la vista (sinBidi) y pintado como texto React, nunca como HTML. Nada más del servidor entra aquí. */
 export type Dicho = {
   texto: string;
   titulo?: string;

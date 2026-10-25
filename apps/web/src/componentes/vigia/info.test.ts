@@ -35,10 +35,10 @@ describe('INFO', () => {
     for (const { f, e } of expresiones) expect([PLANTILLA_NAV, 'info'], `${f}: data-info={${e}}`).toContain(e);
   });
 
-  it('entre 20 y 60 explicaciones, cortas y fijas', () => {
+  it('entre 20 y 120 explicaciones, cortas y fijas', () => {
     const n = Object.keys(INFO).length;
     expect(n).toBeGreaterThanOrEqual(20);
-    expect(n).toBeLessThanOrEqual(60);
+    expect(n).toBeLessThanOrEqual(120);
     for (const { titulo, texto } of Object.values(INFO)) {
       for (const t of [titulo, texto]) expect(t, t).not.toMatch(/[{}<>$`]/);
       expect(titulo.length, titulo).toBeLessThanOrEqual(40);

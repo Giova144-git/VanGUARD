@@ -4,10 +4,13 @@ import { ChevronRight } from 'lucide-react';
 import type { AccionDato, FilaDato, GrupoDato } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
+import { DistintivoEnvio } from '@/modulos/hallazgos/EnviarAMiIA';
 import { sinBidi } from '@/lib/bidi';
 import { rutaDe } from '@/lib/destino';
 import { SEP, cuando } from '@/lib/formato';
 import { TEXTO_ROL, esRol, type Rol } from '@/lib/severidad';
+import { esId } from '@/lib/ids';
 import { cn } from '@/lib/utils';
 import { BotonAccion } from './BotonAccion';
 import { BotonCopiar } from './BotonCopiar';
@@ -52,10 +55,15 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
   }
 }
 
-export function FilaProblema({ fila, puedeEscribir }: { fila: FilaDato; puedeEscribir: boolean }) {
+// `grupo`: el rule_id de los hallazgos de la fila (estado/modulo.ts agrupa por regla). Una fila de hallazgo lleva
+// data-hallazgo (clic derecho → «Info» de ESE problema y «Enviar a mi IA») y, si ya se envió, su distintivo.
+export function FilaProblema({ fila, puedeEscribir, grupo }: { fila: FilaDato; puedeEscribir: boolean; grupo?: string }) {
+  const org = useOrg();
   const rol = rolVisible(fila.rol, fila.acciones);
+  const hallazgo = fila.tipo === 'finding' && esId(fila.clave) ? fila.clave : null;
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0">
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0"
+      {...(hallazgo ? marcaHallazgo({ id: hallazgo, module: fila.modulo, rule_id: grupo, rol: fila.rol, resource: fila.objeto, status: 'open' }) : {})}>
       <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
@@ -72,6 +80,7 @@ export function FilaProblema({ fila, puedeEscribir }: { fila: FilaDato; puedeEsc
         ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        {hallazgo ? <DistintivoEnvio org={org.id} findingId={hallazgo} /> : null}
         {fila.acciones.map((a, i) => <AccionFila key={a.id ?? `${a.clase}-${i}`} accion={a} puedeEscribir={puedeEscribir} />)}
       </div>
     </li>
@@ -98,7 +107,7 @@ export function Bandeja({ grupos, puedeEscribir, filtro, hora }: { grupos: Grupo
               {g.chapas?.map((c) => <Etiqueta key={c} texto={c} />)}
               <span className={cn('text-sm font-semibold tabular-nums', rol === 'neutra' ? 'text-muted-foreground' : TEXTO_ROL[rol])}>{g.n}</span>
             </header>
-            <ul>{g.filas.map((x) => <FilaProblema key={x.clave} fila={x} puedeEscribir={puedeEscribir} />)}</ul>
+            <ul>{g.filas.map((x) => <FilaProblema key={x.clave} fila={x} puedeEscribir={puedeEscribir} grupo={g.grupo} />)}</ul>
           </section>
         );
       })}

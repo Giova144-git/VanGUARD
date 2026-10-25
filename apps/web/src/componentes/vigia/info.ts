@@ -25,7 +25,7 @@ export const INFO = {
 
   // Resumen.
   'puntaje-blindaje': { titulo: 'Puntaje de blindaje', texto: 'Una nota de 0 a 100 sobre lo protegido que está tu ecosistema: más alto es mejor. Al lado ves cuántas fuentes miramos; con fuentes sin conectar, la nota no cuenta toda la historia.' },
-  'auditar-todo': { titulo: 'Auditar todo', texto: 'Revisa a la vez Supabase, Cloudflare, tu repo y el rendimiento. Tarda unos minutos y al acabar actualiza tu puntaje.' },
+  'auditar-todo': { titulo: 'Auditar todo', texto: 'Revisa a la vez Supabase, Cloudflare y tu repo. Tarda unos minutos y al acabar actualiza tu puntaje; el rendimiento se mide aparte, en Rendimiento.' },
   'barra-severidad': { titulo: 'Problemas por gravedad', texto: 'Cada color es una gravedad: cuanto más ancho el tramo, más problemas de ese tipo. Lo ideal es que el rojo desaparezca.' },
   'cifra-criticos': { titulo: 'Críticos abiertos', texto: 'Problemas tan graves que alguien podría aprovecharlos ya, por ejemplo para leer tus datos. Son lo primero que conviene arreglar.' },
   'cifra-altos': { titulo: 'Altos', texto: 'Problemas serios que no son una puerta abierta inmediata, pero que conviene arreglar esta semana.' },
@@ -56,8 +56,41 @@ export const INFO = {
   'revision-codigo': { titulo: 'Revisión automática de código', texto: 'Cada vez que alguien sube cambios a GitHub, reviso solo lo nuevo y aviso si trae un problema de seguridad antes de que llegue a producción.' },
   'analizar-zip': { titulo: 'Analizar un ZIP', texto: 'Revisa una copia de tu código sin conectar GitHub. El análisis se hace en tu navegador: el código no sale de tu equipo.' },
 
-  // Wiki, evolución, rendimiento y hallazgos.
-  'wiki-estimacion': { titulo: 'Estimación', texto: 'Antes de generar la wiki te digo cuánto costará en IA, según el tamaño del repo. Nada se gasta hasta que confirmas.' },
+  // Wiki del repo.
+  'modulo-wiki': { titulo: 'Wiki del repo: cómo se hace', texto: 'Una IA lee tu repo por pasos: elige los archivos que importan, resume cada área y escribe un documento final que cruza con los hallazgos de tu última auditoría. Tu código no se guarda, y las claves que encuentra se tapan antes de dárselo a la IA.' },
+  'wiki-repos': { titulo: 'Tus repos', texto: 'Los repos de GitHub que conectaste. Elige uno para abrir su última wiki; a la derecha ves si ya tiene una lista, si se está generando o si aún no tiene ninguna.' },
+  'wiki-estimacion': { titulo: 'Estimación', texto: 'Antes de generar la wiki te digo cuánto costará en IA, según el tamaño del repo. Estimar no gasta nada: la IA solo empieza cuando pulsas Generar.' },
+  'wiki-generar': { titulo: 'Generar la wiki', texto: 'Pone a la IA a escribir la wiki. Aceptas un tope de vez y media lo estimado, como mucho 5 USD: si el gasto se acerca al tope, la IA se detiene y te avisa.' },
+  'wiki-gratis': { titulo: 'Ver gratis o regenerar', texto: 'Una wiki ya hecha se vuelve a abrir gratis; «caché» marca las que se sirvieron así, sin gastar IA. Regenerar sí vuelve a gastar, y solo compensa si el código cambió.' },
+  'wiki-progreso': { titulo: 'Progreso de la wiki', texto: 'La wiki se hace por pasos: árbol del repo, elegir archivos, explicar cada área y el resumen final. Arriba ves lo gastado frente a lo estimado; sigue sola aunque cierres la página.' },
+  'wiki-estancada': { titulo: 'Se está tardando', texto: 'Lleva 3 minutos sin avanzar. A veces solo tarda; si se quedó colgada, a los 10 minutos se da por fallida sin cobrar más, y antes puedes reintentarla.' },
+  'wiki-fallo': { titulo: 'La wiki falló', texto: 'Algo cortó la generación; el motivo va en el aviso. Reintentar lanza una wiki nueva desde el principio, con el mismo tope de gasto.' },
+  'wiki-cabecera': { titulo: 'De qué versión es', texto: 'El repo, la rama y el commit leído (un commit es una versión guardada del código), con la fecha en que se generó, los modelos de IA y lo que costó. Lo que cambie en el código después no sale aquí.' },
+  'wiki-no-confiable': { titulo: 'Escrito por una IA', texto: 'Este texto lo escribió una IA leyendo el código: puede equivocarse u olvidar algo. Úsalo para entender el repo, pero confírmalo con tu equipo antes de decidir.' },
+  'wiki-mapa': { titulo: 'Mapa del repo', texto: 'Un dibujo de las piezas principales del repo: cada caja es una pieza y cada flecha, cómo se conecta con otra. Si el dibujo que propuso la IA no pasaba el control de seguridad, se descarta.' },
+  'wiki-areas': { titulo: 'Por áreas', texto: 'El repo partido en sus áreas, partes con un mismo fin, cada una explicada aparte. Ábrela para leer su resumen y ver en qué archivos se basa.' },
+  'wiki-fuentes': { titulo: 'Archivos leídos', texto: 'La IA no lee todo el repo: elige los archivos que mejor explican el producto y deja fuera imágenes, archivos de claves y otros sin interés. El texto se basa solo en esos archivos.' },
+  'wiki-copiar': { titulo: 'Copiar como Markdown', texto: 'Copia la wiki entera, con el mapa y todas las áreas, en Markdown: un formato de texto que entienden Notion, GitHub y casi cualquier IA.' },
+  'wiki-historial': { titulo: 'Historial', texto: 'Todas las wikis generadas de este repo, con su commit, su estado y lo que costaron. Pulsa una para abrirla: volver a verla es gratis.' },
+
+  // Evolución.
+  'modulo-evolucion': { titulo: 'Evolución: lo que muestra', texto: 'Cada auditoría terminada deja una foto de tus problemas. Comparando cada foto con la anterior te digo qué apareció, qué se corrigió y cómo se movió tu puntaje.' },
+  'evo-periodo': { titulo: 'Periodo', texto: 'Cuántos días hacia atrás miras: 7, 30 o 90. Las cifras y las gráficas cuentan solo lo que pasó en ese periodo.' },
+  'evo-filtro-modulo': { titulo: 'Módulo', texto: 'Muestra solo los problemas de Supabase, Cloudflare o Codebase. El puntaje, el tiempo hasta comprobar y los incidentes siguen siendo de toda la organización.' },
+  'evo-puntaje': { titulo: 'Puntaje en la última auditoría', texto: 'La nota de 0 a 100 de tu auditoría más reciente: más alto es mejor. Debajo ves cuánto subió o bajó desde la primera auditoría del periodo.' },
+  'evo-abiertos': { titulo: 'Abiertos al cerrarla', texto: 'Los problemas que seguían sin arreglar cuando terminó la última auditoría. Debajo, cuántos de ellos son críticos.' },
+  'evo-nuevos': { titulo: 'Nuevos', texto: 'Problemas que aparecieron en el periodo: una auditoría los vio y la anterior no. Cuanto más baja esta cifra, mejor.' },
+  'evo-corregidos': { titulo: 'Corregidos', texto: 'Problemas que dejaron de estar en el periodo. Los comprobados son los que una auditoría confirmó que ya no aparecen; el resto se marcó como arreglado a mano.' },
+  'evo-tiempo-comprobar': { titulo: 'Tiempo hasta comprobar', texto: 'Lo que tarda de media un problema desde que aparece hasta que una auditoría comprueba que ya no está. No cuenta lo marcado a mano ni las claves filtradas, que además hay que cambiar.' },
+  'evo-grafica-puntaje': { titulo: 'Puntaje por auditoría', texto: 'Cada punto es una auditoría. Las líneas discontinuas marcan las zonas: por debajo de 50 es rojo, de 50 a 79 ámbar y desde 80 verde.' },
+  'evo-grafica-cambios': { titulo: 'Nuevos y corregidos', texto: 'Una barra por auditoría frente a la anterior: hacia arriba, en rojo, lo que apareció; hacia abajo, en verde, lo que se corrigió. Más verde que rojo es buena señal.' },
+  'evo-grafica-abiertos': { titulo: 'Abiertos por gravedad', texto: 'Cuántos problemas quedaban abiertos al terminar cada auditoría, apilados por gravedad. Si las barras bajan con el tiempo vas bien; vigila sobre todo el tramo rojo.' },
+  'evo-versiones': { titulo: 'Versiones', texto: 'Una fila por auditoría terminada, la más reciente arriba. En Abiertos, C, A, M y B son crítica, alta, media y baja. «Ver cambios» abre qué apareció y qué se corrigió en esa auditoría.' },
+  'evo-marca-version': { titulo: 'Punto de partida e historial', texto: 'La primera foto del historial: no tiene otra anterior, así que no muestra nuevos ni corregidos. Una auditoría anterior al historial es de antes de guardar fotos y solo trae el puntaje.' },
+  'evo-incidentes': { titulo: 'Incidentes por día', texto: 'Los ataques en vivo del periodo, por gravedad, contados el día en que empezó cada uno (hora de Caracas). Un día sin barra fue un día tranquilo.' },
+  'evo-revisiones': { titulo: 'Revisiones de código', texto: 'Cada vez que alguien sube cambios a GitHub, con un push o un PR, reviso solo lo nuevo. Aquí ves cuántos problemas trajo cada uno; Limpio es que ninguno.' },
+
+  // Rendimiento y hallazgos.
   lighthouse: { titulo: 'Lighthouse', texto: 'La prueba de velocidad de Google. Da una nota de 0 a 100 y mide, por ejemplo, cuánto tarda en verse lo principal de tu página.' },
   'confianza-hallazgo': { titulo: 'Confirmado o posible', texto: 'Confirmado: una regla lo comprobó sin dudas. Posible: hay señales, pero conviene que una persona lo revise.' },
 

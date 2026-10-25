@@ -18,6 +18,8 @@ import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
 import { ErrorBloque } from '@/componentes/vg/Vacio';
 import NoEncontrada from '@/app/paginas/NoEncontrada';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
+import { DistintivoEnvio } from '@/modulos/hallazgos/EnviarAMiIA';
 import { ESPERAS, textosEspera } from '@/componentes/vigia/esperas';
 import { useEspera } from '@/componentes/vigia/useEspera';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
@@ -270,7 +272,7 @@ function Corrida({ id }: { id: string }) {
           <h3 id="hallazgos-abiertos" className="text-[17px] font-semibold">Hallazgos abiertos</h3>
           <ul className="overflow-hidden rounded-xl border bg-card">
             {ordenados.map((f) => (
-              <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
+              <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0" {...marcaHallazgo(f)}>
                 <ChapaSeveridad severity={f.severity} />
                 <ChipRepo repo={repoDe(f.connection_id)} />
                 {nuevos.has(f.id) ? <Etiqueta texto="Nuevo" rol="info" /> : null}
@@ -278,6 +280,7 @@ function Corrida({ id }: { id: string }) {
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>
                 </div>
+                <DistintivoEnvio org={org.id} findingId={f.id} />
                 <Link to={`?finding=${encodeURIComponent(f.id)}`} className="inline-flex h-11 items-center gap-1 rounded-full border border-foreground px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] text-foreground hover:bg-muted">Ver y corregir<ChevronRight className="size-4" /></Link>
               </li>
             ))}

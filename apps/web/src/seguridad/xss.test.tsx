@@ -58,6 +58,8 @@ import PaginaIncidentes from '@/modulos/incidentes/PaginaIncidentes';
 import PaginaRendimiento from '@/modulos/rendimiento/PaginaRendimiento';
 import PaginaResumen from '@/modulos/resumen/PaginaResumen';
 import PaginaWiki, { Estimacion } from '@/modulos/wiki/PaginaWiki';
+import { Burbuja } from '@/componentes/vigia/Escena';
+import { infoDeHallazgo, MAX_RECURSO } from '@/componentes/vigia/info-hallazgos';
 
 // supabase-js pide VITE_SUPABASE_URL al importarse; aquí no hay red ni sesión (solo la usan los manejadores de clic).
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
@@ -1130,5 +1132,27 @@ describe('XSS · fechas con la carga (Ts es z.string())', () => {
   it('GraficaTrafico: una cubeta con fecha inválida no rompe el render', () => {
     const t = envenenar(Traffic, fx.traffic, IMG, { fechas: true });
     expect(() => renderToStaticMarkup(<GraficaTrafico buckets={t.buckets} />)).not.toThrow();
+  });
+});
+
+// ── Vigía: «Info» de un problema (clic derecho sobre su fila) ──────────────────
+// Es lo único del servidor que entra en la burbuja: el recurso, recortado, en una línea y con los controles bidi a la
+// vista (info-hallazgos.ts). La burbuja lo pinta como texto React: la carga sale escapada y no cambia la estructura.
+describe('XSS · Info de un hallazgo en la burbuja de Vigía', () => {
+  const burbuja = (resource: string) => {
+    const i = infoDeHallazgo({ id: 'x', module: 'supabase', rule_id: 'SB_RLS_DISABLED', severity: 'critical', resource });
+    return { i, html: renderToStaticMarkup(<Burbuja m={{ titulo: i.titulo, texto: i.texto, acciones: [] }}
+      caja={{ x: 0, y: 0, w: 0, h: 0 }} evitar={null} alHablar={() => {}} />) };
+  };
+  const base = burbuja(INOCENTE).html;
+  it.each([...CARGAS, ['RLO + script + 10 KB', '\u202E<script>alert(1)</script>' + 'B'.repeat(10_000)] as [string, string]])('«%s» en el recurso', (_n, carga) => {
+    const { i, html } = burbuja(carga);
+    expect(peligros(html, true)).toEqual([]);
+    expect(estructura(html)).toEqual(estructura(base));
+    for (const crudo of ['<img src=x', '<script>alert', '<svg onload']) expect(html).not.toContain(crudo);
+    expect(html).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
+    expect(i.texto.length).toBeLessThan(260 + MAX_RECURSO * 9);           // ⟨U+XXXX⟩ mide 8: ni 10 KB ni nada parecido
+    const recurso = /Afecta a «(.*)»\./.exec(i.texto)?.[1] ?? '';
+    expect(html).toContain(esc(recurso));
   });
 });

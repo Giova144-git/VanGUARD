@@ -74,7 +74,7 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado, anterior
       </div>
       {e.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{sinBidi(a)}</p>)}
       {e.cached_run_id ? (
-        <div className="flex flex-wrap items-start gap-3">
+        <div className="flex flex-wrap items-start gap-3" data-info="wiki-gratis">
           {/* Texto largo: a 375 px parte en dos líneas en vez de desbordar (max-w-full por el shrink-0 de Button). */}
           <Button variant="principal" size="grande" className="h-auto min-h-14 max-w-full whitespace-normal py-2 text-left" onClick={() => alVer(e.cached_run_id!)}>
             <BookOpen />Ya existe la wiki de este commit · Ver (gratis)
@@ -83,25 +83,25 @@ export function Estimacion({ e, alGenerar, alRegenerar, alVer, ocupado, anterior
         </div>
       ) : (
         <div className="flex flex-wrap items-start gap-3">
-          <BotonAccion variante="principal" tam="grande" icono={Sparkles} ocupado={ocupado} onClick={() => alGenerar(false)}>
+          <BotonAccion variante="principal" tam="grande" icono={Sparkles} ocupado={ocupado} onClick={() => alGenerar(false)} data-info="wiki-generar">
             Generar wiki · ~{usd(e.est.usd)}
           </BotonAccion>
           {anterior ? (
-            <Button variant="secundaria" size="grande" className="h-auto min-h-14 max-w-full whitespace-normal py-2 text-left" onClick={() => alVer(anterior.id)}>
+            <Button variant="secundaria" size="grande" className="h-auto min-h-14 max-w-full whitespace-normal py-2 text-left" onClick={() => alVer(anterior.id)} data-info="wiki-gratis">
               <BookOpen />{anterior.commit_sha === e.commit_sha ? 'Ver la wiki anterior de este commit'
                 : <>Ver la wiki del commit <span className="font-mono">{corto(anterior.commit_sha)}</span></>}, de {hace(anterior.finished_at ?? anterior.created_at)} (gratis)
             </Button>
           ) : null}
         </div>
       )}
-      <p className="text-[12.5px] text-texto-3">Tope que aceptas: {usd(topeUsd(e.est.usd))}. Si la IA se acerca al tope, se detiene y te avisa.</p>
+      <p className="text-[12.5px] text-texto-3" data-info="wiki-generar">Tope que aceptas: {usd(topeUsd(e.est.usd))}. Si la IA se acerca al tope, se detiene y te avisa.</p>
     </section>
   );
 }
 
 export function Progreso({ run, alReintentar, puedeEscribir, estancada }: { run: WikiRun; alReintentar: () => void; puedeEscribir: boolean; estancada: boolean }) {
   return (
-    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Progreso de la wiki">
+    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5" aria-label="Progreso de la wiki" data-info="wiki-progreso">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
         <span className="font-medium">{run.status === 'failed' ? 'La wiki falló' : run.status === 'succeeded' ? 'Wiki lista' : 'Generando la wiki…'}</span>
         <span className="text-muted-foreground">Gastado: <span className="tabular-nums">{usd(run.cost_usd ?? 0)}</span>{run.est_usd != null ? ` de ~${usd(run.est_usd)}` : ''}</span>
@@ -123,13 +123,13 @@ export function Progreso({ run, alReintentar, puedeEscribir, estancada }: { run:
       </ol>
       {estancada && run.status !== 'failed' ? (
         // Neutro (L3): no es un fallo seguro; quizá solo tarda. Reintentar crea otra corrida con force.
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted px-4 py-3" role="status">
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted px-4 py-3" role="status" data-info="wiki-estancada">
           <span className="flex-1 text-sm">Se está tardando más de lo normal: lleva 3 minutos sin avanzar. Puedes esperar o reintentarla.</span>
           <BotonAccion icono={RotateCw} disabled={!puedeEscribir} ayuda={SOLO_LECTURA} onClick={alReintentar}>Reintentar</BotonAccion>
         </div>
       ) : null}
       {run.status === 'failed' ? (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2" data-info="wiki-fallo">
           {/* Como ApiError, para que ErrorBloque muestre el motivo que manda el BACK y no «Algo falló». */}
           <ErrorBloque error={new ApiError(0, 'run_failed', run.error ?? 'La wiki falló')} />
           <BotonAccion icono={RotateCw} disabled={!puedeEscribir} ayuda={SOLO_LECTURA} onClick={alReintentar}>Reintentar</BotonAccion>
@@ -141,25 +141,25 @@ export function Progreso({ run, alReintentar, puedeEscribir, estancada }: { run:
 
 function Documento({ d }: { d: WikiDoc }) {
   const mapa = (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2" data-info="wiki-mapa">
       {d.mermaid ? <DiagramaWiki fuente={d.mermaid} />
         : d.mermaid_descartado ? <Etiqueta texto="El diagrama se descartó por seguridad" rol="aviso" className="w-fit" /> : null}
     </div>
   );
   return (
     <article className="flex flex-col gap-5 rounded-xl border bg-card p-5" aria-label="Wiki del repo">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2" data-info="wiki-cabecera">
         <span className="font-mono text-[15px] font-semibold"><bdi dir="ltr">{sinBidi(`${d.repo_full_name}@${d.branch}`)}</bdi></span>
         <span className="font-mono text-[13px] text-muted-foreground">{corto(d.commit_sha)}</span>
         <span className="text-[12.5px] text-texto-3">{cuando(d.generated_at)} · <bdi dir="ltr">{sinBidi(d.models.fast)}</bdi> y <bdi dir="ltr">{sinBidi(d.models.smart)}</bdi> · {usd(d.stats.cost_usd)}</span>
-        <span className="ml-auto"><BotonCopiar valor={comoMarkdown(d)} texto="Copiar como Markdown" /></span>
+        <span className="ml-auto" data-info="wiki-copiar"><BotonCopiar valor={comoMarkdown(d)} texto="Copiar como Markdown" /></span>
       </header>
-      <p className="text-[12.5px] text-muted-foreground">Escrito por una IA a partir del código: es un dato no confiable, revísalo antes de decidir.</p>
+      <p className="text-[12.5px] text-muted-foreground" data-info="wiki-no-confiable">Escrito por una IA a partir del código: es un dato no confiable, revísalo antes de decidir.</p>
       {/* El mapa va al final de la sección «## Mapa visual» (pura: StrictMode renderiza dos veces). */}
       <Markdown md={d.overview_md} despues={(t) => (/mapa/i.test(t) ? mapa : null)} />
       {/* Si el overview no trae la sección «Mapa visual», el mapa va al final del resumen. */}
       {!/^##\s+.*mapa/im.test(d.overview_md) ? mapa : null}
-      <section className="flex flex-col gap-2" aria-label="Áreas del repo">
+      <section className="flex flex-col gap-2" aria-label="Áreas del repo" data-info="wiki-areas">
         <h3 className="text-[17px] font-semibold">Por áreas</h3>
         {d.paginas.map((p) => (
           <CollapsiblePrimitive.Root key={p.id} className="rounded-xl border">
@@ -170,7 +170,7 @@ function Documento({ d }: { d: WikiDoc }) {
             </CollapsiblePrimitive.Trigger>
             <CollapsiblePrimitive.Content className="flex flex-col gap-3 px-4 pb-4">
               <Markdown md={p.resumen_md} />
-              <details className="text-sm">
+              <details className="text-sm" data-info="wiki-fuentes">
                 <summary className="cursor-pointer font-medium text-muted-foreground">Archivos ({p.archivos.length})</summary>
                 <ul className="mt-2 flex flex-col gap-0.5">{p.archivos.map((a) => <li key={a} className="font-mono text-[12.5px] break-all"><bdi dir="ltr">{sinBidi(a)}</bdi></li>)}</ul>
               </details>
@@ -179,7 +179,7 @@ function Documento({ d }: { d: WikiDoc }) {
         ))}
       </section>
       {d.avisos.map((a) => <p key={a} className="rounded-lg border border-aviso-borde bg-aviso-relleno px-3 py-2 text-sm text-aviso">{sinBidi(a)}</p>)}
-      <p className="text-[12.5px] text-texto-3 tabular-nums">
+      <p className="text-[12.5px] text-texto-3 tabular-nums" data-info="wiki-fuentes">
         Leímos {miles(d.stats.files_leidos)} de {miles(d.stats.files_total)} archivos en {miles(d.stats.areas)} áreas · {miles(d.stats.input_tokens)} tokens de entrada y {miles(d.stats.output_tokens)} de salida · {usd(d.stats.cost_usd)}
       </p>
     </article>
@@ -198,7 +198,7 @@ function Historial({ runs, actual, alElegir }: { runs: WikiRun[]; actual: string
             <span className="font-mono text-[13px]">{corto(r.commit_sha)}</span>
             <span className="text-sm text-muted-foreground">{r.branch ? <bdi dir="ltr">{sinBidi(r.branch)}</bdi> : '—'}</span>
             <Etiqueta texto={deMapa(ESTADO, r.status, '—')} rol={r.status === 'failed' ? 'aviso' : 'neutra'} />
-            {r.cached || r.cost_usd === 0 ? <Etiqueta texto="caché" rol="info" /> : null}
+            {r.cached || r.cost_usd === 0 ? <Etiqueta texto="caché" rol="info" data-info="wiki-gratis" /> : null}
             <span className="ml-auto text-sm tabular-nums">{r.cost_usd == null ? '—' : usd(r.cost_usd)}</span>
             <span className="text-[12.5px] text-texto-3 tabular-nums">{cuando(r.created_at)}</span>
           </button>
@@ -248,7 +248,7 @@ function FilaRepoWiki({ org, c, actual, alElegir }: { org: string; c: Connection
 // viendo la wiki ya generada (§4.2).
 export function ReposWiki({ org, repos, elegido, alElegir }: { org: string; repos: ConnectionPublic[]; elegido: string | null; alElegir: (repo: string) => void }) {
   return (
-    <section className="flex flex-col gap-3" aria-labelledby="t-repos-wiki">
+    <section className="flex flex-col gap-3" aria-labelledby="t-repos-wiki" data-info="wiki-repos">
       <h3 id="t-repos-wiki" className="text-[17px] font-semibold">{repos.length === 1 ? 'Tu repo' : `Tus repos (${repos.length})`}</h3>
       <ul className="overflow-hidden rounded-xl border bg-card" aria-label="Repos conectados">
         {repos.map((c) => <FilaRepoWiki key={c.id} org={org} c={c} alElegir={alElegir}
@@ -272,7 +272,7 @@ function FormRepoLibre({ repo, rama, errorRepo, repoConexion, cambiarRepo, setRa
             : repoConexion ? 'Un repo público de GitHub. Los de tus conexiones están en la lista.' : 'Escribe un repo público, o conecta GitHub para uno privado.'} />
         <CampoTexto id="wiki-rama" etiqueta="Rama (opcional)" valor={rama} onCambio={setRama} mono placeholder="main" />
       </div>
-      <div><BotonAccion variante="principal" tam="grande" icono={Coins} ocupado={ocupado} type="submit">Estimar costo</BotonAccion></div>
+      <div><BotonAccion variante="principal" tam="grande" icono={Coins} ocupado={ocupado} type="submit" data-info="wiki-estimacion">Estimar costo</BotonAccion></div>
     </form>
   );
 }
@@ -382,13 +382,13 @@ export default function PaginaWiki() {
 
   return (
     <div className="flex flex-col gap-6">
-      <BarraModulo titulo="Wiki del repo" descripcion="Tu repo explicado para un directivo: qué es, cómo funciona, sus piezas, el mapa y los riesgos." />
+      <BarraModulo titulo="Wiki del repo" data-info="modulo-wiki" descripcion="Tu repo explicado para un directivo: qué es, cómo funciona, sus piezas, el mapa y los riesgos." />
 
       {conRepos ? <ReposWiki org={org.id} repos={repos} elegido={repoElegido} alElegir={elegirRepo} /> : null}
 
       <section className="flex flex-col gap-4 rounded-xl border bg-card p-5" aria-label="Repositorio">
         {!org.puedeEscribir ? (
-          <p className="text-sm text-muted-foreground">Modo demo: solo lectura. Puedes leer las wikis ya generadas; generar una nueva gasta IA y lo hace un administrador.</p>
+          <p className="text-sm text-muted-foreground" data-info="demo-solo-lectura">Modo demo: solo lectura. Puedes leer las wikis ya generadas; generar una nueva gasta IA y lo hace un administrador.</p>
         ) : conexiones.isPending ? <p className="text-texto-3" aria-busy="true">—</p>
         : !conRepos ? formLibre : (
           <>
@@ -406,7 +406,7 @@ export default function PaginaWiki() {
                 <div className="md:max-w-xs">
                   <CampoTexto id="wiki-rama-repo" etiqueta="Rama (opcional)" valor={ramaElegido} onCambio={setRamaElegido} mono placeholder="main" />
                 </div>
-                <div><BotonAccion variante="principal" tam="grande" icono={Coins} type="submit"
+                <div><BotonAccion variante="principal" tam="grande" icono={Coins} type="submit" data-info="wiki-estimacion"
                   ocupado={estimar.isPending && estimar.variables?.repo_full_name === repoElegido}>Estimar costo</BotonAccion></div>
               </form>
             )}
@@ -428,7 +428,7 @@ export default function PaginaWiki() {
       {doc.data ? <Documento d={doc.data} /> : run.data?.status === 'succeeded' && doc.isPending ? <p className="text-texto-3" aria-busy="true">—</p> : null}
       {doc.isError && !(sola && !doc.data) ? <ErrorBloque error={doc.error} onReintentar={() => doc.refetch()} /> : null}
 
-      <section className="flex flex-col gap-3" aria-labelledby="t-historial">
+      <section className="flex flex-col gap-3" aria-labelledby="t-historial" data-info="wiki-historial">
         <h3 id="t-historial" className="text-[17px] font-semibold">Historial{consulta.repo ? <span className="font-mono text-[13px] font-normal break-all text-muted-foreground"> · <bdi dir="ltr">{sinBidi(consulta.repo)}</bdi></span> : null}</h3>
         {sinFormato ? (repoElegido ? <p className="text-texto-3">—</p>
           : <p className="text-sm text-muted-foreground">Escribe el repo como owner/repo (o pega su URL de GitHub) para ver su historial.</p>)

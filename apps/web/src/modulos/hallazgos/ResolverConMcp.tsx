@@ -14,7 +14,7 @@ import { esId } from '@/lib/ids';
 import { comandoClaudeCode, enlaceClaudeCode, enlaceVsCode, pedidoResolver, slugRepo } from '@/lib/mcp';
 import { useCancelarEnvioIA } from '@/lib/mutaciones';
 import { mensajeDe } from '@/lib/errores';
-import { BotonEnviarAMiIA, EstadoEnvioIA, useEnviarConVigia } from './EnviarAMiIA';
+import { BotonEnviarAMiIA, EstadoEnvioIA, envioAbierto, useEnviarConVigia } from './EnviarAMiIA';
 
 export function ResolverConMcp({ org, findingId, repo, puedeEscribir = false, envio }: {
   org: string; findingId: string; repo?: string | null; puedeEscribir?: boolean; envio?: FixRequest | null;
@@ -24,7 +24,7 @@ export function ResolverConMcp({ org, findingId, repo, puedeEscribir = false, en
   if (!esId(findingId)) return null;
   const r = slugRepo(repo);
   const comando = comandoClaudeCode('resolver_hallazgo', findingId);
-  const abierta = envio?.status === 'enviado' || envio?.status === 'arreglando';
+  const abierta = envioAbierto(envio);
   return (
     <section className="flex flex-col gap-3 rounded-xl border bg-card p-4" aria-labelledby="titulo-resolver-mcp">
       <div className="flex flex-wrap items-center gap-2">

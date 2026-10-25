@@ -56,7 +56,7 @@ describe('TarjetaRevisionCodigo', () => {
   it('los enlaces a Ajustes («Cambiar», «añade uno en Ajustes») solo para owner y admin; el viewer ve el dato en neutro', () => {
     const sinContactos = { ...fx.alertPrefs, whatsapp_ready_contacts: 0 };
     const viewer = tarjeta(VIEWER, ESPERANDO);
-    expect(viewer).toContain('Te avisamos por WhatsApp desde');
+    expect(viewer).toContain('Te avisamos por WhatsApp de severidad');
     expect(viewer).not.toContain('settings#avisos');
     const viewer0 = tarjeta(VIEWER, ESPERANDO, undefined, sinContactos);
     expect(viewer0).toContain('Aún no hay contactos con WhatsApp verificado');
@@ -72,7 +72,7 @@ describe('TarjetaRevisionCodigo', () => {
     expect(html).toContain(ESPERANDO.config!.webhook_url!);
     expect(html).toContain('Termina en ••');
     expect(html).not.toContain('vgw_');
-    expect(html).toContain('Te avisamos por WhatsApp desde <span class="font-semibold">Alta</span>');
+    expect(html).toContain('Te avisamos por WhatsApp de severidad <span class="font-semibold">alta</span> o más');
   });
 
   it('con el aviso sin enviar (cupo) y voice_pending, la fila abierta no promete un WhatsApp que no salió', () => {
@@ -170,17 +170,17 @@ describe('TarjetaRevisionCodigo · acciones desde WhatsApp', () => {
     alert: { ...ESPERANDO.recent[0]!.alert, whatsapp_action: whatsapp_action as never, whatsapp_action_at: '2026-10-24T19:22:05.000Z' } }] });
 
   it('la fila de la revisión dice lo que se hizo desde WhatsApp y a qué hora; una acción nueva, el texto por defecto', () => {
-    expect(tarjeta(ADMIN, conAccion('fix_sent'))).toContain('Arreglo enviado por WhatsApp · 15:22');
-    expect(tarjeta(VIEWER, conAccion('pr_reopened'))).toContain('PR reabierto por WhatsApp · 15:22');
+    expect(tarjeta(ADMIN, conAccion('fix_sent'))).toMatch(/Arreglo\ enviado\ por\ WhatsApp · \S+ 15:22/);
+    expect(tarjeta(VIEWER, conAccion('pr_reopened'))).toMatch(/PR\ reabierto\ por\ WhatsApp · \S+ 15:22/);
     const rara = tarjeta(ADMIN, conAccion('__proto__'));
-    expect(rara).toContain('Acción por WhatsApp · 15:22');
+    expect(rara).toMatch(/Acción\ por\ WhatsApp · \S+ 15:22/);
     expect(rara).not.toContain('__proto__');
     expect(tarjeta(ADMIN, ESPERANDO)).not.toMatch(/(Arreglo enviado|Issue creado|Silenciado 1 h|PR reabierto|Acción) por WhatsApp/);   // BACK sin el anexo: nada
   });
 
   it('«Silenciado hasta hh:mm» (hora de Caracas) solo con muted_until en el futuro', () => {
     const silenciado = (muted_until: string | null) => tarjeta(VIEWER, { ...ESPERANDO, config: { ...ESPERANDO.config!, muted_until } });
-    expect(silenciado('2026-10-24T20:30:00.000Z')).toContain('Silenciado hasta 16:30');
+    expect(silenciado('2026-10-24T20:30:00.000Z')).toMatch(/Silenciado hasta \S+ 16:30/);
     expect(silenciado('2026-10-24T19:00:00.000Z')).not.toContain('Silenciado hasta');
     expect(silenciado(null)).not.toContain('Silenciado hasta');
     expect(tarjeta(ADMIN, ESPERANDO)).not.toContain('Silenciado hasta');

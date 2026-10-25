@@ -8,7 +8,6 @@ import { marcaHallazgo } from '@/componentes/vigia/info-hallazgos';
 import { DistintivoEnvio } from '@/modulos/hallazgos/EnviarAMiIA';
 import { sinBidi } from '@/lib/bidi';
 import { rutaDe } from '@/lib/destino';
-import { SEP, cuando } from '@/lib/formato';
 import { TEXTO_ROL, esRol, type Rol } from '@/lib/severidad';
 import { esId } from '@/lib/ids';
 import { cn } from '@/lib/utils';
@@ -23,6 +22,17 @@ export const rolVisible = (rol: Rol, acciones: unknown[]): Rol =>
 // El color nunca es la única señal (S14 §14.6): el punto lleva nombre para el lector.
 const nombreRol = (rol: Rol) => (rol === 'mal' ? 'Urgente' : rol === 'aviso' ? 'Aviso' : undefined);
 
+// FilaDato.etiqueta llega cortada a 40 caracteres por el contrato: si el corte cae a media palabra, se recorta en la última
+// palabra entera con «…» (UX P1-11). El título entero, cuando lo hay (grupo de una fila), va en su lugar.
+const TOPE_ETIQUETA = 40;
+export const sinCorte = (t: string) => {
+  if (t.length < TOPE_ETIQUETA) return t;
+  const i = t.lastIndexOf(' ');
+  return i > 0 ? `${t.slice(0, i).replace(/[\s,.;:·-]+$/, '')}…` : t;
+};
+// Títulos de grupo que el servidor arma con su primera fila (UX P1-10).
+const TITULO_GRUPO: Record<string, (n: number) => string> = { CB_DEP_VULN: (n) => `Dependencias con avisos (${n})` };
+
 // Mismo lenguaje que button.tsx (brand/README.md): píldora, mono en mayúsculas y, el principal, en monocromo.
 const enlace = 'inline-flex h-11 items-center gap-1 rounded-full border px-4 font-mono text-[13px] font-medium uppercase tracking-[0.06em] outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -35,7 +45,8 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
   switch (accion.clase) {
     case 'prompt': {
       const id = typeof accion.args?.finding_id === 'string' ? accion.args.finding_id : null;
-      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{verbo}<ChevronRight className="size-4" /></Link> : null;
+      // Quien no puede generar el prompt (viewer, «Ver demo») abre el mismo detalle: «Ver detalle», no «Generar» (UX P1-9).
+      return id ? <Link to={`${loc.pathname}?finding=${encodeURIComponent(id)}`} className={cn(enlace, estilo)}>{puedeEscribir ? verbo : 'Ver detalle'}<ChevronRight className="size-4" /></Link> : null;
     }
     case 'copiar':
       return accion.copiar ? <BotonCopiar valor={accion.copiar} texto={verbo} /> : null;
@@ -57,9 +68,12 @@ export function AccionFila({ accion, puedeEscribir }: { accion: AccionDato; pued
 
 // `grupo`: el rule_id de los hallazgos de la fila (estado/modulo.ts agrupa por regla). Una fila de hallazgo lleva
 // data-hallazgo (clic derecho → «Info» de ESE problema y «Enviar a mi IA») y, si ya se envió, su distintivo.
-export function FilaProblema({ fila, puedeEscribir, grupo }: { fila: FilaDato; puedeEscribir: boolean; grupo?: string }) {
+// `titulo` y `chapas`: la fila sola de un grupo de uno lleva el título del grupo y sus chapas (UX P1).
+export function FilaProblema({ fila, puedeEscribir, titulo, chapas, grupo }: { fila: FilaDato; puedeEscribir: boolean; titulo?: string;
+  chapas?: string[]; grupo?: string }) {
   const org = useOrg();
   const rol = rolVisible(fila.rol, fila.acciones);
+  const etiqueta = titulo ?? sinCorte(fila.etiqueta);
   const hallazgo = fila.tipo === 'finding' && esId(fila.clave) ? fila.clave : null;
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3 last:border-b-0"
@@ -67,12 +81,13 @@ export function FilaProblema({ fila, puedeEscribir, grupo }: { fila: FilaDato; p
       <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn('text-[15px] font-medium wrap-anywhere', rol === 'neutra' ? '' : TEXTO_ROL[rol])}>{sinBidi(fila.etiqueta)}</span>
+          <span className={cn('text-[15px] font-medium wrap-anywhere', rol === 'neutra' ? '' : TEXTO_ROL[rol])} title={sinBidi(fila.etiqueta)}>{sinBidi(etiqueta)}</span>
           {fila.severidad_cve ? <ChapaSeveridad severity={fila.severidad_cve} /> : null}
+          {chapas?.map((c) => <Etiqueta key={`g-${c}`} texto={c} />)}
           {fila.chips?.map((c) => <Etiqueta key={c} texto={c} />)}
         </div>
         {fila.objeto ? <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(fila.objeto)}</bdi></span> : null}
-        {fila.sub ? <span className="text-[12.5px] text-texto-3 wrap-anywhere">{sinBidi(fila.sub)}</span> : null}
+        {fila.sub && fila.sub !== fila.objeto ? <span className="text-[12.5px] text-texto-3 wrap-anywhere">{sinBidi(fila.sub)}</span> : null}
         {fila.fraccion != null ? (
           <span className="h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted" role="img" aria-label={`${Math.round(fila.fraccion * 100)} %`}>
             <span className={cn('block h-full', rol === 'mal' ? 'bg-mal/80' : rol === 'aviso' ? 'bg-aviso/70' : 'bg-borde-fuerte')} style={{ width: `${fila.fraccion * 100}%` }} />
@@ -87,23 +102,40 @@ export function FilaProblema({ fila, puedeEscribir, grupo }: { fila: FilaDato; p
   );
 }
 
-export function Bandeja({ grupos, puedeEscribir, filtro, hora }: { grupos: GrupoDato[] | null; puedeEscribir: boolean; filtro?: string | null; hora?: string | null }) {
+// Vacía: «✓ Nada que atender» solo si el módulo se miró; si ningún chequeo se comprobó en una auditoría terminada,
+// «Sin revisar» en gris (nunca verde sin mirar), con «Revisar ahora». La hora va una sola vez, en la barra del módulo.
+export function Bandeja({ grupos, puedeEscribir, filtro, sinRevisar, enlaceRevisar }: {
+  grupos: GrupoDato[] | null; puedeEscribir: boolean; filtro?: string | null; sinRevisar?: boolean; enlaceRevisar?: string;
+}) {
   if (!grupos) return <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>;
   const f = filtro?.toLowerCase();
   const casa = (x: FilaDato) => !f || [x.objeto, x.etiqueta, x.sub].some((t) => t?.toLowerCase().includes(f));
   // Los grupos se pintan en el orden en que llegan: el servidor ya los ordena (L1).
   const visibles = grupos.map((g) => ({ ...g, filas: g.filas.filter(casa) })).filter((g) => g.filas.length > 0);
+  if (visibles.length === 0 && sinRevisar && !f) return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-5 text-[15px] text-muted-foreground">
+      <span className="flex-1 basis-64">Sin revisar: ninguna auditoría terminada ha mirado este módulo todavía.</span>
+      {enlaceRevisar ? <Link to={enlaceRevisar} className={cn(enlace, 'border-foreground text-foreground hover:bg-muted')}>Revisar ahora<ChevronRight className="size-4" /></Link> : null}
+    </div>
+  );
   if (visibles.length === 0)
-    return <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender{hora ? `${SEP}revisado ${cuando(hora)}` : ''}</div>;
+    return <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender</div>;
   return (
     <div className="flex flex-col gap-4">
       {visibles.map((g) => {
         const rol = rolVisible(g.rol, g.filas.flatMap((x) => x.acciones));
+        // Un grupo de una fila es la fila sola, con el título entero del grupo (no repite cabecera y fila).
+        if (g.filas.length === 1 && g.n <= 1) return (
+          <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={sinBidi(g.etiqueta)}>
+            <ul><FilaProblema fila={g.filas[0]!} puedeEscribir={puedeEscribir} titulo={g.etiqueta} chapas={g.chapas} grupo={g.grupo} /></ul>
+          </section>
+        );
+        const titulo = Object.hasOwn(TITULO_GRUPO, g.grupo) ? TITULO_GRUPO[g.grupo]!(g.n) : g.etiqueta;
         return (
           <section key={g.grupo} className="overflow-hidden rounded-xl border bg-card" aria-label={sinBidi(g.etiqueta)}>
             <header className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
               <PuntoEstado rol={rol} etiqueta={nombreRol(rol)} />
-              <h4 className="flex-1 text-sm font-semibold wrap-anywhere">{sinBidi(g.etiqueta)}</h4>
+              <h4 className="flex-1 text-sm font-semibold wrap-anywhere">{sinBidi(titulo)}</h4>
               {g.chapas?.map((c) => <Etiqueta key={c} texto={c} />)}
               <span className={cn('text-sm font-semibold tabular-nums', rol === 'neutra' ? 'text-muted-foreground' : TEXTO_ROL[rol])}>{g.n}</span>
             </header>

@@ -32,8 +32,8 @@ import { cn } from '@/lib/utils';
 // La llamada de Guardia solo suena en un ataque crítico (llamada-ataque.md): «Probar llamada» sigue deshabilitado y remite
 // a «Simular ataque», que la prueba de verdad con el despachador de siempre.
 const LLAMADA_LISTA = false;
-const PROBAR_LLAMADA = 'La llamada solo suena en un ataque crítico: pruébala con «Simular ataque» en Incidentes';
-const LLAMARME = 'Llamarme por WhatsApp si hay un ataque crítico';
+const PROBAR_LLAMADA = 'La llamada la empiezas tú, con el botón «Llamar a Guardia» que llega en un ataque crítico: pruébalo con «Simular ataque» (inundación) en Incidentes';
+const LLAMARME = 'Enviarme el botón «Llamar a Guardia» en un ataque crítico';
 const NIVEL_IA: Record<AiUsage['level'], string> = { normal: 'normal', reduced: 'síntesis con Sonnet', minimal: 'solo Haiku', off: 'apagada' };
 
 
@@ -174,7 +174,7 @@ function Contactos({ org }: { org: string }) {
             {/* contacts.voice (E26): el despachador solo llama a contactos verificados con la llamada activada. */}
             <div className="flex flex-col gap-1">
               <label className="flex items-center gap-2 text-sm"><Interruptor activo={f.voice} onCambio={(v) => cambiar(f.clave, { voice: v })} etiqueta={LLAMARME} />{LLAMARME}</label>
-              <span className="text-[12.5px] text-muted-foreground">La primera vez, WhatsApp te pide permitir llamadas de VanGUARD.</span>
+              <span className="text-[12.5px] text-muted-foreground">Al pulsarlo, Guardia te llama por WhatsApp. La primera vez, WhatsApp te pide permitir llamadas de VanGUARD.</span>
             </div>
             {errores[f.clave] ? <p role="alert" className="text-sm text-mal">{errores[f.clave]}</p> : null}
             {s && sinCambios && !verificado ? (
@@ -313,11 +313,11 @@ export default function PaginaAjustes() {
           <h4 className="text-[15px] font-semibold">Ataques en vivo</h4>
           <ul className="flex flex-col gap-2 text-[15px]">
           {/* Solo lectura: sin acción al lado, sin rojo (L3). */}
-            <li><span className="font-semibold">Crítica</span> · en la app + WhatsApp a todos · llamada: próximamente</li>
+            <li><span className="font-semibold">Crítica</span> · en la app + WhatsApp a todos con el botón «Llamar a Guardia»</li>
             <li><span className="font-semibold">Alta</span> · en la app + WhatsApp</li>
             <li><span className="font-semibold">Media, Baja e Info</span> · en la app</li>
           </ul>
-          <p className="text-sm text-muted-foreground">Topes por hora: 2 llamadas y 10 WhatsApp (en la org de demo, 6 y 30).</p>
+          <p className="text-sm text-muted-foreground">Topes por hora: 2 botones de llamada y 10 WhatsApp (en la org de demo, 6 y 30).</p>
           <p className="text-sm text-muted-foreground">Leído no es confirmado: confirma con «Lo estoy viendo».</p>
         </div>
       </section>

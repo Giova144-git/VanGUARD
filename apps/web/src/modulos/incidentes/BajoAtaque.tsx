@@ -212,7 +212,7 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada, blindaje
 
   const vencido = !!vivo?.expira && Date.parse(vivo.expira) <= Date.now();
   const estado = pantalla === 'hecho' && vivo && !vivo.fallida
-    ? vencido ? `Modo bajo ataque vencido a las ${cuando(vivo.expira)}` : `Bajo ataque · ${sinBidi(vivo.host)}${vivo.expira ? ` · hasta ${cuando(vivo.expira)}` : ''}`
+    ? vencido ? `Modo bajo ataque vencido ${cuando(vivo.expira)}` : `Bajo ataque · ${sinBidi(vivo.host)}${vivo.expira ? ` · hasta ${cuando(vivo.expira)}` : ''}`
     : fase.f === 'deshecho' ? `Modo bajo ataque desactivado · ${cuando(fase.en)}` : '';
   const soloLectura = !puedeEscribir ? <span className="text-[12.5px] text-texto-3">{SOLO_LECTURA}</span> : null;
   // Región siempre montada: las ramas se montan ya con su texto y así el lector sí anuncia el resultado.
@@ -258,7 +258,7 @@ export function BajoAtaque({ org, incidentId, puedeEscribir, ejecutada, blindaje
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-3">
         {vencido
-          ? <Chapa rol="aviso" icono={ShieldAlert}>Venció a las {cuando(vivo.expira)}; lo estamos retirando</Chapa>
+          ? <Chapa rol="aviso" icono={ShieldAlert}>Venció {cuando(vivo.expira)}; lo estamos retirando</Chapa>
           : <Chapa rol="aviso" icono={ShieldAlert}>Bajo ataque · {host(vivo.host)}{vivo.expira ? <> · hasta {cuando(vivo.expira)}</> : null}</Chapa>}
         {botonDeshacer('Desactivar ahora', ShieldOff)}
       </div>

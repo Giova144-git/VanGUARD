@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import { ShieldCheck } from 'lucide-react';
 import type { ScanCreate } from '@vanguard/contracts';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
+import { SIN_COLA, useVistaPrevia } from '@/lib/consultas';
 import { esApiError, mensajeDe } from '@/lib/errores';
 import { useLanzarScan } from '@/lib/mutaciones';
 import { BotonGrande } from './BotonGrande';
@@ -15,11 +16,12 @@ export function BotonRevisar({ kind, titulo, descripcion, connectionId }: {
   const org = useOrg();
   const navegar = useNavigate();
   const lanzar = useLanzarScan(org.id);
+  const previa = useVistaPrevia(org.id);
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-2">
       <BotonGrande icono={ShieldCheck} titulo={titulo} descripcion={descripcion} ocupado={lanzar.isPending}
-        deshabilitado={org.puedeEscribir ? undefined : SOLO_LECTURA}
+        deshabilitado={!org.puedeEscribir ? SOLO_LECTURA : previa ? SIN_COLA : undefined}
         onClick={() => { setError(null); lanzar.mutate(connectionId ? { kind, connection_id: connectionId } : { kind }, {
           // Ids codificados, como useLanzarYNavegar: un id con «../», «?» o «#» no saca la navegación de /audit/.
           onSuccess: (r) => navegar(`/o/${org.id}/audit/${encodeURIComponent(r.scan_run_id)}`),

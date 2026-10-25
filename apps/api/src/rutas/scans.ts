@@ -9,7 +9,7 @@ import { ApiError, fail } from '../lib/errors.ts';
 import { iso } from '../lib/iso.ts';
 import { log } from '../lib/log.ts';
 import { requireAdmin } from '../mw/admin.ts';
-import { colaPropia, requireColaPropia } from '../mw/prod-host.ts';
+import { colaPropia, esVistaPrevia, requireColaPropia } from '../mw/prod-host.ts';
 import { hostsPropios, UrlNoMedible, urlMedibleOrg } from '../scans/psi.ts';
 import { sanearNombreZip } from '../scans/zip-paso.ts';
 
@@ -37,10 +37,24 @@ function reposDe(coverage: unknown): ScanRepo[] {
   return validas.slice(0, MAX_REPOS_GITHUB);
 }
 
-// Fila de scan_runs → ScanRun. coverage.detail y otros campos internos los quita zod; summary inválido → null. repos
-// solo si el paso repo dejó alguna entrada válida.
+// coverage.detail que sale de E12: SOLO cloudflare {modo, miradas} (modo sitio vs zona, cloudflare-por-url.md). El resto
+// (sha, connection_id, repos, cursores…) es interno y no sale; los repos van aparte en `repos`.
+function detallePublico(coverage: unknown): Record<string, unknown> | undefined {
+  const o = (x: unknown) => (x && typeof x === 'object' && !Array.isArray(x) ? x as Record<string, unknown> : {});
+  const cf = o(o(o(coverage).detail).cloudflare);
+  const miradas = Object.fromEntries(Object.entries(o(cf.miradas)).filter(([, v]) => typeof v === 'boolean'));
+  const modo = cf.modo === 'url' ? 'url' : cf.modo === 'zona' ? 'zona' : undefined;
+  if (!modo && !Object.keys(miradas).length) return undefined;
+  return { cloudflare: { ...(modo ? { modo } : {}), miradas } };
+}
+
+// Fila de scan_runs → ScanRun. De coverage.detail solo sale detallePublico; summary inválido → null. repos solo si el
+// paso repo dejó alguna entrada válida.
 export function aScanRun(f: Record<string, unknown>): ScanRun {
-  const cov = Coverage.safeParse(f.coverage);
+  const crudo = Coverage.safeParse(f.coverage);
+  const publico = crudo.success ? detallePublico(f.coverage) : undefined;
+  const cov = crudo.success ? { success: true as const, data: { seen: crudo.data.seen, total: crudo.data.total,
+    missing: crudo.data.missing, ...(publico ? { detail: publico } : {}) } } : crudo;
   const sum = AuditSummary.safeParse(f.summary);
   const score = typeof f.score === 'number' ? f.score : null;
   const t = (x: unknown) => (typeof x === 'string' ? iso(x) : null);
@@ -77,6 +91,8 @@ async function topeCostoso(c: Context<AppEnv>) {
 // Si no hay ninguna otra, full_audit hace un «replay» (vg_sandbox_replay: una auditoría ya cerrada con los hallazgos
 // copiados y su foto de Evolución) sin encolar nada; si el usuario conectó sus servicios, se audita de verdad.
 scans.post('/orgs/:org/scans', requireAdmin, async (c) => {
+  // La vista previa no tiene cola (ver requireColaPropia): 503 antes de tocar la base, también en una sandbox.
+  if (esVistaPrevia(c.env)) throw new ApiError('preview_unsupported', 'Las auditorías no corren en la vista previa');
   const sandbox = c.get('sandbox');
   if (!sandbox && !colaPropia(c)) throw new ApiError('forbidden', 'Solo disponible en officialvanguard.com');
   const tope = await topeCostoso(c);

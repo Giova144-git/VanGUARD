@@ -10,10 +10,10 @@ import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { sinBidi } from '@/lib/bidi';
-import { useConexiones, useEstadoModulo } from '@/lib/consultas';
+import { useConexiones, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { rutaDe } from '@/lib/destino';
 import { reposGithub } from '@/lib/repos';
-import { cuando } from '@/lib/formato';
+import { cuando, horaCompleta } from '@/lib/formato';
 import { deMapa } from '@/lib/severidad';
 import { entradaNav, type IdNav } from '@/lib/nav';
 import { BarraModulo } from './BarraModulo';
@@ -52,6 +52,10 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
   const caida = proveedor === 'github' ? repos.some((x) => x.status !== 'active') : !!c && c.status !== 'active';
   const filtro = params.get('filtro');
   const est = q.data;
+  // UX P0-1: «✓ Nada que atender» solo si Overview.module_checks (6782e5b) dice 'done' para este módulo; sin el campo o sin
+  // la clave, «Sin revisar». Mientras llega el Overview, que ningún chequeo esté comprobado.
+  const ov = useOverview(org.id).data;
+  const sinRevisar = ov ? ov.module_checks?.[modulo] !== 'done' : !!est && est.checks.length > 0 && !est.checks.some((x) => x.comprobado);
   // L3: la chapa roja de la conexión lleva al lado la acción que la arregla.
   const arreglo = !proveedor ? null
     : est?.error === 'token_invalido' || caida ? 'Reconectar'
@@ -69,7 +73,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
           className="inline-flex h-11 items-center gap-1 rounded-full border border-mal-borde bg-mal-relleno px-4 font-mono text-[13px] uppercase tracking-[0.06em] font-medium text-mal outline-none hover:bg-mal/15 focus-visible:ring-2 focus-visible:ring-ring">
           {arreglo}<ChevronRight className="size-4" /></Link>
       ) : null}
-      <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`}>{est ? cuando(est.hora) : '—'}</span>
+      <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`} title={est ? horaCompleta(est.hora) : undefined}>{est ? cuando(est.hora) : '—'}</span>
       <Button variant={q.isError ? 'peligro' : 'secundaria'} size="fila" onClick={() => q.refetch()} aria-busy={q.isFetching || undefined}>
         {q.isFetching ? <Spinner /> : <RotateCw />}{q.isError ? 'Reintentar' : 'Actualizar'}</Button>
     </>} />
@@ -98,7 +102,7 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
     <div className="flex flex-col gap-6">
       {barra}
       {arriba}
-      {q.isError && est ? <p role="status" className="text-sm text-mal">Sin conexión · mostramos los datos de las {cuando(est.hora)}</p> : null}
+      {q.isError && est ? <p role="status" className="text-sm text-mal">Sin conexión · mostramos los datos de {cuando(est.hora)}</p> : null}
       <FilaCifras>
         {(est?.cifras ?? Array<null>(HUECOS[modulo]).fill(null)).map((x, i) => x
           ? <Cifra key={`${x.tipo}-${i}`} etiqueta={x.etiqueta} n={x.n} de={x.de} unidad={x.unidad} decimales={x.decimales} sub={x.sub} rol={x.rol}
@@ -119,7 +123,8 @@ export function PantallaModulo({ modulo, proveedor, arriba, children, 'data-info
             </button>
           ) : null}
         </div>
-        <Bandeja grupos={est?.ahora ?? null} puedeEscribir={org.puedeEscribir} filtro={filtro} hora={est?.hora} />
+        <Bandeja grupos={est?.ahora ?? null} puedeEscribir={org.puedeEscribir} filtro={filtro}
+          sinRevisar={sinRevisar} enlaceRevisar={`/o/${org.id}/audit`} />
       </section>
       {children}
       {est?.checks.length ? (

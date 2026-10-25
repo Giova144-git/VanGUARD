@@ -88,7 +88,7 @@ describe('textos', () => {
     expect(horas(null)).toBe('—');
   });
   it('etiquetaVersion en hora de Caracas', () => {
-    expect(etiquetaVersion(miercoles!.at)).toMatch(/^mié\.? 21 · 14:03$/);
+    expect(etiquetaVersion(miercoles!.at)).toMatch(/^(21-oct|ayer|hoy) 14:03$/);
     expect(etiquetaVersion('no-es-fecha')).toBe('—');
   });
   it('etiquetaCorregido: una clave verificada no está «comprobada»; mapa cerrado', () => {

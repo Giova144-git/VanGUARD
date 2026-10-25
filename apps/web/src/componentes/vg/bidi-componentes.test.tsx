@@ -92,7 +92,8 @@ describe('vg · controles bidi a la vista', () => {
     for (const puedeEscribir of [true, false]) {
       const html = conTodo(<Bandeja grupos={grupos} puedeEscribir={puedeEscribir} />);
       sinCrudo(html);
-      for (const s of [`aria-label="Grupo ${VISTO}x"`, `chapa ${VISTO}1`, `chip ${VISTO}2`, `Ver ${VISTO}3`, `Prompt ${VISTO}4`, `Copiar ${VISTO}5`, `Bloquear ${VISTO}6`])
+      // El verbo del prompt solo lo ve quien puede generarlo; el viewer ve «Ver detalle» (UX P1-9).
+      for (const s of [`aria-label="Grupo ${VISTO}x"`, `chapa ${VISTO}1`, `chip ${VISTO}2`, `Ver ${VISTO}3`, puedeEscribir ? `Prompt ${VISTO}4` : 'Ver detalle', `Copiar ${VISTO}5`, `Bloquear ${VISTO}6`])
         expect(html, `${s} (puedeEscribir=${puedeEscribir})`).toContain(s);
     }
   });
@@ -123,7 +124,7 @@ describe('vg · controles bidi a la vista', () => {
     const html = conTodo(<PuntajeBlindaje score={70} band="amber" enlaceConectar={`/o/${ORG}/connections`}
       coverage={{ seen: 2, total: 4, missing: ['supabase', `x${RLO}y` as Module] }} />);
     sinCrudo(html);
-    expect(html).toContain(`Falta: Supabase, x${VISTO}y`);
+    expect(html).toContain(`Sin revisar: Supabase, x${VISTO}y`);
   });
 
   it('ErrorBloque: el mensaje y el request_id de un ApiError ya llegan saneados (lib/errores.ts), una sola vez', () => {

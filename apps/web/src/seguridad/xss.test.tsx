@@ -513,7 +513,7 @@ const CASOS: Caso[] = [
   },
   {
     nombre: 'Bandeja (grupos, chapas, filas, chips, objeto, sub y acciones del servidor)',
-    pintar: (c) => pintar(<Bandeja grupos={gruposDe(c)} puedeEscribir hora={fx.moduleState.cloudflare.hora} />, { ruta: `/o/${ORG}/cloudflare` }),
+    pintar: (c) => pintar(<Bandeja grupos={gruposDe(c)} puedeEscribir />, { ruta: `/o/${ORG}/cloudflare` }),
     ver: verBandeja,
   },
   {
@@ -907,7 +907,8 @@ describe('XSS · el detector del arnés', () => {
     const s = envenenar(ScanRun, fx.scanRunning, IMG);
     expect(s.error).toBe(marca(IMG, 'error'));
     expect(s.steps.map((x) => x.error_code)).toEqual(s.steps.map(() => marca(IMG, 'error_code')));
-    expect(s.coverage).toEqual(fx.scanRunning.coverage);                // sin texto: se queda como venía
+    // Coverage.detail (6782e5b) es de forma libre y admite texto: el arnés sintetiza la cobertura para envenenarla.
+    expect(s.coverage?.detail).toBeDefined();
     expect(s.finished_at).toBeNull();                                   // Ts: no se inventa una fecha
     expect(envenenar(ScanRun, fx.scanRunning, IMG, { rellenar: false }).error).toBeNull();
   });

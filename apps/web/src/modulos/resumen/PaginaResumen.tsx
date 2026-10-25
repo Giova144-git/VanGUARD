@@ -21,9 +21,9 @@ import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
 import { BotonEnviarAMiIA, EstadoEnvioIA } from '@/modulos/hallazgos/EnviarAMiIA';
 import { AvisoSinFuentes, useAuditarTodo } from '@/modulos/auditoria/useAuditarTodo';
 import { DesdeAnterior } from '@/modulos/evolucion/DesdeAnterior';
-import { useConexiones, useEnvioIA, useEstadoModulo, useOverview } from '@/lib/consultas';
+import { SIN_COLA, useConexiones, useEnvioIA, useEstadoModulo, useOverview } from '@/lib/consultas';
 import { repoParaArreglar } from '@/lib/mcp';
-import { cuando } from '@/lib/formato';
+import { cuando, horaCompleta } from '@/lib/formato';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
@@ -104,25 +104,36 @@ export default function PaginaResumen() {
   const o = q.data;
   const e = entradaNav('overview')!;
   // «24-10 22:35» no cabe en la cifra: la hora va de valor y la fecha, si no es de hoy, de sub.
-  const [diaAud, horaAud] = o?.last_scan ? cuando(o.last_scan.finished_at).split(' ') : [];
+  // «Última auditoría» es la última TERMINADA: una fallida no cuenta como revisión y se dice aparte (UX P0-2).
+  // last_ok_scan (6782e5b) es la última terminada; sin él (BACK de antes), la última si terminó bien.
+  const fallida = o?.last_scan?.status === 'failed' ? o.last_scan : null;
+  const ok = o?.last_ok_scan !== undefined ? o.last_ok_scan : o?.last_scan?.status === 'succeeded' ? o.last_scan : null;
+  const previa = o?.preview === true;
+  const [diaAud, horaAud] = ok ? cuando(ok.finished_at).split(' ') : [];
 
   return (
     <div className="flex flex-col gap-6">
       <BarraModulo titulo="Resumen" descripcion={e.descripcion}
-        extra={q.dataUpdatedAt ? <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`}>revisado {cuando(q.dataUpdatedAt)}</span> : null} />
+        extra={q.dataUpdatedAt ? <span className={`text-[12.5px] tabular-nums ${q.isError ? 'text-mal' : 'text-texto-3'}`} title={horaCompleta(q.dataUpdatedAt)}>revisado {cuando(q.dataUpdatedAt)}</span> : null} />
       {q.isError ? <ErrorBloque error={q.error} onReintentar={() => q.refetch()} /> : null}
 
       <section className="flex flex-wrap items-end justify-between gap-6 rounded-xl border bg-card p-5" aria-label="Puntaje">
         {/* Sin `o` pinta la misma estructura con «—»: la sección no crece al llegar el dato (L7). */}
-        <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined} />
+        <PuntajeBlindaje score={o?.score} band={o?.band} coverage={o?.coverage} enlaceConectar={org.puedeEscribir ? `/o/${org.id}/connections` : undefined}
+          conectados={conexiones.data?.filter((c) => c.kind === 'read' && c.status === 'active')
+            .map((c) => (c.provider === 'github' ? 'codebase' : c.provider))} />
         <div className="flex flex-col items-start gap-2">
           <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={ocupado}
-            disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
-          {sinFuentes && org.puedeEscribir ? <AvisoSinFuentes /> : null}
+            disabled={!org.puedeEscribir || previa} ayuda={!org.puedeEscribir ? SOLO_LECTURA : SIN_COLA} data-info="auditar-todo">Auditar todo</BotonAccion>
+          {sinFuentes && org.puedeEscribir && !previa ? <AvisoSinFuentes /> : null}
           {errorAuditar ? <span role="alert" className="max-w-xs text-sm text-mal">{errorAuditar}</span> : null}
-          {o?.last_scan ? (
-            <span className="text-[12.5px] text-texto-3">Última auditoría {cuando(o.last_scan.finished_at)} ·{' '}
-              <Link to={`/o/${org.id}/audit/${encodeURIComponent(o.last_scan.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver</Link></span>
+          {ok ? (
+            <span className="text-[12.5px] text-texto-3" title={horaCompleta(ok.finished_at)}>Última auditoría {cuando(ok.finished_at)} ·{' '}
+              <Link to={`/o/${org.id}/audit/${encodeURIComponent(ok.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver</Link></span>
+          ) : null}
+          {fallida ? (
+            <span className="text-[12.5px] text-texto-3">La de {cuando(fallida.finished_at)} falló ·{' '}
+              <Link to={`/o/${org.id}/audit/${encodeURIComponent(fallida.id)}`} className="font-medium text-foreground underline underline-offset-4">Ver qué pasó</Link></span>
           ) : null}
           <DesdeAnterior org={org.id} ultima={o?.last_scan ?? null} />
         </div>
@@ -139,14 +150,15 @@ export default function PaginaResumen() {
         <Cifra data-info="cifra-incidentes" etiqueta="Incidentes abiertos" n={o?.open_incidents ?? null} rol="mal" href={o?.open_incidents ? `/o/${org.id}/incidents` : undefined} />
         <Cifra data-info="cifra-fuentes" etiqueta="Fuentes" n={o?.coverage.seen ?? null} de={o?.coverage.total}
           rol={o && o.coverage.seen === o.coverage.total ? 'bien' : 'neutra'} />
-        <Cifra data-info="cifra-ultima-auditoria" etiqueta="Última auditoría" n={o?.last_scan ? 1 : null} valor={horaAud ?? diaAud} sub={horaAud ? diaAud : undefined} />
+        <Cifra data-info="cifra-ultima-auditoria" etiqueta="Última auditoría" n={ok ? 1 : null} valor={ok ? horaAud ?? diaAud : undefined} sub={ok ? (horaAud ? diaAud : undefined) : fallida ? 'la última falló' : undefined} />
       </FilaCifras>
 
       <section id="ahora" className="flex flex-col gap-3 scroll-mt-20" aria-labelledby="titulo-ahora">
         <h3 id="titulo-ahora" className="text-[17px] font-semibold" data-info="ahora">Ahora</h3>
         {!o ? <div className="rounded-xl border bg-card px-4 py-6 text-texto-3">—</div>
           : o.ahora.length === 0
-            ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">0 ✓ Nada que atender · revisado {cuando(q.dataUpdatedAt)}</div>
+            // Sin puntaje no hay auditoría terminada: nada se miró, así que no hay ✓ (UX P0-1). La hora, solo arriba.
+            ? <div className="rounded-xl border bg-card px-4 py-6 text-[15px] text-muted-foreground">{o.score != null && Object.values(o.module_checks ?? {}).includes('done') ? '0 ✓ Nada que atender' : 'Sin revisar: aún no hay ninguna auditoría terminada.'}</div>
             : <ul className="overflow-hidden rounded-xl border bg-card">{o.ahora.map((a) => <FilaAhora key={`${a.kind}-${a.id}`} item={a} org={org.id} repo={a.kind === 'finding' ? repoDe(a.connection_id) : null} />)}</ul>}
       </section>
 

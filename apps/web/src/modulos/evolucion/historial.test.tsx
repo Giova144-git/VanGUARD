@@ -84,7 +84,7 @@ describe('PaginaHistorial', () => {
 describe('FilaFalla', () => {
   const f = LISTA.find((x) => x.status === 'verified' && x.fixed_at)!;
   it('fechas de la fila en hora de Caracas', () => {
-    expect(fechasFila(f)).toMatch(/^Detectada \d\d-10 \d\d:\d\d · Corregida \d\d-10 \d\d:\d\d · Verificada \d\d-10 \d\d:\d\d$/);
+    expect(fechasFila(f)).toMatch(/^Detectada (?:hoy|ayer|\d\d-[a-z]{3}(?:-\d{4})?) \d\d:\d\d · Corregida (?:hoy|ayer|\d\d-[a-z]{3}(?:-\d{4})?) \d\d:\d\d · Verificada (?:hoy|ayer|\d\d-[a-z]{3}(?:-\d{4})?) \d\d:\d\d$/);
     const abierta = LISTA.find((x) => x.status === 'open' && x.reopen_count > 0)!;
     expect(fechasFila(abierta)).toMatch(/Reapareció .* · Vista /);
   });

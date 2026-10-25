@@ -27,21 +27,39 @@ export function cifra(c: { n: number | null; de?: number; unidad?: '%' | 'ms' | 
     : c.decimales != null ? decimal(c.n, c.decimales) : miles(c.n);
   return c.de != null ? `${v} de ${miles(c.de)}` : v;
 }
+// Un solo formato de hora en toda la app (UX P1-13), en hora de Caracas (UTC−4, sin horario de verano): «hoy 04:46»,
+// «ayer 23:32», «24-oct 23:32» y, de otro año, «24-oct-2025 23:32». La fecha completa con la zona, en horaCompleta().
 const hhmm = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', hour: '2-digit', minute: '2-digit', hour12: false });
-const ddmm = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', day: '2-digit', month: '2-digit' });
-export function cuando(t?: string | Date | number | null, ahora = new Date()) {                        // 21:14 hoy · 24-10 22:35
-  if (t == null || t === '' || t === 0) return SIN_DATO; const d = t instanceof Date ? t : new Date(t);
-  if (Number.isNaN(d.getTime())) return SIN_DATO;
-  return ddmm.format(d) === ddmm.format(ahora) ? hhmm.format(d) : `${ddmm.format(d).replace('/', '-')} ${hhmm.format(d)}`;
+const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Caracas', year: 'numeric', month: '2-digit', day: '2-digit' });
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const fecha = (t?: string | Date | number | null) => {
+  if (t == null || t === '' || t === 0) return null;
+  const d = t instanceof Date ? t : new Date(t);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+export function cuando(t?: string | Date | number | null, ahora = new Date()) {
+  const d = fecha(t);
+  if (!d) return SIN_DATO;
+  const dia = ymd.format(d), hora = hhmm.format(d);
+  if (dia === ymd.format(ahora)) return `hoy ${hora}`;
+  if (dia === ymd.format(new Date(ahora.getTime() - 86_400_000))) return `ayer ${hora}`;
+  const [y, m, dd] = dia.split('-');
+  return `${dd}-${MESES[Number(m) - 1] ?? m}${y === ymd.format(ahora).slice(0, 4) ? '' : `-${y}`} ${hora}`;
 }
-// Para frases (Vigía, la línea de tiempo de una falla): «hoy a las 14:04» · «el 24-10 a las 14:04». null si no es una
-// fecha: solo salen dígitos de Intl, nunca el texto que mandó el servidor.
+// Para frases (Vigía, la línea de tiempo de una falla), con el mismo formato que cuando(): «hoy a las 14:04» ·
+// «ayer a las 23:32» · «el 24-oct a las 14:04». null si no es una fecha: solo salen dígitos de Intl, nunca el texto que
+// mandó el servidor.
 export function elDia(t?: string | Date | number | null, ahora = new Date()): string | null {
-  if (t == null || t === '' || t === 0) return null; const d = t instanceof Date ? t : new Date(t);
-  if (Number.isNaN(d.getTime())) return null;
-  const dia = ddmm.format(d);
-  return dia === ddmm.format(ahora) ? `hoy a las ${hhmm.format(d)}` : `el ${dia.replace('/', '-')} a las ${hhmm.format(d)}`;
+  const d = fecha(t);
+  if (!d) return null;
+  const c = cuando(d, ahora), i = c.lastIndexOf(' ');
+  const dia = c.slice(0, i), hora = c.slice(i + 1);
+  return dia === 'hoy' || dia === 'ayer' ? `${dia} a las ${hora}` : `el ${dia} a las ${hora}`;
 }
+
+const larga = new Intl.DateTimeFormat('es-VE', { timeZone: 'America/Caracas', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+/** Para el tooltip de una hora: «domingo, 25 de octubre de 2026, 04:46 · hora de Caracas (UTC−4)». */
+export const horaCompleta = (t?: string | Date | number | null) => { const d = fecha(t); return d ? `${larga.format(d)} · hora de Caracas (UTC−4)` : undefined; };
 // «hace un momento» · «hace 5 min» · «hace 3 h» · «hace 2 d».
 export function hace(t?: string | Date | number | null, ahora = new Date()) {
   if (t == null) return SIN_DATO;

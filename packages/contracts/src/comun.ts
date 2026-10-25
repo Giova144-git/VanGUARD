@@ -40,7 +40,8 @@ export const RuleId = z.string().regex(/^(SB|CF|CB|PF)_[A-Z0-9_]+$/);
 export type RuleId = z.infer<typeof RuleId>;
 
 export const ErrorCode = z.enum(['unauthorized', 'forbidden', 'not_found', 'conflict', 'invalid_body', 'key_rejected',
-  'provider_rejected', 'rate_limited', 'budget_exceeded', 'ai_disabled', 'provider_unavailable', 'internal']);
+  'provider_rejected', 'rate_limited', 'budget_exceeded', 'ai_disabled', 'provider_unavailable', 'internal',
+  'preview_unsupported']); // preview_unsupported: 503 de algo que no corre en una vista previa de Workers (E11 sin cola)
 export type ErrorCode = z.infer<typeof ErrorCode>;
 // Choca de nombre con las clases ApiError del BACK y del FRONT: se importa como
 // `import { ApiError as ApiErrorBody } from '@vanguard/contracts'`.

@@ -4,7 +4,7 @@
 import type { TimelineItem } from '@vanguard/contracts';
 import type { Hito } from '@/modulos/incidentes/hitos';
 import { sinBidi } from '@/lib/bidi';
-import { cuando } from '@/lib/formato';
+import { cuando, horaCompleta } from '@/lib/formato';
 import { deMapa } from '@/lib/severidad';
 import { cn } from '@/lib/utils';
 import { PuntoEstado } from './PuntoEstado';
@@ -36,7 +36,7 @@ export function LineaTiempo({ hitos, resto }: { hitos: Hito[]; resto: TimelineIt
                 <span className={cn('min-w-0 flex-1 text-[15px]', ocurrio ? 'font-medium' : 'text-muted-foreground')}>
                   {h.etiqueta}{deMapa(VIA, h.via, '') ? <span className="text-muted-foreground"> · {deMapa(VIA, h.via, '')}</span> : null}
                 </span>
-                {h.en ? <span className="text-[12.5px] text-texto-3 tabular-nums">{cuando(h.en)}</span> : null}
+                {h.en ? <span className="text-[12.5px] text-texto-3 tabular-nums" title={horaCompleta(h.en)}>{cuando(h.en)}</span> : null}
                 <span className={cn('font-mono text-[17px] font-semibold tabular-nums', destacado ? 'text-info' : ocurrio ? '' : 'text-texto-3')}>{h.mas}</span>
               </div>
             </li>

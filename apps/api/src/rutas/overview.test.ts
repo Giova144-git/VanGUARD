@@ -137,6 +137,66 @@ describe('E5 · last_scan salta las mediciones de Rendimiento (kind lighthouse)'
   });
 });
 
+// ── Revisión de UX (ux-revision-develop.md P0-1, P0-2, P0-4 y P0-3): lo que la web necesita para no prometer de más ──
+describe('E5 · last_ok_scan, module_checks, last_ingest_at y preview', () => {
+  const BUENA = '5a1c0000-0000-4000-8000-0000000000b1';
+  const APP = 'c0000000-0000-4000-8000-0000000000a1';
+  const SIM = 'c0000000-0000-4000-8000-0000000000a2';
+  const esBuena = (op: Op) => op.table === 'scan_runs' && op.columns === 'id, steps, finished_at';
+  let hitsDe: string[];
+  beforeEach(() => {
+    hitsDe = [];
+    tabla = (op) => {
+      if (esBuena(op)) {
+        return { data: { id: BUENA, finished_at: '2026-10-25T08:00:00+00:00', steps: [{ name: 'supabase', status: 'done' },
+          { name: 'cloudflare', status: 'skipped' }, { name: 'repo', status: 'failed' }, { name: 'resumen_ia', status: 'done' }] } };
+      }
+      if (op.table === 'connections') return { data: [{ id: APP, meta: {} }, { id: SIM, meta: { simulador: true } }] };
+      if (op.table === 'edge_hits') {
+        hitsDe = (op.filters.find(([c, o]) => c === 'connection_id' && o === 'in')?.[2] ?? []) as string[];
+        return { data: { ts: '2026-10-25T08:30:00+00:00' } };
+      }
+      return undefined;
+    };
+  });
+
+  it('la última full_audit TERMINADA y lo que miró cada módulo en ella (done, sin_revisar, fallido)', async () => {
+    const b = Overview.parse(await (await pedir()).json());
+    expect(b.last_ok_scan).toEqual({ id: BUENA, finished_at: '2026-10-25T08:00:00.000Z' });
+    expect(b.module_checks).toEqual({ supabase: 'done', cloudflare: 'sin_revisar', codebase: 'fallido' });
+    const op = doble.ops.find(esBuena)!;
+    expect(op.filters).toEqual(expect.arrayContaining([['kind', 'eq', 'full_audit'], ['status', 'eq', 'succeeded']]));
+  });
+
+  it('sin auditoría terminada: last_ok_scan null y todos los módulos sin_revisar', async () => {
+    const previa = tabla;
+    tabla = (op) => (esBuena(op) ? { data: null } : previa(op));
+    const b = Overview.parse(await (await pedir()).json());
+    expect(b.last_ok_scan).toBeNull();
+    expect(b.module_checks).toEqual({ supabase: 'sin_revisar', cloudflare: 'sin_revisar', codebase: 'sin_revisar' });
+  });
+
+  it('last_ingest_at: el último edge_hit de la app, sin la conexión del simulador; sin ingesta → null sin consulta', async () => {
+    let b = Overview.parse(await (await pedir()).json());
+    expect(b.last_ingest_at).toBe('2026-10-25T08:30:00.000Z');
+    expect(hitsDe).toEqual([APP]);
+    const previa = tabla;
+    tabla = (op) => (op.table === 'connections' ? { data: [{ id: SIM, meta: { simulador: true } }] }
+      : op.table === 'edge_hits' ? { data: { ts: 'x' } } : previa(op));
+    doble.ops.length = 0;
+    b = Overview.parse(await (await pedir()).json());
+    expect(b.last_ingest_at).toBeNull();
+    expect(doble.ops.some((o) => o.table === 'edge_hits')).toBe(false);
+  });
+
+  it('preview: sin la cola (vista previa) true; con JOBS_Q en producción false', async () => {
+    expect(Overview.parse(await (await pedir()).json()).preview).toBe(true);
+    const prod = { VG_ENV: 'production', JOBS_Q: { send: async () => {} } } as unknown as CloudflareBindings;
+    const r = await app.request(`/api/orgs/${ORG}/overview`, {}, prod);
+    expect(Overview.parse(await r.json()).preview).toBe(false);
+  });
+});
+
 // Varias codebases (asignaciones/varias-codebases.md §2.4, B4): el repo de cada hallazgo de «ahora» viaja por
 // connection_id (null si no tiene); los incidentes no llevan el campo. Puntaje y counts, agregados como siempre.
 describe('E5 · connection_id en «ahora» (varias-codebases B4)', () => {

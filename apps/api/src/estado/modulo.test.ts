@@ -317,7 +317,7 @@ describe('#13 · E6 con la conexión del proveedor revocada o en error', () => {
 // ── «Medir ahora» no es una auditoría: ni la hora ni el último paso del proveedor salen de una medición ──────────────
 describe('E6 de un proveedor salta las mediciones de Rendimiento (kind lighthouse)', () => {
   const fila = (kind: string, created_at: string, steps: { name: string; status: string }[]) =>
-    ({ org_id: ORG, kind, created_at, finished_at: created_at, steps, coverage: null });
+    ({ org_id: ORG, kind, created_at, finished_at: created_at, steps, coverage: null, status: 'succeeded' });
   // scan_runs en memoria con los filtros de la consulta y su limit(20), más nuevas primero.
   const conScans = (scans: ReturnType<typeof fila>[]) => {
     fijar({ conns: [conexion('supabase')] });
@@ -333,6 +333,13 @@ describe('E6 de un proveedor salta las mediciones de Rendimiento (kind lighthous
     expect(e.hora).toBe(auditoria);
     const op = doble.ops.find((o) => o.table === 'scan_runs')!;
     expect(op.filters).toContainEqual(['kind', 'neq', 'lighthouse']);
+  });
+
+  it('hora = fin de la última auditoría TERMINADA: una fallida más nueva no da la hora (ux P0-2)', async () => {
+    const buena = hace(5 * H);
+    conScans([{ ...fila('full_audit', hace(H), [{ name: 'supabase', status: 'pending' }]), status: 'failed' },
+      fila('full_audit', buena, [{ name: 'supabase', status: 'done' }])]);
+    expect((await pedir('supabase')).hora).toBe(buena);
   });
 
   it('20 mediciones (el cupo de la demo) no sacan de la ventana a la auditoría: los checks siguen comprobados', async () => {

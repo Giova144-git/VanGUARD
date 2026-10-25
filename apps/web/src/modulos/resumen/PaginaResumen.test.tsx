@@ -28,9 +28,9 @@ function resumen(org: OrgActual) {
 }
 
 describe('PaginaResumen · lo que falta conectar', () => {
-  it('el viewer ve «Falta: Cloudflare, Rendimiento» sin enlace y «Conectar Cloudflare» apagado con su motivo', () => {
+  it('el viewer ve «Sin revisar: Cloudflare (sin conectar), Rendimiento» sin enlace y «Conectar Cloudflare» apagado con su motivo', () => {
     const html = resumen(VIEWER);
-    expect(html).toContain('Falta: Cloudflare, Rendimiento');
+    expect(html).toContain('Sin revisar: Cloudflare (sin conectar), Rendimiento');
     expect(html).not.toMatch(/href="\/o\/[^"]+\/connections"[^>]*>Conectar</);
     expect(html).toContain('Conectar Cloudflare');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Conectar Cloudflare/);
@@ -40,5 +40,20 @@ describe('PaginaResumen · lo que falta conectar', () => {
     const html = resumen(ADMIN);
     expect(html).toMatch(/href="\/o\/[^"]+\/connections"[^>]*>Conectar</);
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Conectar Cloudflare/);
+  });
+});
+
+describe('PaginaResumen · «Sin revisar» dice si la fuente está conectada (UX P1-16)', () => {
+  it('Supabase conectado pero sin mirar: «(conectado)», y sin «Conectar» si no falta conectar nada', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(['org', ORG, 'overview'], Overview.parse({ ...fx.overview, coverage: { seen: 2, total: 4, missing: ['supabase', 'performance'] } }));
+    qc.setQueryData(['org', ORG, 'connections'], z.array(ConnectionPublic).parse(fx.connections));
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[`/o/${ORG}/overview`]}><OrgDePrueba org={ADMIN}><PaginaResumen /></OrgDePrueba></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(html).toContain('Sin revisar: Supabase (conectado), Rendimiento');
+    expect(html).not.toMatch(/Rendimiento · <a[^>]*>Conectar</);
   });
 });

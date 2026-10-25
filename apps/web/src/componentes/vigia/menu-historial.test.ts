@@ -47,7 +47,7 @@ describe('ACCIONES · historial', () => {
     const c = ctx({ ia: { bloqueo: null, envioDe: () => null, repoDe: () => null, enviarYAbrir: vi.fn(), cancelar: vi.fn() } });
     accion('info').hacer(c);
     const dicho = vi.mocked(c.guia.decir).mock.calls[0]![0];
-    expect(dicho.texto).toMatch(/Se detectó el \d\d-10 a las \d\d:\d\d y se corrigió el \d\d-10 a las \d\d:\d\d; una auditoría lo verificó el \d\d-10 a las \d\d:\d\d\./);
+    expect(dicho.texto).toMatch(/Se detectó (?:hoy|ayer|el \d\d-[a-z]{3}(?:-\d{4})?) a las \d\d:\d\d y se corrigió (?:hoy|ayer|el \d\d-[a-z]{3}(?:-\d{4})?) a las \d\d:\d\d; una auditoría lo verificó (?:hoy|ayer|el \d\d-[a-z]{3}(?:-\d{4})?) a las \d\d:\d\d\./);
     expect(accion('enviar-ia').deshabilitada?.(c)).toBe('Ya no está abierto');
   });
 });

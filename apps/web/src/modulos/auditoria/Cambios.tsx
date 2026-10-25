@@ -37,7 +37,7 @@ function cabecera(d: ConFoto) {
   if (!d.previous) return 'Frente a una auditoría que ya se borró (se guardan 90 días)';
   const tipo = d.previous.kind === 'full_audit' ? '' : ` (${tipoAuditoria(d.previous.kind)})`;
   if (!d.previous.finished_at) return `Frente a la auditoría anterior${tipo} · ${flecha}`;
-  return `Frente a la auditoría del ${etiquetaVersion(d.previous.finished_at)}${tipo} · ${flecha}`;
+  return `Frente a la auditoría anterior (${etiquetaVersion(d.previous.finished_at)})${tipo} · ${flecha}`;
 }
 
 function Bloque({ children }: { children: ReactNode }) {

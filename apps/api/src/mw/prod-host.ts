@@ -27,6 +27,15 @@ export const colaPropia = (c: Context<AppEnv>) => c.env.VG_ENV === 'local' || es
 // Productores de vg-jobs (E11, E16, E23; S15 15.7): en producción, solo desde el host real, para que un despliegue de
 // prueba no encole en la cola de producción.
 export const requireColaPropia: MiddlewareHandler<AppEnv> = async (c, next) => {
+  // La vista previa (develop, VG_ENV=preview) no tiene cola a propósito: 503 ANTES de tocar la base y antes del 403 de
+  // host. Si no, la ruta crearía un scan_run o una wiki_run que falla con «No se pudo encolar» en la base de producción.
+  if (esVistaPrevia(c.env)) {
+    throw new ApiError('preview_unsupported', 'Las auditorías no corren en la vista previa');
+  }
   if (!colaPropia(c)) throw new ApiError('forbidden', 'Solo disponible en officialvanguard.com');
   await next();
 };
+
+/** Vista previa de Workers: VG_ENV=preview o sin el binding de la cola. Overview.preview y E11 lo usan. */
+export const esVistaPrevia = (env: CloudflareBindings): boolean =>
+  (env.VG_ENV as string | undefined) === 'preview' || !(env as { JOBS_Q?: unknown }).JOBS_Q;

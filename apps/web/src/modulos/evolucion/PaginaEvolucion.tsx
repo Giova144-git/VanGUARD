@@ -13,7 +13,7 @@ import { ErrorBloque, Vacio } from '@/componentes/vg/Vacio';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { AvisoSinFuentes, useAuditarTodo } from '@/modulos/auditoria/useAuditarTodo';
 import { sinBidi } from '@/lib/bidi';
-import { useConexiones, useEvolucion } from '@/lib/consultas';
+import { SIN_COLA, useConexiones, useEvolucion, useVistaPrevia } from '@/lib/consultas';
 import { esApiError } from '@/lib/errores';
 import {
   MODULOS_FOTO, NOTA_FOTO_PUSH, SEVERIDADES, cifras, etiquetaVersion, horas, lineaFoto, nombreModulo, porSeveridad, serieAbiertos,
@@ -244,12 +244,13 @@ function Revisiones({ reviews }: { reviews: EvolutionReview[] }) {
 function SinAuditorias() {
   const org = useOrg();
   const { auditar, ocupado, error, sinFuentes } = useAuditarTodo();
+  const previa = useVistaPrevia(org.id);
   return (
     <Vacio icono={TrendingUp} titulo="Aún no hay auditorías en este periodo" texto="Cada auditoría que termine queda aquí."
       accion={<div className="flex flex-col items-center gap-2">
         <BotonAccion variante="marca" tam="grande" icono={ShieldCheck} onClick={auditar} ocupado={ocupado}
-          disabled={!org.puedeEscribir} ayuda={SOLO_LECTURA} data-info="auditar-todo">Auditar todo</BotonAccion>
-        {sinFuentes && org.puedeEscribir ? <AvisoSinFuentes className="max-w-xs text-center text-sm text-muted-foreground" /> : null}
+          disabled={!org.puedeEscribir || previa} ayuda={!org.puedeEscribir ? SOLO_LECTURA : SIN_COLA} data-info="auditar-todo">Auditar todo</BotonAccion>
+        {sinFuentes && org.puedeEscribir && !previa ? <AvisoSinFuentes className="max-w-xs text-center text-sm text-muted-foreground" /> : null}
         {error ? <p role="alert" className="text-sm text-mal">{error}</p> : null}
       </div>} />
   );

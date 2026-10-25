@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fixtures as fx, type CodeReview } from '@vanguard/contracts';
 import {
-  chipAviso, chipBloqueo, chipEstadoBloqueo, chipHook, chipParcial, chipPr, chipRevision, sePuedeAprobar, textoErrorBloqueo, textoErrorCierre,
+  chipAviso, chipBloqueo, chipEstadoBloqueo, chipHook, chipParcial, chipPr, chipRevision, sePuedeAprobar, sePuedeRepublicar, textoErrorBloqueo, textoErrorCierre,
   textoErrorHook, textoErrorRevision, textoMotivo, textoParcialBloqueo, textoPrueba, umbralWhatsapp,
 } from './revision';
 
@@ -109,5 +109,13 @@ describe('chips del bloqueo de merge (§6.2)', () => {
     expect(sePuedeAprobar(gate({ state: 'success' }))).toBe(false);
     expect(sePuedeAprobar(gate({ state: 'failure', override_at: '2026-10-24T19:50:00.000Z' }))).toBe(false);
     expect(sePuedeAprobar(undefined)).toBe(false);
+  });
+
+  it('«Publicar de nuevo» (P1) solo si no se publicó o lo último falló; un «VanGUARD» ajeno lo republica el BACK', () => {
+    expect(sePuedeRepublicar(gate({ state: null, error: 'sin_token' }))).toBe(true);
+    expect(sePuedeRepublicar(gate({ state: 'failure', error: 'red' }))).toBe(true);
+    expect(sePuedeRepublicar(gate({ state: 'failure', error: null }))).toBe(false);
+    expect(sePuedeRepublicar(gate({ state: 'success', error: 'estado_ajeno' }))).toBe(false);
+    expect(sePuedeRepublicar(undefined)).toBe(false);
   });
 });

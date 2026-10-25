@@ -155,7 +155,8 @@ export function useGuardarRevision(org: string) {
 // Bandera por 404 de las escrituras nuevas: mientras el BACK no despliega E53 o E54, sus botones no se ofrecen. Vive en la
 // caché de consultas (una por QueryClient) para que todas las filas lo vean a la vez; queryFn no pide nada a nadie, solo
 // devuelve lo que ya hay (así una invalidación por prefijo no la borra).
-export type RutaNueva = 'E53' | 'E54';
+// 'E54-republish': «Publicar de nuevo» es P1; un BACK con E54 en P0 responde 409 {reason: 'p1'} y el botón se retira.
+export type RutaNueva = 'E53' | 'E54' | 'E54-republish';
 const claveAusente = (org: string, ruta: RutaNueva) => ['org', org, 'ruta-ausente', ruta];
 export function useRutaAusente(org: string, ruta: RutaNueva): boolean {
   const qc = useQueryClient();
@@ -164,6 +165,7 @@ export function useRutaAusente(org: string, ruta: RutaNueva): boolean {
 }
 const marcarSi404 = (qc: QueryClient, org: string, ruta: RutaNueva) => (e: unknown) => {
   if (esApiError(e) && e.status === 404) qc.setQueryData(claveAusente(org, ruta), true);
+  if (ruta === 'E54' && esApiError(e) && e.status === 409 && e.details?.reason === 'p1') qc.setQueryData(claveAusente(org, 'E54-republish'), true);
 };
 
 // E53: encender o apagar el bloqueo, su umbral, «Cerrar los PR con críticos» y el token de estados (statuses_pat). El

@@ -197,6 +197,9 @@ export const textoParcialBloqueo = (c: unknown) => deMapa(PARCIAL_BLOQUEO, c, 'N
 
 // «Dar por bueno» (E54 override) vale para revisiones con ✗ o con error y sin aprobación previa; «Deshacer», con ella.
 export const sePuedeAprobar = (g: CodeReview['gate']) => !!g && !g.override_at && (g.state === 'failure' || g.state === 'error');
+// «Publicar de nuevo» (E54 republish, P1): si no se publicó nada o lo último falló. Un «VanGUARD» ajeno lo republica el
+// BACK solo (§2.10).
+export const sePuedeRepublicar = (g: CodeReview['gate']) => !!g && g.error !== 'estado_ajeno' && (g.state === null || g.error !== null);
 
 // Anexo de cierre de PR: qué hizo VanGUARD con el pull request. pr_close_error con mapa cerrado (códigos cortos del BACK).
 const CIERRE_PR: Record<string, string> = {

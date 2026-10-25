@@ -207,6 +207,20 @@ describe('BloqueoMerge · fila del PR', () => {
     expect(html).not.toContain('Dar por bueno este commit');
   });
 
+  it('P1: «Publicar de nuevo» en una revisión sin publicar; si E54 responde 409 p1 (BACK en P0), el botón se retira', async () => {
+    const sinPublicar = { ...BLOQUEO, recent: [{ ...PR, gate: { ...PR.gate, state: null, error: 'sin_token', pr_action: null } }] };
+    expect(tarjeta(ADMIN, sinPublicar, { ruta: abierta })).toContain('Publicar de nuevo');
+    expect(tarjeta(ADMIN, sinPublicar, { ruta: abierta })).toContain('No publicado: Falta el token de estados');
+    expect(tarjeta(ADMIN, BLOQUEO, { ruta: abierta })).not.toContain('Publicar de nuevo');   // ya publicado: nada que repetir
+    const qc = nuevoQc();
+    api.mockRejectedValueOnce(new ApiError(409, 'conflict', 'Llega pronto', undefined, { reason: 'p1' }));
+    await new MutationObserver(qc, opcionesAccionBloqueo(ORG, qc)).mutate({ id: PR.id, accion: { op: 'republish' } }).catch(() => {});
+    const html = tarjeta(ADMIN, sinPublicar, { ruta: abierta, qc });
+    expect(html).not.toContain('Publicar de nuevo');
+    expect(html).toContain('No publicado: Falta el token de estados');
+    expect(tarjeta(ADMIN, BLOQUEO, { ruta: abierta, qc })).toContain('Dar por bueno este commit');   // el resto de E54 sigue
+  });
+
   it('con el bloqueo apagado la fila no ofrece acciones (E54 daría 409 apagado)', () => {
     const html = tarjeta(ADMIN, conGate({ enabled: false, state: 'off' }), { ruta: abierta });
     expect(html).toContain('✗ Merge bloqueado');

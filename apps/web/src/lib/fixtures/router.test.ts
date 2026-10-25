@@ -510,7 +510,10 @@ describe('bloqueo de merge (E45 con gate, E53, E54)', () => {
     expect((await leer()).recent[0]!.gate).toMatchObject({ pr_action: 'reopened', state: 'failure' });
     expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'reopen_pr' })).toMatchObject({ status: 409 });
     expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${LIMPIA}/gate`, 'POST', { op: 'override', reason: 'Limpia' })).toMatchObject({ status: 409 });
-    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'republish' })).toMatchObject({ status: 409, details: { reason: 'p1' } });
+    // P1: «Publicar de nuevo» publica lo que ya se sabe de la más reciente del PR; una revisión de antes del bloqueo, 409.
+    expect(await accion(PR, { op: 'republish' })).toEqual({ ok: true, resultado: 'encolado' });
+    expect((await leer()).recent[0]!.gate).toMatchObject({ state: 'failure', error: null });
+    expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${fx.codeReviewState.recent[0]!.id}/gate`, 'POST', { op: 'republish' })).toMatchObject({ status: 409, details: { reason: 'sin_calculo' } });
     expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${NADA}/gate`, 'POST', { op: 'revert' })).toMatchObject({ status: 404 });
     expect(await fallo(`/api/orgs/${DEMO}/code-review/reviews/${PR}/gate`, 'POST', { op: 'override', reason: 'x' })).toMatchObject({ status: 422 });
   });

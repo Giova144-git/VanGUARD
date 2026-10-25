@@ -1,8 +1,9 @@
 // El check «VanGUARD» en la fila abierta de una revisión (bloqueo-merge-criticos.md §6.2; anexo de cierre de PR): lo que
 // bloquea, qué hacer y, solo para owner y admin, «Dar por bueno» / «Deshacer» (E54 override/revert, con simulación) y
-// «Reabrir el PR» (E54 reopen_pr). Si E54 da 404 (aún sin desplegar), los botones no se ofrecen.
+// «Reabrir el PR» (E54 reopen_pr) y, P1, «Publicar de nuevo» (republish). Si E54 da 404 (aún sin desplegar), los botones no
+// se ofrecen; si republish da 409 {reason: 'p1'} (E54 en P0), ese botón tampoco.
 import { useState } from 'react';
-import { CheckCheck, Undo2 } from 'lucide-react';
+import { CheckCheck, RefreshCw, Undo2 } from 'lucide-react';
 import type { CodeReview, MergeGateAction, MergeGateConfig } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
@@ -13,7 +14,7 @@ import { useOrg } from '@/app/guardas';
 import { sinBidi } from '@/lib/bidi';
 import { ApiError, esApiError, mensajeDe } from '@/lib/errores';
 import { useAccionBloqueo, useRutaAusente } from '@/lib/mutaciones';
-import { sePuedeAprobar, textoParcialBloqueo } from '@/lib/revision';
+import { sePuedeAprobar, sePuedeRepublicar, textoParcialBloqueo } from '@/lib/revision';
 import { deMapa } from '@/lib/severidad';
 import { PanelConfirmar } from './BloqueoMerge';
 
@@ -24,6 +25,8 @@ const RAZON: Record<string, string> = {
   apagado: 'El bloqueo está apagado',
   solo_produccion: 'Solo disponible en officialvanguard.com',
   no_cerrado: 'Ese pull request ya no está cerrado por VanGUARD',
+  no_es_la_ultima: 'Solo se publica de nuevo la revisión más reciente de ese PR o de ese commit',
+  p1: '«Publicar de nuevo» aún no está disponible',
 };
 function errorAccion(e: unknown): string {
   if (esApiError(e) && e.status === 429) return 'Demasiados intentos: espera un minuto y vuelve a probar';
@@ -79,6 +82,7 @@ function AccionesBloqueo({ r, alAccion }: { r: CodeReview; alAccion?: () => void
   const org = useOrg();
   const accion = useAccionBloqueo(org.id);
   const sinRuta = useRutaAusente(org.id, 'E54');
+  const sinRepublicar = useRutaAusente(org.id, 'E54-republish');
   const [aprobando, setAprobando] = useState(false);
   const [motivo, setMotivo] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +131,15 @@ function AccionesBloqueo({ r, alAccion }: { r: CodeReview; alAccion?: () => void
           <Button variant="secundaria" aria-busy={accion.isPending || undefined}
             onClick={accion.isPending ? undefined : () => void ejecutar({ op: 'revert' }, 'Deshecho: vuelve el estado de la regla en unos segundos')}>
             {accion.isPending ? <Spinner /> : <Undo2 />}Deshacer la aprobación
+          </Button>
+        </div>
+      ) : null}
+      {/* P1: tras pegar el token con PR ya abiertos (o tras un fallo de red), la revisión más reciente se publica de nuevo. */}
+      {sePuedeRepublicar(g) && !sinRepublicar ? (
+        <div>
+          <Button variant="secundaria" aria-busy={accion.isPending || undefined}
+            onClick={accion.isPending ? undefined : () => void ejecutar({ op: 'republish' }, 'Encolado: lo publicamos en GitHub en unos segundos')}>
+            {accion.isPending ? <Spinner /> : <RefreshCw />}Publicar de nuevo
           </Button>
         </div>
       ) : null}

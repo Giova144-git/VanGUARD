@@ -732,16 +732,17 @@ function guardarBloqueo(org: string, body: unknown): MergeGateSaved {
 const nombreRepoGh = (c: ConnectionPublic) => String(c.meta.repo_full_name ?? '');
 
 // E54 (§6.5): override → ✓ «Aprobado a mano» al momento (el BACK lo encola); revert → vuelve el ✗ (o el error de una
-// revisión incompleta); reopen_pr → el PR queda «reabierto»; republish es P1 (409).
+// revisión incompleta); reopen_pr → el PR queda «reabierto»; republish (P1) → publica lo que ya se sabe de la revisión,
+// solo en la más reciente de ese PR (o de ese commit en un push).
 function accionBloqueo(org: string, id: string, body: unknown): RespuestaEscritura {
   exigirAdmin();
   const b = MergeGateAction.safeParse(body);
   if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
-  let r: CodeReview | undefined, cfg: CodeReviewConfig | null = null;
+  let r: CodeReview | undefined, cfg: CodeReviewConfig | null = null, recientes: CodeReview[] = [];
   for (const [k, v] of revisiones) {
     if (!k.startsWith(`${org}:`)) continue;
     r = v.estado.recent.find((x) => x.id === id);
-    if (r) { cfg = v.estado.config; break; }
+    if (r) { cfg = v.estado.config; recientes = v.estado.recent; break; }
   }
   if (!r) return falla(404, 'not_found', 'Esa revisión no existe');
   if (!cfg?.enabled || !cfg.gate?.enabled) falla(409, 'conflict', 'El bloqueo está apagado', { reason: 'apagado' });
@@ -759,8 +760,15 @@ function accionBloqueo(org: string, id: string, body: unknown): RespuestaEscritu
       if (g?.pr_action !== 'closed') falla(409, 'conflict', 'Ese pull request no está cerrado por VanGUARD', { reason: 'no_cerrado' });
       g!.pr_action = 'reopened';
       break;
-    default:
-      falla(409, 'conflict', '«Publicar de nuevo» llega pronto', { reason: 'p1' });
+    case 'republish': {
+      // recent va de la más nueva a la más vieja: la primera del mismo PR (o del mismo commit) es la última.
+      const ultima = recientes.find((x) => (r!.event === 'pull_request' ? x.event === 'pull_request' && x.pr_number === r!.pr_number : x.head_sha === r!.head_sha));
+      if (ultima?.id !== r.id) falla(409, 'conflict', 'Solo se publica de nuevo la revisión más reciente de ese PR o de ese commit', { reason: 'no_es_la_ultima' });
+      if (!g) return falla(409, 'conflict', 'Esta revisión es de antes del bloqueo', { reason: 'sin_calculo' });
+      const incompleta = r.status === 'failed' || (r.partial && r.error_code !== 'hallazgos_truncados');
+      Object.assign(g, { state: g.override_at ? 'success' : (g.blocking ?? 0) > 0 ? 'failure' : incompleta ? 'error' : 'success', error: null, published_at: ahora });
+      break;
+    }
   }
   return { ok: true, resultado: 'encolado' };
 }

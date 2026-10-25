@@ -1,6 +1,6 @@
 // Hooks de lectura (S14 §14.8). Intervalos de A7.5: Realtime es la vía normal de frescura y el polling solo el
 // respaldo (nunca baja de 10 s), siempre con la pestaña visible (refetchIntervalInBackground: false).
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AiUsage, AlertPrefs, CodeReviewState, Contact, ConnectionPublic, EstadoModulo, Finding, FixPromptResponse, Incident, IncidentDetail, McpTokenPublic, Me, Overview, PerfRunExt, ScanRun, Traffic, WikiDoc, WikiRun,
   type Module, type Severity,
@@ -169,12 +169,22 @@ export const useWikiDoc = (org: string, id: string | null, listo: boolean) => us
 // se valida aquí con zod aunque api() en producción solo avise: un E45 o E48 fuera de contrato deja la consulta en error y
 // la tarjeta no se pinta, en vez de tumbar la página de Codebase en el render. La clave es 'revision' (no
 // 'code-review', que la espec propone): lint-seguridad lee «code» como un secreto en una clave de Query.
+// Varias codebases (§6.2): siempre por conexión, también con un solo repo (un BACK sin B6 ignora el parámetro), y la
+// conexión va en la clave: setQueryData de E46 escribe en la de su pestaña.
 const revisando = (s: CodeReviewState | undefined) => (s?.recent ?? []).some((r) =>
   (r.status === 'queued' || r.status === 'running') && Date.now() - Date.parse(r.created_at) < 120_000);
-export const useRevisionCodigo = (org: string, rapidoHasta: number) => useQuery({
-  queryKey: ['org', org, 'revision'], refetchIntervalInBackground: false,
-  queryFn: async () => CodeReviewState.parse(await api(`/api/orgs/${org}/code-review`, { esquema: CodeReviewState })),
+const consultaRevision = (org: string, connectionId: string) => ({
+  queryKey: ['org', org, 'revision', connectionId], refetchIntervalInBackground: false,
+  queryFn: async () => CodeReviewState.parse(await api(`/api/orgs/${org}/code-review?connection_id=${encodeURIComponent(connectionId)}`, { esquema: CodeReviewState })),
+});
+export const useRevisionCodigo = (org: string, rapidoHasta: number, connectionId: string) => useQuery({
+  ...consultaRevision(org, connectionId),
   refetchInterval: (q) => (es404(q) ? false : Date.now() < rapidoHasta || revisando(q.state.data) ? 5_000 : 30_000),
+});
+// La chapa de cada pestaña de Codebase: E45 de cada repo, pedido una vez y sin sondeo (solo la pestaña elegida sondea,
+// con useRevisionCodigo sobre la misma clave).
+export const useRevisionesRepos = (org: string, ids: readonly string[]) => useQueries({
+  queries: ids.map((id) => ({ ...consultaRevision(org, id), refetchInterval: false as const })),
 });
 
 // Preferencias de avisos (E48): las lee Ajustes y la tarjeta de la revisión (el umbral de WhatsApp). 404 → no se pinta.

@@ -8,10 +8,11 @@ import { Button } from '@/componentes/ui/button';
 import { Spinner } from '@/componentes/ui/spinner';
 import { SOLO_LECTURA, useOrg } from '@/app/guardas';
 import { DetalleEnPanel } from '@/modulos/hallazgos/DetalleEnPanel';
-import { chapaEstado } from '@/modulos/conexiones/TarjetaConexion';
+import { chapaEstado, chapaGithub } from '@/modulos/conexiones/TarjetaConexion';
 import { sinBidi } from '@/lib/bidi';
 import { useConexiones, useEstadoModulo } from '@/lib/consultas';
 import { rutaDe } from '@/lib/destino';
+import { reposGithub } from '@/lib/repos';
 import { cuando } from '@/lib/formato';
 import { deMapa } from '@/lib/severidad';
 import { entradaNav, type IdNav } from '@/lib/nav';
@@ -40,17 +41,21 @@ export function PantallaModulo({ modulo, proveedor, children }: { modulo: Module
   const e = entradaNav(modulo)!;
   const q = useEstadoModulo(org.id, modulo);
   const conexiones = useConexiones(org.id);
-  const c = proveedor ? conexiones.data?.find((x) => x.provider === proveedor && x.kind === 'read') : undefined;
+  // GitHub admite varios repos (varias-codebases §6.2): uno por nombre, con la chapa «N repos» o la del que falla.
+  const repos = proveedor === 'github' ? reposGithub(conexiones.data) : [];
+  const c = proveedor === 'github' ? repos[0] : proveedor ? conexiones.data?.find((x) => x.provider === proveedor && x.kind === 'read') : undefined;
+  const chapa = proveedor === 'github' ? chapaGithub(repos) : c ? chapaEstado(c) : null;
+  const caida = proveedor === 'github' ? repos.some((x) => x.status !== 'active') : !!c && c.status !== 'active';
   const filtro = params.get('filtro');
   const est = q.data;
   // L3: la chapa roja de la conexión lleva al lado la acción que la arregla.
   const arreglo = !proveedor ? null
-    : est?.error === 'token_invalido' || (c && c.status !== 'active') ? 'Reconectar'
+    : est?.error === 'token_invalido' || caida ? 'Reconectar'
     : est?.error === 'sin_permiso' ? 'Ver' : null;
 
   const barra = (
     <BarraModulo titulo={e.nombre} descripcion={e.descripcion} contador={est?.contador ?? null} extra={<>
-      {c ? <Etiqueta {...chapaEstado(c)} /> : null}
+      {chapa ? <Etiqueta {...chapa} /> : null}
       {/* sin_conexion = aún no hay conexión (estado/modulo.ts del BACK): no es un fallo; lo explica el «Conecta …» de abajo (L3). */}
       {est && !est.ok && est.error === 'sin_conexion' ? (c ? <Etiqueta texto="Sin conexión activa" rol="neutra" /> : null)
         // limite_api se reintenta solo: no pide nada al usuario, así que no va en rojo (L3).

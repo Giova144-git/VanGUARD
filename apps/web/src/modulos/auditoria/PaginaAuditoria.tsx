@@ -8,6 +8,7 @@ import type { Finding, Module, ScanRun, Severity } from '@vanguard/contracts';
 import { BarraModulo } from '@/componentes/vg/BarraModulo';
 import { BotonAccion } from '@/componentes/vg/BotonAccion';
 import { ChapaSeveridad, Etiqueta } from '@/componentes/vg/Etiqueta';
+import { ChipRepo } from '@/componentes/vg/ChipRepo';
 import { GuiaModulo } from '@/componentes/vg/GuiaModulo';
 import { PuntajeBlindaje } from '@/componentes/vg/PuntajeBlindaje';
 import { PuntoEstado } from '@/componentes/vg/PuntoEstado';
@@ -23,7 +24,8 @@ import { useLanzarScan } from '@/lib/mutaciones';
 import { entradaNav } from '@/lib/nav';
 import { deMapa } from '@/lib/severidad';
 import { sinBidi } from '@/lib/bidi';
-import { PINTA_PASO, estadoPaso, estadoScan, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
+import { useRepoDeConexion } from '@/lib/repos';
+import { PINTA_PASO, estadoPaso, estadoScan, lineaRepo, notaPaso, textoFallo, textoPaso, textoPasoActual } from './pasos';
 
 // Una severidad fuera de contrato va al final, no da NaN al ordenar.
 const ORDEN_SEV: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -78,8 +80,29 @@ function Transcurrido({ run }: { run: ScanRun }) {
   return <span className="font-mono tabular-nums">{cronometro(fin - new Date(run.started_at).getTime())}</span>;
 }
 
+// Bajo el paso «Codebase», una línea por repo cuando la auditoría miró 2 o más (varias-codebases §6.4, F4b): nombre ·
+// estado en texto · N hallazgos · motivo. Sin `repos` (BACK sin B3) no se pinta nada y el paso dice lo de siempre.
+function ReposDelPaso({ repos, enCurso }: { repos: NonNullable<ScanRun['repos']>; enCurso: boolean }) {
+  return (
+    <ul className="flex basis-full flex-col gap-1 border-l-2 pl-4 text-[13px]" aria-label="Repos revisados">
+      {repos.map((r) => {
+        const l = lineaRepo(r, enCurso);
+        return (
+          <li key={r.connection_id} className="flex flex-wrap items-baseline gap-x-2">
+            <bdi dir="ltr" className="font-mono break-all">{sinBidi(r.repo_full_name)}</bdi>
+            <span className="text-muted-foreground">· {l.estado}{l.hallazgos != null ? ` · ${l.hallazgos} ${l.hallazgos === 1 ? 'hallazgo' : 'hallazgos'}` : ''}{l.motivo ? ` · ${l.motivo}` : ''}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function Pasos({ run }: { run: ScanRun }) {
   const org = useOrg();
+  // api() en producción deja pasar un cuerpo fuera de contrato: una entrada nula o sin nombre de texto se salta (sinBidi
+  // lanzaría y tumbaría la auditoría); estado y código desconocidos ya caen a su respaldo en lineaRepo.
+  const repos = Array.isArray(run.repos) ? run.repos.filter((r) => !!r && typeof r.repo_full_name === 'string') : [];
   return (
     <ol className="overflow-hidden rounded-xl border bg-card" aria-label="Pasos de la auditoría">
       {run.steps.map((s) => {
@@ -101,6 +124,8 @@ function Pasos({ run }: { run: ScanRun }) {
             <span className="text-sm text-muted-foreground">{p.texto}</span>
             {e === 'sin_mirar' && prov ? <Link to={`/o/${org.id}/connections/${prov}`} className="inline-flex items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4"><KeyRound className="size-3.5" />Sin conexión · Conectar</Link> : null}
             {e === 'error' && t.modulo ? <Link to={`/o/${org.id}/${t.modulo}`} className="inline-flex items-center gap-1 text-sm font-medium text-foreground underline underline-offset-4">Abrir {entradaNav(t.modulo)?.nombre}<ChevronRight className="size-3.5" /></Link> : null}
+            {s.name === 'repo' && repos.length >= 2
+              ? <ReposDelPaso repos={repos} enCurso={run.status === 'queued' || run.status === 'running'} /> : null}
           </li>
         );
       })}
@@ -155,6 +180,7 @@ function Corrida({ id }: { id: string }) {
   const q = useScan(org.id, id);
   const overview = useOverview(org.id);
   const hallazgos = useHallazgos(org.id, { status: 'open' });
+  const repoDe = useRepoDeConexion(org.id);   // chip del repo con 2 o más (varias-codebases §6.4)
   const { auditar, ocupado, error } = useLanzarYNavegar();
   const porId = useMemo(() => new Map((hallazgos.data ?? []).map((f) => [f.id, f])), [hallazgos.data]);
   const run = q.data;
@@ -205,6 +231,7 @@ function Corrida({ id }: { id: string }) {
             {ordenados.map((f) => (
               <li key={f.id} className="flex flex-wrap items-center gap-3 border-b px-4 py-3 last:border-b-0">
                 <ChapaSeveridad severity={f.severity} />
+                <ChipRepo repo={repoDe(f.connection_id)} />
                 <div className="flex min-w-0 flex-1 flex-col">
                   <span className="text-[15px] font-medium wrap-anywhere">{sinBidi(f.title)}</span>
                   <span className="truncate font-mono text-[13px] text-muted-foreground"><bdi dir="ltr">{sinBidi(f.resource)}</bdi></span>

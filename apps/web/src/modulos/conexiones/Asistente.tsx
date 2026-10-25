@@ -1,7 +1,7 @@
 // /o/:orgId/connections/:provider (S14 §14.10): pasos a la izquierda y formulario a la derecha (apilado en móvil).
 // Pre-guardas antes de enviar; el token vive solo en el campo y se vacía al enviar, con éxito o con error (L10).
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, CircleCheck, ExternalLink } from 'lucide-react';
 import type { ConnectionCreate, ConnectionCreated, Provider } from '@vanguard/contracts';
 import { Button } from '@/componentes/ui/button';
@@ -98,7 +98,9 @@ export default function Asistente() {
   const blindaje = provider === 'cloudflare' && llegada?.blindaje === true;
   const [ref, setRef] = useState('');
   const [zona, setZona] = useState(() => (blindaje && typeof llegada?.zone_id === 'string' ? llegada.zone_id : ''));
-  const [repo, setRepo] = useState('');
+  // «Reconectar» de GitHub llega con ?repo=: el mismo repo viene puesto y E8 reconecta esa conexión (varias-codebases §6.1).
+  const [params] = useSearchParams();
+  const [repo, setRepo] = useState(() => (provider === 'github' ? extraerRepo(params.get('repo') ?? '') ?? '' : ''));
   const [label, setLabel] = useState('');
   const [token, setToken] = useState('');
   const [accion, setAccion] = useState('');
@@ -193,7 +195,7 @@ export default function Asistente() {
               {p === 'github' ? <CampoTexto id="gh-repo" etiqueta="Repositorio" valor={repo} onCambio={setRepo} error={errores.repo} mono placeholder="owner/repo" /> : null}
               {p === 'ingest' ? <CampoTexto id="in-label" etiqueta="Nombre de tu app" valor={label} onCambio={setLabel} error={errores.label} placeholder="Tienda en producción" /> : null}
               {p !== 'ingest' ? <CampoToken id="tok" etiqueta={p === 'cloudflare' ? 'Token de lectura' : 'Token de acceso'} valor={token} onCambio={setToken}
-                error={errores.token} ayuda={p === 'supabase' ? 'Empieza por sbp_fc' : p === 'github' ? 'Empieza por github_pat_' : 'Solo permisos Zone · Read'} /> : null}
+                error={errores.token} ayuda={p === 'supabase' ? 'Empieza por sbp_fc' : p === 'github' ? 'Empieza por github_pat_. Crea un token para cada repo: el mismo token no se puede usar dos veces en una organización.' : 'Solo permisos Zone · Read'} /> : null}
               {p === 'cloudflare' ? <CampoToken id="tok-accion" etiqueta={blindaje ? 'Token de Modo blindaje' : 'Token de Modo blindaje (opcional)'} valor={accion} onCambio={setAccion}
                 error={errores.accion} ayuda="Solo Firewall Services · Edit. Sin él no podrás bloquear IPs desde VanGUARD." /> : null}
               {errores.general ? <p role="alert" className="rounded-lg border border-mal-borde bg-mal-relleno px-3 py-2 text-sm font-medium text-mal">{errores.general}</p> : null}

@@ -126,18 +126,23 @@ export function useGuardarContactos(org: string) {
 // en memoria por org y la tarjeta lo toma una vez con tomarSecreto(): si el admin cambia de pantalla justo al activar, lo
 // encuentra al volver. gcTime 0 y reset() lo sacan del MutationCache; nunca va a storage, a la URL ni a la caché de
 // consultas (la config de la respuesta entra sin el secreto y E45 no lo trae). La mutación no espera el refetch de E45.
+// Varias codebases (§6.2): el contenedor va por org Y conexión, para que el secreto de un repo no salte a otra pestaña.
 const secretos = new Map<string, string>();
-export function tomarSecreto(org: string): string | null {
-  const s = secretos.get(org) ?? null;
-  secretos.delete(org);
+export function tomarSecreto(org: string, connectionId: string): string | null {
+  const k = `${org}:${connectionId}`;
+  const s = secretos.get(k) ?? null;
+  secretos.delete(k);
   return s;
 }
 export const opcionesGuardarRevision = (org: string, qc: QueryClient) => ({
   gcTime: 0,
   mutationFn: (body: CodeReviewPut) => api(`/api/orgs/${org}/code-review`, { method: 'PUT', body, esquema: CodeReviewSaved }),
-  onSuccess: (r: CodeReviewSaved) => {
-    if (typeof r.webhook_secret === 'string') secretos.set(org, r.webhook_secret);
-    qc.setQueryData<CodeReviewState>(['org', org, 'revision'], (s) => (s && r.config ? { ...s, config: r.config } : s));
+  // La conexión sale de lo PEDIDO, no de r.config: api() en producción deja pasar una respuesta sin config y leerla
+  // aquí haría fallar una mutación que el servidor ya guardó (y perdería el secreto, que solo llega una vez).
+  onSuccess: (r: CodeReviewSaved, body: CodeReviewPut) => {
+    if (typeof r?.webhook_secret === 'string') secretos.set(`${org}:${body.connection_id}`, r.webhook_secret);
+    // setQueryData usa la clave EXACTA (la de la pestaña de ese repo); invalidateQueries, abajo, va por prefijo.
+    qc.setQueryData<CodeReviewState>(['org', org, 'revision', body.connection_id], (s) => (s && r?.config ? { ...s, config: r.config } : s));
   },
   onSettled: () => { void qc.invalidateQueries({ queryKey: ['org', org, 'revision'] }); },
 });

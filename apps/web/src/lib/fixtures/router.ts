@@ -1,8 +1,8 @@
 // Enrutador falso del modo fixtures (S14 §14.19). Único archivo que conoce los fixtures; solo se carga con
 // import dinámico desde api.ts, así que no entra en el bundle de producción. Cero peticiones de red.
 import {
-  fixtures as fx, AlertPrefsIn, CodeReviewPut, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, ScanCreate, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
-  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo,
+  fixtures as fx, AlertPrefsIn, CodeReviewPut, CodeReviewQuery, MAX_REPOS_GITHUB, McpTokenCreate, type McpTokenCreated, type McpTokenPublic, RepoFullName, ScanCreate, WikiRepoRef, ZipResult, type ActionPublic, type AlertPrefs, type CodeReviewSaved,
+  type CodeReviewState, type ConnectionCreated, type ConnectionPublic, type EstadoModulo, type Overview,
   type Finding, type Incident, type IncidentDetail, type Me, type Module, type Org, type PermCheck, type ScanRun, type TimelineItem,
   type WikiRun, type ZipFinding,
 } from '@vanguard/contracts';
@@ -59,6 +59,29 @@ const listaDe = (org: string) => {
 };
 const conectado = (org: string, p: ConnectionPublic['provider']) =>
   listaDe(org).some((c) => c.provider === p && c.kind === 'read' && c.status === 'active');
+
+// ── Varias codebases (asignaciones/varias-codebases.md §6.5) ─────────────────────────────────────────────────────
+// Un repo = una conexión GitHub de lectura. Las parejas viejas de «Reconectar» son el mismo repo (nombre en minúsculas).
+const nombreGh = (c: ConnectionPublic) => String(c.meta.repo_full_name ?? '').toLowerCase();
+const lecturasGh = (org: string) => listaDe(org).filter((c) => c.provider === 'github' && c.kind === 'read');
+// Un representante por repo, en el orden de E7: la activa del grupo o, si ninguna, la más antigua.
+function reposGh(org: string): ConnectionPublic[] {
+  const grupos = new Map<string, ConnectionPublic>();
+  for (const c of lecturasGh(org)) {
+    const k = nombreGh(c) || c.id, previa = grupos.get(k);
+    if (!previa || (previa.status !== 'active' && c.status === 'active')) grupos.set(k, c);
+  }
+  return [...grupos.values()];
+}
+// Tokens GitHub ya usados en cada org: una huella corta en memoria (FNV-1a), nunca el token. huella → conexión.
+const huellasGh = new Map<string, Map<string, string>>();
+const huellasDe = (org: string) => huellasGh.get(org) ?? huellasGh.set(org, new Map()).get(org)!;
+function huella(t: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16);
+}
+const REPO_2 = String(fx.conexionGithub2.meta.repo_full_name);
 
 // E6 de una org sin los datos de la demo: la forma de la demo con todo «sin mirar» (n:null, comprobado:false), como antes
 // de la primera auditoría. Igual que estado/modulo.ts del BACK: sin conexión read activa del proveedor, ok:false con
@@ -119,12 +142,33 @@ function conectarFalso(org: string, body: unknown): ConnectionCreated {
         last4: b.action_token.slice(-4), scopes: ['firewall_read'] };
       checks = CHECKS.cloudflare;
       break;
-    case 'github':
+    case 'github': {
+      // Como E8 con B1 (varias-codebases §2.1): mismo repo activo → 409 repo_duplicado; mismo repo no activo → la MISMA
+      // conexión vuelve a active; 5 repos distintos → 409 tope_repos; el mismo token que otra conexión → 409 sin reason.
       guardaFalsa(b.pat ?? '');
-      connection = { ...base, provider: 'github', label: `GitHub · ${b.repo_full_name}`, last4: (b.pat ?? '').slice(-4),
-        scopes: ['metadata:read', 'contents:read'], meta: { repo_full_name: b.repo_full_name, default_branch: 'main' } };
+      const repo = String(b.repo_full_name ?? '');
+      const previas = lecturasGh(org);
+      const mismo = previas.filter((c) => nombreGh(c) === repo.toLowerCase());
+      if (mismo.some((c) => c.status === 'active')) falla(409, 'conflict', 'Ese repo ya está conectado.', { reason: 'repo_duplicado' });
+      if (!mismo.length && new Set(previas.map(nombreGh)).size >= MAX_REPOS_GITHUB)
+        falla(409, 'conflict', `Ya tienes ${MAX_REPOS_GITHUB} repos conectados: quita uno para conectar otro.`, { reason: 'tope_repos' });
+      const reconectar = mismo[0];                                  // la más antigua: es la que tiene los hallazgos
+      const h = huella((b.pat ?? '').trim());
+      const duena = huellasDe(org).get(h);
+      if (duena && duena !== reconectar?.id) falla(409, 'conflict', 'Ese token ya está conectado en esta organización.');
+      if (reconectar) {
+        Object.assign(reconectar, { status: 'active', last4: (b.pat ?? '').slice(-4), last_checked_at: ahora, last_error: null });
+        huellasDe(org).set(h, reconectar.id);
+        return { connection: structuredClone(reconectar), action_connection: null, checks: CHECKS.github, ingest_secret: null };
+      }
+      connection = repo.toLowerCase() === REPO_2.toLowerCase() ? structuredClone(fx.conexionGithub2 as ConnectionPublic)
+        : { ...base, provider: 'github', label: `GitHub · ${repo}`, last4: (b.pat ?? '').slice(-4), scopes: ['metadata:read', 'contents:read'],
+          // La org ya tenía otro repo: los hallazgos de este llevan el repo en la clave (§2.2).
+          meta: { repo_full_name: repo, default_branch: 'main', ...(previas.length ? { hallazgos_por_repo: true } : {}) } };
+      huellasDe(org).set(h, connection.id);
       checks = CHECKS.github;
       break;
+    }
     case 'ingest':
       connection = { ...base, provider: 'ingest', label: b.label ?? 'Mi app', last4: null, scopes: [], meta: { purpose: 'ingest' } };
       ingest_secret = 'vgi_' + crypto.randomUUID().replace(/-/g, '');
@@ -154,6 +198,7 @@ function quitarFalso(org: string, id: string) {
   const i = lista.findIndex((x) => x.id === id);
   if (i < 0) falla(404, 'not_found', 'Esa conexión no existe');
   const [c] = lista.splice(i, 1);
+  for (const [h, id] of huellasDe(org)) if (id === c!.id) huellasDe(org).delete(h);   // su token se puede volver a usar
   const url = REVOCAR[c!.provider];
   return new Response(null, { status: 204, headers: url ? { 'x-vg-revoke-url': url } : {} });
 }
@@ -169,7 +214,7 @@ const hallazgosDe = (org: string) => {
   return delOrg(org);
 };
 const hallazgo = (org: string, id: string) => {
-  if (id === fx.hallazgoRevision.id) revisionDe(org);   // ?finding= del WhatsApp puede llegar antes que E45, que lo añade
+  if (id === fx.hallazgoRevision.id) sembrarHallazgoRevision(org);   // ?finding= del WhatsApp puede llegar antes que E45
   return hallazgosDe(org).find((f) => f.id === id) ?? falla(404, 'not_found', 'Este hallazgo no existe');
 };
 
@@ -207,6 +252,26 @@ const scans = new Map<string, { org: string; inicio: number }>();
 const PROVEEDOR_PASO: Partial<Record<ScanRun['steps'][number]['name'], ConnectionPublic['provider']>> = {
   supabase: 'supabase', cloudflare: 'cloudflare', repo: 'github',
 };
+// Con dos o más repos, E12 trae una línea por repo (ScanRun.repos; varias-codebases §6.5): la del fixture para los dos
+// repos de la demo (scanDoneDosRepos) y, para otro, limpio si su conexión está activa o «Conexión quitada» si no.
+function reposDeAuditoria(org: string): ScanRun['repos'] {
+  const repos = reposGh(org);
+  if (repos.length < 2) return undefined;
+  return repos.slice(0, MAX_REPOS_GITHUB).map((c) => {
+    const delFixture = fx.scanDoneDosRepos.repos.find((x) => x.connection_id === c.id);
+    if (c.status === 'active' && delFixture && !vacia(org)) return delFixture;
+    const repo_full_name = String(c.meta.repo_full_name ?? '').slice(0, 140);
+    return c.status === 'active' ? { connection_id: c.id, repo_full_name, status: 'done' as const, findings: 0 }
+      : { connection_id: c.id, repo_full_name, status: 'skipped' as const, error_code: 'no_connection' };
+  });
+}
+// E5 con B4: con dos o más repos, cada hallazgo de «Ahora» lleva su connection_id (el FRONT pinta el chip del repo).
+function overviewDe(org: string): Overview {
+  if (vacia(org)) return fx.overviewVacio as Overview;
+  if (reposGh(org).length < 2) return fx.overview as Overview;
+  const porId = new Map(hallazgosDe(org).map((f) => [f.id, f.connection_id]));
+  return { ...(fx.overview as Overview), ahora: fx.overview.ahora.map((a) => (a.kind === 'finding' ? { ...a, connection_id: porId.get(a.id) ?? null } : a)) };
+}
 function iniciarScan(org: string, body: unknown) {
   if ((body as { kind?: unknown } | null)?.kind === 'zip') return iniciarZip(org, body);
   const id = crypto.randomUUID();
@@ -218,7 +283,10 @@ function verScan(org: string, id: string): ScanRun {
   if (zip?.org === org) return verZip(id, zip);
   const corrida = scans.get(id);
   if (corrida?.org !== org) {
-    if (!corrida && !vacia(org) && id === fx.scanDone.id) return fx.scanDone as ScanRun;   // scanRunning lleva el mismo id
+    if (!corrida && !vacia(org) && id === fx.scanDone.id) {                                // scanRunning lleva el mismo id
+      const repos = reposDeAuditoria(org);
+      return repos ? { ...(fx.scanDone as ScanRun), repos } : fx.scanDone as ScanRun;
+    }
     return falla(404, 'not_found', 'Esa auditoría no existe');
   }
   const { inicio } = corrida;
@@ -236,11 +304,12 @@ function verScan(org: string, id: string): ScanRun {
   const hecho = t >= 1;
   const actual = steps.find((s) => s.status === 'running')?.name ?? null;
   const puntaje = !sinDemo && t >= (n - 1) / n;
+  const repos = steps.find((s) => s.name === 'repo')?.status === 'done' ? reposDeAuditoria(org) : undefined;
   return {
     ...base, id, kind: 'full_audit', status: hecho ? 'succeeded' : 'running', progress: Math.round(t * 100), step: hecho ? null : actual, steps,
     score: puntaje ? base.score : null, coverage: puntaje ? base.coverage : null, summary: hecho && !sinDemo ? base.summary : null,
     created_at: new Date(inicio).toISOString(), started_at: new Date(inicio).toISOString(),
-    finished_at: hecho ? new Date(inicio + DURACION).toISOString() : null,
+    finished_at: hecho ? new Date(inicio + DURACION).toISOString() : null, ...(repos ? { repos } : {}),
   };
 }
 
@@ -541,25 +610,41 @@ function exigirAdmin() { if (tipoSesionFalsa() === 'anonima') falla(403, 'forbid
 // Revisión de código (E45/E46, asignaciones/revision-codigo.md §4.1 y §6.3). La org de demo arranca con el fixture
 // (webhook conectado y el push con la clave de Stripe); una org sin GitHub, con available:false. Tras activar, la 3.ª
 // consulta simula el ping de GitHub («Esperando a GitHub» → «Conectada»), como «VERIFICAR» en contactos.
+// Varias codebases (§6.5): un estado por conexión (`${org}:${connection_id}`). En la demo, el del repo de la víctima es el
+// fixture y el del 2.º repo, codeReviewStateRepo2 (sin activar); cualquier otra conexión GitHub empieza sin config.
 const revisiones = new Map<string, { estado: CodeReviewState; consultas: number; altaVista?: boolean }>();
-const revisionDe = (org: string) => {
-  if (!revisiones.has(org)) {
+function sembrarHallazgoRevision(org: string) {
+  if (!vacia(org) && !delOrg(org).some((f) => f.id === fx.hallazgoRevision.id)) delOrg(org).push(structuredClone(fx.hallazgoRevision as Finding));
+}
+const CONN_REVISION = fx.codeReviewState.config.connection_id;
+function revisionDe(org: string, gh: ConnectionPublic) {
+  sembrarHallazgoRevision(org);
+  const k = `${org}:${gh.id}`;
+  if (!revisiones.has(k)) {
     const demo = !vacia(org);
-    if (demo && !delOrg(org).some((f) => f.id === fx.hallazgoRevision.id)) delOrg(org).push(structuredClone(fx.hallazgoRevision as Finding));
-    revisiones.set(org, { consultas: 0, estado: demo ? structuredClone(fx.codeReviewState as CodeReviewState) : { available: false, reason: 'sin_conexion', config: null, recent: [] } });
+    const estado = demo && gh.id === CONN_REVISION ? fx.codeReviewState : demo && gh.id === fx.conexionGithub2.id ? fx.codeReviewStateRepo2
+      : { available: true, reason: null, config: null, recent: [] };
+    revisiones.set(k, { consultas: 0, estado: structuredClone(estado as CodeReviewState) });
   }
-  return revisiones.get(org)!;
-};
-const githubDe = (org: string) => listaDe(org).find((c) => c.provider === 'github' && c.kind === 'read');
+  return revisiones.get(k)!;
+}
+// Sin connection_id, la principal (B0): la activa más antigua; si ninguna está activa, la más antigua. Con él, esa
+// conexión GitHub de lectura de la org en cualquier estado (ajena o inexistente → undefined).
+const githubDe = (org: string, id?: string) => id === undefined
+  ? lecturasGh(org).find((c) => c.status === 'active') ?? lecturasGh(org)[0]
+  : lecturasGh(org).find((c) => c.id === id);
 // 'vgw_' + 32 bytes de getRandomValues en base64url sin relleno = 43 caracteres (CodeReviewSaved; §6.3).
 const secretoWebhook = () => 'vgw_' + btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-function verRevision(org: string): CodeReviewState {
-  const r = revisionDe(org);
-  const gh = githubDe(org);
+function verRevision(org: string, q: URLSearchParams): CodeReviewState {
+  const p = CodeReviewQuery.safeParse({ connection_id: q.get('connection_id') || undefined });
+  if (!p.success) return falla(422, 'invalid_body', 'Revisa la conexión', { field_errors: { connection_id: ['Id no válido'] } });
+  const gh = githubDe(org, p.data.connection_id);
+  if (!gh) return { available: false, reason: 'sin_conexion', config: null, recent: [] };
+  const r = revisionDe(org, gh);
   // La conexión puede cambiar en Conexiones: available y reason se recalculan siempre.
-  r.estado.available = gh?.status === 'active';
-  r.estado.reason = !gh ? 'sin_conexion' : gh.status !== 'active' ? 'conexion_inactiva' : null;
+  r.estado.available = gh.status === 'active';
+  r.estado.reason = gh.status !== 'active' ? 'conexion_inactiva' : null;
   const c = r.estado.config;
   if (c?.enabled && c.state === 'waiting_ping' && ++r.consultas >= 3) {
     Object.assign(c, { state: 'connected', last_ping_at: new Date().toISOString(), hook_events: ['pull_request', 'push'] });
@@ -573,10 +658,9 @@ function guardarRevision(org: string, body: unknown): CodeReviewSaved {
   const b = CodeReviewPut.safeParse(body);
   if (!b.success) falla(422, 'invalid_body', 'Revisa los campos marcados');
   const { connection_id, enabled, rotate_secret } = b.data!;
-  const gh = githubDe(org);
-  if (!gh || gh.id !== connection_id) falla(404, 'not_found', 'Esa conexión no existe');
-  if (gh!.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
-  const r = revisionDe(org);
+  const gh = githubDe(org, connection_id) ?? falla(404, 'not_found', 'Esa conexión no existe');
+  if (gh.status !== 'active') falla(409, 'conflict', 'La conexión de GitHub no está activa', { reason: 'conexion_inactiva' });
+  const r = revisionDe(org, gh);
   r.consultas = 0;
   let secreto: string | null = null;
   if (rotate_secret && r.estado.config) {
@@ -589,12 +673,12 @@ function guardarRevision(org: string, body: unknown): CodeReviewSaved {
   } else if (!r.estado.config) {
     secreto = secretoWebhook();
     const id = crypto.randomUUID();
-    const meta = gh!.meta as { repo_full_name?: unknown; default_branch?: unknown };
+    const meta = gh.meta as { repo_full_name?: unknown; default_branch?: unknown };
     r.estado.config = { id, connection_id, repo_full_name: typeof meta.repo_full_name === 'string' ? meta.repo_full_name : 'equipo/repo',
       branch: typeof meta.default_branch === 'string' ? meta.default_branch : 'main', enabled, state: enabled ? 'waiting_ping' : 'off',
       webhook_url: `https://officialvanguard.com/webhooks/github/${id}`, secret_last4: secreto.slice(-4), hook_events: [],
       last_ping_at: null, last_event_at: null, last_error: null };
-  } else if (enabled && esDemo(org) && !r.altaVista) {
+  } else if (enabled && esDemo(org) && gh.id === CONN_REVISION && !r.altaVista) {
     // La demo arranca con la config hecha: la primera vez que se activa desde aquí hace de alta (codeReviewSaved, §6.3)
     // para que se vean el secreto de una vez y «Esperando a GitHub» → «Conectada». El BACK real solo da el secreto al crear.
     r.altaVista = true;
@@ -651,27 +735,51 @@ function probarCanal(org: string, body: unknown) {
 
 // ── DeepWiki (E40–E44) ───────────────────────────────────────────────────────────────────────────────────────
 // E42 devuelve wikiRunRunning en las primeras consultas de cada corrida y luego wikiRunDone, para ver el progreso.
-// fx.wikiRuns solo existen en la demo con datos; en otra org cada generación es una corrida nueva de esa org.
+// fx.wikiRuns solo existen en la demo con datos (son del repo de la víctima); cualquier otra generación es una corrida
+// nueva de esa org y de su repo. E43 filtra por ?repo= sin distinguir mayúsculas (varias-codebases §4.1).
 const consultasWiki = new Map<string, number>();
-const wikisNuevas = new Map<string, string>();                  // corrida → org
+const wikisNuevas = new Map<string, { org: string; repo: string }>();   // corrida → org y repo
 function verWikiRun(org: string, id: string, contar = true): WikiRun {
-  const deOrg = wikisNuevas.get(id);
-  const deDemo = deOrg === undefined && !vacia(org);
-  if (deOrg !== org && !deDemo) return falla(404, 'not_found', 'Esa wiki no existe');
+  const nueva = wikisNuevas.get(id);
+  const deDemo = nueva === undefined && !vacia(org);
+  if (nueva?.org !== org && !deDemo) return falla(404, 'not_found', 'Esa wiki no existe');
   if (deDemo && id !== fx.wikiRunDone.id) return fx.wikiRuns.find((x) => x.id === id) ?? falla(404, 'not_found', 'Esa wiki no existe');
   const n = (consultasWiki.get(id) ?? 0) + (contar ? 1 : 0);   // sin contar: el doc no adelanta el progreso
   consultasWiki.set(id, n);
-  return n <= 3 ? { ...fx.wikiRunRunning, id } : { ...fx.wikiRunDone, id };
+  const repo = nueva ? { repo_full_name: nueva.repo } : {};
+  return n <= 3 ? { ...fx.wikiRunRunning, id, ...repo } : { ...fx.wikiRunDone, id, ...repo };
 }
-const listarWikis = (org: string) => vacia(org)
-  ? [...wikisNuevas].filter(([, o]) => o === org).map(([id]) => verWikiRun(org, id, false)).reverse()   // más recientes primero
-  : fx.wikiRuns;
+function listarWikis(org: string, q: URLSearchParams) {
+  const repo = q.get('repo');
+  if (repo !== null && !RepoFullName.safeParse(repo).success) falla(422, 'invalid_body', 'Repo no válido', { field_errors: { repo: ['owner/repo'] } });
+  const nuevas = [...wikisNuevas].filter(([id, w]) => w.org === org && id !== fx.wikiRunDone.id).map(([id]) => verWikiRun(org, id, false)).reverse();   // más recientes primero
+  const todas = vacia(org) ? nuevas : [...nuevas, ...fx.wikiRuns];
+  return repo === null ? todas : todas.filter((r) => r.repo_full_name.toLowerCase() === repo.toLowerCase());
+}
+// B8 (§7): un connection_id tiene que ser una conexión GitHub de lectura activa de la org y del MISMO repo; si no, 404.
+function conexionWiki(org: string, b: { connection_id?: unknown; repo_full_name?: unknown }) {
+  if (b.connection_id === undefined) return;
+  const repo = typeof b.repo_full_name === 'string' ? b.repo_full_name.toLowerCase() : '';
+  const c = listaDe(org).find((x) => x.id === b.connection_id && x.provider === 'github' && x.kind === 'read' && x.status === 'active');
+  if (!c || String(c.meta.repo_full_name ?? '').toLowerCase() !== repo) falla(404, 'not_found', 'Conexión no encontrada');
+}
+function estimarWiki(org: string, body: unknown) {
+  exigirAdmin();
+  const b = WikiRepoRef.safeParse(body);
+  if (!b.success) return falla(422, 'invalid_body', 'Revisa los campos marcados', camposMalos(b.error));
+  conexionWiki(org, b.data);
+  return { ...fx.wikiEstimate, repo_full_name: b.data.repo_full_name };   // solo lee GitHub; cached_run_id null
+}
 function generarWiki(org: string, body: unknown) {
   exigirAdmin();
-  const b = (body ?? {}) as { max_usd?: number };
+  const b = (body ?? {}) as { max_usd?: number; repo_full_name?: unknown; connection_id?: unknown };
   if (b.max_usd != null && (b.max_usd <= 0 || b.max_usd > 5)) falla(422, 'invalid_body', 'El tope va de 0 a 5 USD');
-  const id = vacia(org) ? crypto.randomUUID() : fx.wikiRunDone.id;
-  if (vacia(org)) wikisNuevas.set(id, org);
+  conexionWiki(org, b);
+  const repo = typeof b.repo_full_name === 'string' ? b.repo_full_name : fx.wikiRunDone.repo_full_name;
+  // En la demo, la del repo de la víctima es la corrida del fixture (con su documento); la de otro repo, una nueva.
+  const delFixture = !vacia(org) && repo.toLowerCase() === fx.wikiRunDone.repo_full_name.toLowerCase();
+  const id = delFixture ? fx.wikiRunDone.id : crypto.randomUUID();
+  if (!delFixture) wikisNuevas.set(id, { org, repo });
   consultasWiki.set(id, 0);                                      // cada generación vuelve a mostrar el progreso
   return { wiki_run_id: id, cached: false };
 }
@@ -703,7 +811,7 @@ const rutas: [string, RegExp, H][] = [
   ['GET',  r('\\/api\\/me'),                      () => me()],
   ['POST', r('\\/api\\/demo\\/join'),             () => ({ org_id: ORG_DEMO })],
   ['POST', r('\\/api\\/orgs'),                    (_m, b) => crearOrg(b)],
-  ['GET',  r(`${ORG}\\/overview`),                (m) => vacia(m[1]!) ? fx.overviewVacio : fx.overview],
+  ['GET',  r(`${ORG}\\/overview`),                (m) => overviewDe(m[1]!)],
   ['GET',  r(`${ORG}\\/modules\\/(\\w+)\\/state`), (m) => estadoModulo(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/connections`),             (m) => structuredClone(listaDe(m[1]!))],   // copia: TanStack no ve cambios en el mismo array
   ['POST', r(`${ORG}\\/connections`),             (m, b) => conectarFalso(m[1]!, b)],
@@ -724,14 +832,14 @@ const rutas: [string, RegExp, H][] = [
   ['POST', r(`${ORG}\\/actions\\/([^/]+)\\/undo`),   (m) => deshacerFalso(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/traffic`),                 (m) => traficoDe(m[1]!)],
   ['GET',  r(`${ORG}\\/scans\\/([^/]+)`),         (m) => verScan(m[1]!, m[2]!)],
-  ['POST', r(`${ORG}\\/wiki\\/estimate`),         () => { exigirAdmin(); return fx.wikiEstimate; }],   // solo lee GitHub; cached_run_id null
+  ['POST', r(`${ORG}\\/wiki\\/estimate`),         (m, b) => estimarWiki(m[1]!, b)],
   ['POST', r(`${ORG}\\/wiki\\/runs`),             (m, b) => generarWiki(m[1]!, b)],
-  ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m) => listarWikis(m[1]!)],
-  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), (m) => ({ ...fx.wikiDoc, run_id: verWikiRun(m[1]!, m[2]!, false).id })],
+  ['GET',  r(`${ORG}\\/wiki\\/runs`),             (m, _b, q) => listarWikis(m[1]!, q)],
+  ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)\\/doc`), (m) => { const w = verWikiRun(m[1]!, m[2]!, false); return { ...fx.wikiDoc, run_id: w.id, repo_full_name: w.repo_full_name }; }],
   ['GET',  r(`${ORG}\\/wiki\\/runs\\/([^/]+)`),   (m) => verWikiRun(m[1]!, m[2]!)],
   ['GET',  r(`${ORG}\\/contacts`),                (m) => listarContactos(m[1]!)],
   ['PUT',  r(`${ORG}\\/contacts`),                (m, b) => guardarContactos(m[1]!, b)],
-  ['GET',  r(`${ORG}\\/code-review`),             (m) => verRevision(m[1]!)],
+  ['GET',  r(`${ORG}\\/code-review`),             (m, _b, q) => verRevision(m[1]!, q)],
   ['PUT',  r(`${ORG}\\/code-review`),             (m, b) => guardarRevision(m[1]!, b)],
   ['GET',  r(`${ORG}\\/alert-prefs`),             (m) => verPrefs(m[1]!)],
   ['PUT',  r(`${ORG}\\/alert-prefs`),             (m, b) => guardarPrefs(m[1]!, b)],

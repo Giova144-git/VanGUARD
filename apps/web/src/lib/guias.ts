@@ -112,7 +112,7 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Después de guardar, solo verás los últimos 4 caracteres del token.',
   ] },
   settings: { titulo: '¿Qué puedes ajustar?', pasos: [
-    'A quién avisamos y por qué canal: siempre por WhatsApp y, en un ataque crítico, también te llama Guardia si lo activas en el contacto.',
+    'A quién avisamos y por qué canal: siempre por WhatsApp y, en un ataque crítico, te llega un botón para llamar a Guardia si lo activas en el contacto. La llamada de la revisión de código llega próximamente.',
     'Prueba WhatsApp antes de una emergencia para saber que el aviso llega.',
   ] },
 };

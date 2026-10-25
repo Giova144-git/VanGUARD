@@ -1,6 +1,6 @@
 
 # Plan interno del equipo: nunca se publica (16.9)
-
+/docs
 # Caché local de las CLI de Cloudflare (cf, wrangler)
 /.cloudflare/
 .wrangler/

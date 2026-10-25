@@ -23,16 +23,18 @@ export const textoPaso = (name: unknown): TextoPaso =>
 export const esMedicion = (kind: unknown) => kind === 'lighthouse';
 
 // ScanRun.step también vale 'waiting_result' entre E11 y E23 (ZIP): no es un paso de la lista, es la espera del navegador.
-// En una medición (kind 'lighthouse', S10 §10.2) steps[] lleva solo 'psi' y step recorre psi-<estrategia> → perf-compare → fin.
+// En una medición (kind 'lighthouse') steps[] lleva solo 'psi'. Los psi-<estrategia>, perf-compare y fin de S10 §10.2 se
+// leen por si llegan; el BACK de hoy no los escribe.
 const PASO_ACTUAL: Record<string, string> = {
   waiting_result: 'esperando el resultado de tu ZIP',
-  'psi-mobile': 'midiendo móvil (3 repeticiones)… ~1 min', 'psi-desktop': 'midiendo escritorio (3 repeticiones)… ~1 min',
+  'psi-mobile': 'midiendo móvil con PageSpeed Insights', 'psi-desktop': 'midiendo escritorio con PageSpeed Insights',
   'perf-compare': 'comparando con la medición anterior', fin: 'guardando la medición',
 };
-// El BACK de hoy (vg_claim_step) deja step = 'psi' durante toda la medición: sin la estrategia, el texto no la nombra.
+// El BACK (vg_claim_step) deja step = 'psi' durante toda la medición: una sola pasada de Lighthouse (~10 s; PSI admite
+// hasta 2 min). Sin la estrategia, el texto no la nombra.
 export const textoPasoActual = (step: unknown, kind?: unknown): string | null =>
   typeof step !== 'string' || !step ? null
-    : step === 'psi' && esMedicion(kind) ? 'midiendo con PageSpeed Insights… ~1 min'
+    : step === 'psi' && esMedicion(kind) ? 'midiendo con PageSpeed Insights (suele tardar menos de un minuto)'
     : deMapa(PASO_ACTUAL, step, textoPaso(step).nombre);
 
 // error_code de un paso terminado (repo y zip, S09 §09.11): lo que no se llegó a mirar entero no sale en verde.

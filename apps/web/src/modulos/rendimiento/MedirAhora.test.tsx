@@ -1,5 +1,6 @@
-// «Medir ahora» (F-17): quién puede medir, la URL por defecto, el cuerpo exacto de E11 y la navegación, los cuatro errores
-// del servidor en su sitio y la bandera por 404. Sin jsdom: renderToStaticMarkup con la caché a mano y api() mockeada.
+// «Medir ahora» (F-17): quién puede medir (solo owner y admin; el viewer y el anónimo no ven nada), el campo libre con sus
+// sugerencias y su ejemplo, sin zona de Cloudflare, el cuerpo exacto de E11 y la navegación, los errores del servidor en
+// su sitio (422, 409, 429) y la bandera por 404. Sin jsdom: renderToStaticMarkup con la caché a mano y api() mockeada.
 import { describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -13,7 +14,7 @@ import { ApiError } from '@/lib/errores';
 import { TEXTO_ROL } from '@/lib/severidad';
 import PaginaAuditoria from '@/modulos/auditoria/PaginaAuditoria';
 import { AvisoMedir, MedirAhora } from './MedirAhora';
-import { cuerpoMedir, errorMedir, etiquetaPrevia, medir, urlsConocidas } from './medir';
+import { cuerpoMedir, EN_CURSO, errorMedir, etiquetaPrevia, medir, puedeMedir, urlsConocidas, URL_VICTIMA_DEMO } from './medir';
 
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
 vi.mock('@/componentes/vg/GraficaComparativa', () => ({ GraficaComparativa: () => null }));
@@ -24,6 +25,10 @@ const { default: PaginaRendimiento } = await import('./PaginaRendimiento');
 const ORG = fx.me.orgs[0]!.id;
 const ADMIN: OrgActual = { ...fx.me.orgs[0]!, me: fx.me, puedeEscribir: true };
 const VIEWER: OrgActual = { ...ADMIN, role: 'viewer', me: fx.meViewer, puedeEscribir: false };
+const ROL_ADMIN: OrgActual = { ...ADMIN, role: 'admin' };
+// El anónimo de «Ver demo» con un rol de escritura: RequireOrg le da puedeEscribir false.
+const ANONIMO: OrgActual = { ...ADMIN, me: fx.meViewer, puedeEscribir: false };
+const OTRA: OrgActual = { ...ADMIN, id: 'f1000000-0000-4000-8000-0000000000a1', name: 'Tienda propia', is_demo: false };
 const RUNS = fx.perfRuns as PerfRunExt[];
 const URL_DEMO = 'https://demo.officialvanguard.com/';
 const SCAN = 'c5000000-0000-4000-8000-000000000001';
@@ -47,6 +52,8 @@ const conRuns = (runs: unknown, org = ADMIN): [QueryKey, unknown][] => [
   [['org', org.id, 'perf'], runs]];
 // La etiqueta de apertura del <button type="submit"> de «Medir ahora».
 const botonMedir = (html: string) => html.match(/<button[^>]*type="submit"[^>]*>(?=(?:(?!<\/button>).)*Medir ahora<\/button>)/s)?.[0] ?? '';
+// La página sin la sección de «Medir ahora» (no lleva <section> anidadas).
+const sinMedir = (html: string) => html.replace(/<section[^>]*aria-labelledby="t-medir"[^>]*>[\s\S]*?<\/section>/, '');
 
 describe('Medir ahora · quién y qué trae por defecto', () => {
   it('owner y admin: botón principal de 56 px habilitado, con la URL y la etiqueta de la última medición', () => {
@@ -60,10 +67,20 @@ describe('Medir ahora · quién y qué trae por defecto', () => {
     expect(html).not.toContain('Solo un admin puede medir');
   });
 
-  it('viewer y anónimo de la demo: deshabilitado con «Solo un admin puede medir. Estás viendo la demo.»', () => {
-    const html = pintar(<PaginaRendimiento />, { org: VIEWER, datos: conRuns(RUNS, VIEWER) });
-    expect(botonMedir(html)).toContain('disabled=""');
-    expect(html).toContain('Solo un admin puede medir. Estás viendo la demo.');
+  it('solo owner y admin: el viewer y el anónimo de «Ver demo» no ven ni el botón ni el formulario; el resto, igual', () => {
+    expect([ADMIN, ROL_ADMIN, VIEWER, ANONIMO].map(puedeMedir)).toEqual([true, true, false, false]);
+    expect(botonMedir(pintar(<PaginaRendimiento />, { org: ROL_ADMIN, datos: conRuns(RUNS, ROL_ADMIN) }))).not.toContain('disabled=""');
+    const admin = pintar(<PaginaRendimiento />, { datos: conRuns(RUNS) });
+    for (const org of [VIEWER, ANONIMO]) {
+      expect(pintar(<MedirAhora />, { org, datos: conRuns(RUNS, org) })).toBe('');
+      const html = pintar(<PaginaRendimiento />, { org, datos: conRuns(RUNS, org) });
+      expect(html).not.toContain('aria-labelledby="t-medir"');
+      expect(html).not.toContain('type="submit"');
+      expect(html).not.toContain('<datalist');
+      expect(html).not.toContain('Solo un admin puede medir');
+      expect(html).toContain('aria-labelledby="t-historico"');
+      expect(html).toBe(sinMedir(admin));                                    // el resto de Rendimiento, idéntico
+    }
   });
 
   it('un admin de una org sin la demo, sin mediciones: «Medir ahora» sigue arriba de «Aún no medimos tu web»', () => {
@@ -74,28 +91,43 @@ describe('Medir ahora · quién y qué trae por defecto', () => {
     expect(html).toContain('value=""');
   });
 
-  it('sin zona de Cloudflare activa: lo dice y el admin tiene «Conectar Cloudflare»; el viewer, solo el texto', () => {
+  it('no exige zona de Cloudflare: sin ella, el mismo formulario, sin aviso ni «Conectar Cloudflare»; dice qué se puede medir', () => {
     const sinCf = (fx.connections as { provider: string }[]).filter((c) => c.provider !== 'cloudflare');
-    const datos = (org: OrgActual): [QueryKey, unknown][] => [...conRuns(RUNS, org).filter(([k]) => k[2] !== 'connections'), [['org', org.id, 'connections'], sinCf]];
-    const admin = pintar(<MedirAhora />, { datos: datos(ADMIN) });
-    expect(admin).toContain('Para medir necesitamos saber que el dominio es tuyo: conecta tu zona de Cloudflare.');
-    expect(admin).toContain(`href="/o/${ORG}/connections/cloudflare"`);
-    expect(botonMedir(admin)).not.toContain('disabled=""');                       // quien decide es el servidor
-    const viewer = pintar(<MedirAhora />, { org: VIEWER, datos: datos(VIEWER) });
-    expect(viewer).toContain('conecta tu zona de Cloudflare');
-    expect(viewer).not.toContain('/connections/cloudflare');
-    expect(pintar(<MedirAhora />, { datos: conRuns(RUNS) })).not.toContain('conecta tu zona de Cloudflare');
+    const datos: [QueryKey, unknown][] = [...conRuns(RUNS).filter(([k]) => k[2] !== 'connections'), [['org', ORG, 'connections'], sinCf]];
+    const html = pintar(<MedirAhora />, { datos });
+    expect(html).toBe(pintar(<MedirAhora />, { datos: conRuns(RUNS) }));
+    expect(html).not.toMatch(/zona|Conectar Cloudflare|\/connections/);
+    expect(botonMedir(html)).not.toContain('disabled=""');
+    expect(html).toContain('Cualquier web pública con https://. No medimos IPs, localhost ni webs de VanGUARD.');
+    expect(html).toContain('aria-describedby="medir-url-ayuda"');
+    expect(html).toContain('Lighthouse vía PageSpeed Insights, una estrategia cada vez: suele tardar menos de un minuto.');
+    expect(html).not.toMatch(/repetici|mediana|~1 min/);
   });
 
-  it('varias URL conocidas: la más reciente por defecto y las demás a un toque; nunca una con controles bidi', () => {
+  it('el ejemplo del campo: en la org de demo, la víctima real; en otra org, uno neutro', () => {
+    expect(URL_VICTIMA_DEMO).toBe('https://vanguard-demo-victima.pages.dev/');
+    expect(pintar(<MedirAhora />, { datos: conRuns([]) })).toContain(`placeholder="${URL_VICTIMA_DEMO}"`);
+    const otra = pintar(<MedirAhora />, { org: OTRA, datos: conRuns([], OTRA) });
+    expect(otra).toContain('placeholder="https://tusitio.com/"');
+    expect(otra).not.toContain('vanguard-demo-victima');
+    expect(otra).not.toContain('<datalist');                                      // sin mediciones, sin sugerencias
+  });
+
+  it('campo de texto libre: la más reciente por defecto y las ya medidas como sugerencias (<datalist>); nunca una con bidi', () => {
     const otra = RUNS.map((r) => ({ ...r, id: r.id.replace(/.$/, 'f'), url: 'https://www.officialvanguard.com/precios', created_at: '2026-10-24T22:00:00.000Z' }));
     const bidi = { ...RUNS[0]!, url: `https://demo.officialvanguard.com/${String.fromCodePoint(0x202e)}x`, created_at: '2026-10-25T00:00:00.000Z' };
     expect(urlsConocidas([bidi, ...RUNS, ...otra])).toEqual(['https://www.officialvanguard.com/precios', URL_DEMO]);
     expect(urlsConocidas([{ ...RUNS[0]!, url: 'http://demo.officialvanguard.com/' }, 'x', null])).toEqual([]);
     expect(urlsConocidas({ no: 'lista' })).toEqual([]);
-    const html = pintar(<PaginaRendimiento />, { datos: conRuns([...RUNS, ...otra]) });
-    expect(html).toContain('value="https://www.officialvanguard.com/precios"');
-    expect(html).toContain('aria-label="URL ya medidas"');
+    // Ni lo que el servidor nunca mediría ni guarda así: IPs, nombres reservados o internos, puertos, credenciales, query.
+    const nunca = ['https://127.0.0.1/', 'https://localhost/', 'https://nas.local/', 'https://evil.test/x', 'https://tienda.com:8443/',
+      'https://yo:clave@tienda.com/', 'https://tienda.com/?utm=1', 'https://TIENDA.com/'];
+    expect(urlsConocidas(nunca.map((url, i) => ({ ...RUNS[0]!, url, created_at: `2026-10-25T0${i}:00:00.000Z` })))).toEqual([]);
+    const html = pintar(<MedirAhora />, { datos: conRuns([bidi, ...RUNS, ...otra]) });
+    expect(html).toMatch(/<input[^>]*id="medir-url"[^>]*type="url"[^>]*list="medir-urls"[^>]*value="https:\/\/www\.officialvanguard\.com\/precios"/);
+    expect(html).toContain(`<datalist id="medir-urls"><option value="https://www.officialvanguard.com/precios"></option><option value="${URL_DEMO}"></option></datalist>`);
+    expect(html).not.toContain('aria-label="URL ya medidas"');                   // ya no es un grupo de botones
+    expect(html).not.toMatch(/\u202e|⟨U\+202E⟩x/i);
     expect(etiquetaPrevia(RUNS, URL_DEMO)).toBe('v2-regresion');
     expect(etiquetaPrevia([{ ...RUNS[0]!, version_label: '<img src=x>' }], URL_DEMO)).toBe('');
   });
@@ -156,7 +188,15 @@ describe('Medir ahora · errores del servidor en su sitio', () => {
 
   it('otro 422: bajo la URL, el message del servidor (con los controles bidi a la vista) o su field_errors', () => {
     const rlo = String.fromCodePoint(0x202e);
-    expect(errorMedir(e(422, 'invalid_body', `Solo dominios de tus zonas: ${rlo}moc.x`))).toEqual({ tipo: 'campo', errores: { url: 'Solo dominios de tus zonas: ⟨U+202E⟩moc.x' } });
+    // El UrlNoMedible de urlMedibleOrg: field_errors.url = [message] y su motivo en reason.
+    const ip = 'No medimos direcciones IP: usa el dominio del sitio';
+    expect(errorMedir(e(422, 'invalid_body', ip, { reason: 'ip', field_errors: { url: [ip] } }))).toEqual({ tipo: 'campo', errores: { url: ip } });
+    expect(errorMedir(e(422, 'invalid_body', 'Esa URL es de VanGUARD: mide la de tu sitio', { reason: 'propio', field_errors: { url: ['Esa URL es de VanGUARD: mide la de tu sitio'] } })))
+      .toEqual({ tipo: 'campo', errores: { url: 'Esa URL es de VanGUARD: mide la de tu sitio' } });
+    // looks_like_secret no trae field_errors: el message, bajo la URL.
+    expect(errorMedir(e(422, 'invalid_body', 'La petición trae algo que parece un secreto sin enmascarar', { reason: 'looks_like_secret' })))
+      .toEqual({ tipo: 'campo', errores: { url: 'La petición trae algo que parece un secreto sin enmascarar' } });
+    expect(errorMedir(e(422, 'invalid_body', `No medimos ${rlo}PI`))).toEqual({ tipo: 'campo', errores: { url: 'No medimos ⟨U+202E⟩PI' } });
     expect(errorMedir(e(422, 'invalid_body', 'Revisa los campos marcados', { field_errors: { url: [`solo ${rlo}https`] } })))
       .toEqual({ tipo: 'campo', errores: { url: 'solo ⟨U+202E⟩https' } });
     expect(errorMedir(e(422, 'invalid_body', 'Revisa los campos marcados', { field_errors: { version_label: ['Formato'] } })))
@@ -169,16 +209,31 @@ describe('Medir ahora · errores del servidor en su sitio', () => {
     expect(texto(e(429, 'rate_limited', 'x', undefined, 60))).toBe('Espera un minuto');
     expect(texto(e(429, 'rate_limited', 'x', undefined, 30))).toBe('Espera 30 s');
     expect(texto(e(429, 'rate_limited', 'x', undefined, 150))).toBe('Espera 3 min');
-    expect(texto(e(429, 'budget_exceeded', 'Ya hiciste 10 mediciones hoy. Vuelve mañana.'))).toBe('Ya hiciste 10 mediciones hoy. Vuelve mañana.');
+    const tope = 'Ya hiciste 10 mediciones de rendimiento hoy, el máximo diario. Vuelve mañana.';
+    expect(avisoDe(errorMedir(e(429, 'budget_exceeded', tope)))).toEqual({ texto: tope, rol: 'aviso' });
+    const html = renderToStaticMarkup(<MemoryRouter><AvisoMedir org={ORG} aviso={avisoDe(errorMedir(e(429, 'budget_exceeded', tope)))} /></MemoryRouter>);
+    expect(html).toContain(tope);
+    expect(html).not.toContain(TEXTO_ROL.mal);
   });
 
-  it('409 con scan_run_id: «Ya hay una medición en curso» con enlace a su auditoría; un id que no es uuid no se enlaza', () => {
-    const r = errorMedir(e(409, 'conflict', 'Ya hay una auditoría de este tipo en curso', { scan_run_id: SCAN }));
-    expect(r).toEqual({ tipo: 'aviso', aviso: { texto: 'Ya hay una medición en curso', rol: 'info', enCurso: SCAN } });
+  it('409: «Ya hay una medición en curso: espera a que termine para medir la otra», neutro, con enlace si llega su uuid', () => {
+    const PERF_EN_CURSO = 'Ya hay una medición de rendimiento en curso: espera a que termine';
+    expect(EN_CURSO).toBe('Ya hay una medición en curso: espera a que termine para medir la otra');
+    const r = errorMedir(e(409, 'conflict', PERF_EN_CURSO, { scan_run_id: SCAN }));
+    expect(r).toEqual({ tipo: 'aviso', aviso: { texto: EN_CURSO, rol: 'info', enCurso: SCAN } });
     const html = renderToStaticMarkup(<MemoryRouter><AvisoMedir org={ORG} aviso={avisoDe(r)} /></MemoryRouter>);
     expect(html).toContain(`href="/o/${ORG}/audit/${SCAN}"`);
-    expect(errorMedir(e(409, 'conflict', 'Hay un modo bajo ataque activo', { scan_run_id: '../../me' })))
-      .toEqual({ tipo: 'aviso', aviso: { texto: 'Hay un modo bajo ataque activo', rol: 'mal' } });
+    expect(html).toContain('Ver la medición');
+    expect(html).toContain('role="status"');
+    expect(html).not.toContain(TEXTO_ROL.mal);
+    // Sin details (el 23505 del índice 0019) o con un id que no es uuid: el mismo aviso, sin enlace, nunca en rojo.
+    for (const d of [undefined, { scan_run_id: '../../me' }]) {
+      const a = avisoDe(errorMedir(e(409, 'conflict', PERF_EN_CURSO, d)));
+      expect(a).toEqual({ texto: EN_CURSO, rol: 'info' });
+      const h = renderToStaticMarkup(<MemoryRouter><AvisoMedir org={ORG} aviso={a} /></MemoryRouter>);
+      expect(h).not.toContain('href=');
+      expect(h).not.toContain(TEXTO_ROL.mal);
+    }
   });
 });
 
@@ -204,16 +259,17 @@ describe('Medir ahora · bandera por 404', () => {
 
 describe('Auditoría de una medición (kind lighthouse)', () => {
   const run = (o: Partial<ScanRun>): ScanRun => ({
-    id: SCAN, kind: 'lighthouse', status: 'running', progress: 40, step: 'psi-mobile', steps: [{ name: 'psi', status: 'running' }],
+    id: SCAN, kind: 'lighthouse', status: 'running', progress: 40, step: 'psi', steps: [{ name: 'psi', status: 'running' }],
     score: null, coverage: null, summary: null, error: null, created_at: '2026-10-25T12:00:00.000Z', started_at: '2026-10-25T12:00:00.000Z',
     finished_at: null, ...o });
   const ver = (r: ScanRun) => pintar(<PaginaAuditoria />, { ruta: `/o/${ORG}/audit/${SCAN}`, patron: '/o/:orgId/audit/:scanId',
     datos: [[['org', ORG, 'scan', SCAN], r], [['org', ORG, 'findings', { status: 'open' }], fx.findings]] });
 
-  it('en curso: su título, el paso de rendimiento y «midiendo móvil (3 repeticiones)»', () => {
+  it('en curso: su título, el paso de rendimiento y lo que tarda de verdad (una pasada, sin «3 repeticiones»)', () => {
     const html = ver(run({}));
     expect(html).toContain('Medición de rendimiento');
-    expect(html).toContain('Paso actual: midiendo móvil (3 repeticiones)… ~1 min');
+    expect(html).toContain('Paso actual: midiendo con PageSpeed Insights (suele tardar menos de un minuto)');
+    expect(html).not.toMatch(/repetici|~1 min/);
     expect(html).toContain('Lighthouse con PageSpeed Insights');
     expect(html).toContain('aria-label="Progreso de la medición"');
   });
@@ -252,9 +308,9 @@ describe('Auditoría de una medición · sondeo', () => {
   });
 });
 
-// Verificación adversarial: lo que llega del servidor con controles bidi o «<script>» nunca sale crudo; el viewer no tiene
-// nada que escribir ni enlaces a Conexiones; con E24 en 404 la pantalla es la de antes; y la forma del BACK de hoy
-// (step = 'psi', error_code 'runtime_error') se lee en español.
+// Verificación adversarial: lo que llega del servidor con controles bidi o «<script>» nunca sale crudo; el viewer no ve
+// la sección; con E24 en 404 la pantalla es la de antes; y la forma del BACK (step = 'psi', error_code 'runtime_error')
+// se lee en español.
 describe('Medir ahora · verificación', () => {
   const RLO = String.fromCodePoint(0x202e);
   const CONTROL = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
@@ -295,12 +351,9 @@ describe('Medir ahora · verificación', () => {
     expect(ver({ ...run, status: 'failed', step: null, error: `${SCRIPT}${RLO}PCF_ON` })).toContain('⟨U+202E⟩PCF_ON');
   });
 
-  it('viewer de la demo: todo deshabilitado, sin enlaces a Conexiones ni a Ajustes', () => {
+  it('viewer de la demo: la sección no se pinta (ni campos, ni botón, ni sugerencias, ni enlaces)', () => {
     const html = pintar(<MedirAhora />, { org: VIEWER, datos: conRuns([...RUNS, { ...RUNS[0]!, id: RUNS[0]!.id.replace(/.$/, 'c'), url: 'https://www.officialvanguard.com/precios' }], VIEWER) });
-    const controles = html.match(/<(input|button)\b[^>]*>/g) ?? [];
-    expect(controles.length).toBeGreaterThan(4);
-    for (const c of controles) expect(c).toContain('disabled=""');
-    expect(html).not.toMatch(/href="[^"]*\/(connections|settings)/);
+    expect(html).toBe('');
   });
 
   it('E24 en 404: Rendimiento queda igual que la pantalla genérica, sin la sección ni un hueco', () => {
@@ -313,7 +366,7 @@ describe('Medir ahora · verificación', () => {
     const ver = (r: ScanRun) => pintar(<PaginaAuditoria />, { ruta: `/o/${ORG}/audit/${SCAN}`, patron: '/o/:orgId/audit/:scanId',
       datos: [[['org', ORG, 'scan', SCAN], r], [['org', ORG, 'findings', { status: 'open' }], []]] });
     const corriendo = ver({ ...base, status: 'running', step: 'psi', steps: [{ name: 'psi', status: 'running' }] });
-    expect(corriendo).toContain('Paso actual: midiendo con PageSpeed Insights… ~1 min');
+    expect(corriendo).toContain('Paso actual: midiendo con PageSpeed Insights (suele tardar menos de un minuto)');
     const sinCifras = ver({ ...base, status: 'succeeded', progress: 100, step: null, finished_at: '2026-10-25T12:01:00.000Z',
       steps: [{ name: 'psi', status: 'done', error_code: 'runtime_error' }] });
     expect(sinCifras).toContain('Hecho en parte');

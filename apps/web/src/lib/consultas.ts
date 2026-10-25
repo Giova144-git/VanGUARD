@@ -87,7 +87,7 @@ export const useFixPrompt = (org: string, id: string, habilitado: boolean) => us
 });
 
 // Mientras queued|running: 10 s de respaldo (los pasos llegan por el evento de scan_runs); una medición de «Medir ahora»
-// (kind lighthouse, ~1 min), cada 2 s (S10 §10.10). En fixtures, sin cupo que cuidar, 1 s, para ver avanzar la simulación.
+// (kind lighthouse, una pasada de PSI, ~10 s), cada 2 s (S10 §10.10). En fixtures, sin cupo que cuidar, 1 s, para ver avanzar la simulación.
 export const useScan = (org: string, id: string | undefined) => useQuery({
   queryKey: ['org', org, 'scan', id], enabled: esId(id), refetchIntervalInBackground: false,
   queryFn: () => api(`/api/orgs/${org}/scans/${id}`, { esquema: ScanRun }),

@@ -62,8 +62,8 @@ export const GUIAS: Record<IdNav, Guia> = {
     'Lo que escribe la IA se muestra como texto: nunca ejecutamos nada de lo que traiga el documento.',
   ] },
   performance: { titulo: '¿Cómo leer este módulo?', pasos: [   // los tres pasos de S10 §10.10
-    'Primero, tu zona de Cloudflare conectada: así sabemos que el dominio es tuyo y solo medimos tus webs.',
-    'Pulsa «Medir ahora»: Lighthouse (el mismo de PageSpeed Insights) mide 3 veces y guardamos la mediana.',
+    'Escribe la URL de cualquier web pública con https:// (no medimos IPs, localhost ni webs de VanGUARD).',
+    'Elige móvil o escritorio y pulsa «Medir ahora»: Lighthouse (el mismo de PageSpeed Insights) suele tardar menos de un minuto.',
     'Mira qué empeoró frente a la medición anterior (en ámbar) y copia el arreglo para tu IA.',
   ] },
   audit: { titulo: '¿Cómo funciona la auditoría?', pasos: [

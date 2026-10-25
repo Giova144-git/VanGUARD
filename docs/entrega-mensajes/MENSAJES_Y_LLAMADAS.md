@@ -168,3 +168,12 @@ Recomendación del BACK: si hace falta una llamada en el pitch, la vía B es la 
 - **«Probar WhatsApp»** en Ajustes (E27) con un admin de la org. Con 409 `window_closed`, escribir antes al número.
 - **Filas de envío:** mirar `notifications` de la org (status, error, provider_id) con el SQL del MCP de Supabase. Un `failed` con `131047` es la ventana cerrada; un 401 en los logs del Worker, la clave de Kapso.
 - **Logs del Worker:** `kapso.*`, `notificacion.*`, `despacho.*` y `revision.*`, en Workers Observability.
+
+## Aviso del ORQUESTADOR (sáb 24-oct, ~20:10): botones nuevos que hace el BACK
+
+Por decisión de Giovanni, el BACK añade botones de acción rápida a los avisos nuevos (revisión de push y PR, PR cerrado
+por VanGUARD y modo bajo ataque), reutilizando `cuerpoInteractivo` y el webhook de Kapso. Detalle:
+`docs/plan_maestro_trabajo/asignaciones/avisos-whatsapp-botones.md`. Toca `packages/core/src/templates/whatsapp.ts`
+(`TITULOS_BOTON` y acciones nuevas `fix`, `iss`, `rvs`, `rpr`, `uat`), `apps/api/src/rutas/webhooks-kapso.ts` (expresión de los
+ids de botón), `apps/api/src/notify/revision.ts` y `apps/api/src/actions/approvals.ts`. Al aplicar el parche de
+plantillas, conserva esos botones y no reutilices sus ids. La plantilla de Meta y su envío siguen siendo tuyos.
